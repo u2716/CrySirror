@@ -193,64 +193,68 @@ impl GameData {
         let audio_manager = Arc::new(AudioManager::new());
         uefi_game_data_stage!("[UEFI] GameData init after AudioManager");
 
-        uefi_game_data_stage!("[UEFI] GameData init before vfs");
-        ptr::addr_of_mut!((*dst).vfs).write(Vfs::default());
-        uefi_game_data_stage!("[UEFI] GameData init after vfs");
-        uefi_game_data_stage!("[UEFI] GameData init before thread_wrapper");
-        ptr::addr_of_mut!((*dst).thread_wrapper).write(ThreadWrapper::default());
-        uefi_game_data_stage!("[UEFI] GameData init after thread_wrapper");
-        uefi_game_data_stage!("[UEFI] GameData init before history_manager");
-        ptr::addr_of_mut!((*dst).history_manager).write(HistoryManager::default());
-        uefi_game_data_stage!("[UEFI] GameData init after history_manager");
-        uefi_game_data_stage!("[UEFI] GameData init before flag_manager");
-        ptr::addr_of_mut!((*dst).flag_manager).write(FlagManager::default());
-        uefi_game_data_stage!("[UEFI] GameData init after flag_manager");
-        uefi_game_data_stage!("[UEFI] GameData init before motion_manager");
-        ptr::addr_of_mut!((*dst).motion_manager).write(MotionManager::default());
-        uefi_game_data_stage!("[UEFI] GameData init after motion_manager");
-        uefi_game_data_stage!("[UEFI] GameData init before fontface_manager");
-        ptr::addr_of_mut!((*dst).fontface_manager).write(FontEnumerator::default());
-        uefi_game_data_stage!("[UEFI] GameData init after fontface_manager");
-        uefi_game_data_stage!("[UEFI] GameData init before inputs_manager");
-        ptr::addr_of_mut!((*dst).inputs_manager).write(InputManager::default());
-        uefi_game_data_stage!("[UEFI] GameData init after inputs_manager");
-        uefi_game_data_stage!("[UEFI] GameData init before timer_manager");
-        ptr::addr_of_mut!((*dst).timer_manager).write(TimerManager::default());
-        uefi_game_data_stage!("[UEFI] GameData init after timer_manager");
-        uefi_game_data_stage!("[UEFI] GameData init before video_manager");
-        ptr::addr_of_mut!((*dst).video_manager).write(VideoPlayerManager::default());
-        uefi_game_data_stage!("[UEFI] GameData init after video_manager");
-        uefi_game_data_stage!("[UEFI] GameData init before save_manager");
-        ptr::addr_of_mut!((*dst).save_manager).write(SaveManager::default());
-        uefi_game_data_stage!("[UEFI] GameData init after save_manager");
-        ptr::addr_of_mut!((*dst).nls).write(Nls::default());
-        ptr::addr_of_mut!((*dst).memory_cache).write(Vec::new());
-        ptr::addr_of_mut!((*dst).time).write(Time::default());
-        ptr::addr_of_mut!((*dst).scene_controller).write(SceneController::default());
-        ptr::addr_of_mut!((*dst).window).write(Window::default());
-        ptr::addr_of_mut!((*dst).se_player).write(SePlayer::new(audio_manager.clone()));
-        ptr::addr_of_mut!((*dst).bgm_player).write(BgmPlayer::new(audio_manager.clone()));
-        ptr::addr_of_mut!((*dst).audio_manager).write(audio_manager);
-        ptr::addr_of_mut!((*dst).root_prim).write(None);
+        // SAFETY: the caller supplies aligned, writable GameData storage.
+        // Each field is initialized directly without reading the unwritten value.
+        unsafe {
+            uefi_game_data_stage!("[UEFI] GameData init before vfs");
+            ptr::addr_of_mut!((*dst).vfs).write(Vfs::default());
+            uefi_game_data_stage!("[UEFI] GameData init after vfs");
+            uefi_game_data_stage!("[UEFI] GameData init before thread_wrapper");
+            ptr::addr_of_mut!((*dst).thread_wrapper).write(ThreadWrapper::default());
+            uefi_game_data_stage!("[UEFI] GameData init after thread_wrapper");
+            uefi_game_data_stage!("[UEFI] GameData init before history_manager");
+            ptr::addr_of_mut!((*dst).history_manager).write(HistoryManager::default());
+            uefi_game_data_stage!("[UEFI] GameData init after history_manager");
+            uefi_game_data_stage!("[UEFI] GameData init before flag_manager");
+            ptr::addr_of_mut!((*dst).flag_manager).write(FlagManager::default());
+            uefi_game_data_stage!("[UEFI] GameData init after flag_manager");
+            uefi_game_data_stage!("[UEFI] GameData init before motion_manager");
+            ptr::addr_of_mut!((*dst).motion_manager).write(MotionManager::default());
+            uefi_game_data_stage!("[UEFI] GameData init after motion_manager");
+            uefi_game_data_stage!("[UEFI] GameData init before fontface_manager");
+            ptr::addr_of_mut!((*dst).fontface_manager).write(FontEnumerator::default());
+            uefi_game_data_stage!("[UEFI] GameData init after fontface_manager");
+            uefi_game_data_stage!("[UEFI] GameData init before inputs_manager");
+            ptr::addr_of_mut!((*dst).inputs_manager).write(InputManager::default());
+            uefi_game_data_stage!("[UEFI] GameData init after inputs_manager");
+            uefi_game_data_stage!("[UEFI] GameData init before timer_manager");
+            ptr::addr_of_mut!((*dst).timer_manager).write(TimerManager::default());
+            uefi_game_data_stage!("[UEFI] GameData init after timer_manager");
+            uefi_game_data_stage!("[UEFI] GameData init before video_manager");
+            ptr::addr_of_mut!((*dst).video_manager).write(VideoPlayerManager::default());
+            uefi_game_data_stage!("[UEFI] GameData init after video_manager");
+            uefi_game_data_stage!("[UEFI] GameData init before save_manager");
+            ptr::addr_of_mut!((*dst).save_manager).write(SaveManager::default());
+            uefi_game_data_stage!("[UEFI] GameData init after save_manager");
+            ptr::addr_of_mut!((*dst).nls).write(Nls::default());
+            ptr::addr_of_mut!((*dst).memory_cache).write(Vec::new());
+            ptr::addr_of_mut!((*dst).time).write(Time::default());
+            ptr::addr_of_mut!((*dst).scene_controller).write(SceneController::default());
+            ptr::addr_of_mut!((*dst).window).write(Window::default());
+            ptr::addr_of_mut!((*dst).se_player).write(SePlayer::new(audio_manager.clone()));
+            ptr::addr_of_mut!((*dst).bgm_player).write(BgmPlayer::new(audio_manager.clone()));
+            ptr::addr_of_mut!((*dst).audio_manager).write(audio_manager);
+            ptr::addr_of_mut!((*dst).root_prim).write(None);
 
-        ptr::addr_of_mut!((*dst).render_flag).write(0);
-        ptr::addr_of_mut!((*dst).can_fullscreen).write(false);
-        ptr::addr_of_mut!((*dst).is_first_frame).write(true);
-        ptr::addr_of_mut!((*dst).pending_render_flag).write(None);
+            ptr::addr_of_mut!((*dst).render_flag).write(0);
+            ptr::addr_of_mut!((*dst).can_fullscreen).write(false);
+            ptr::addr_of_mut!((*dst).is_first_frame).write(true);
+            ptr::addr_of_mut!((*dst).pending_render_flag).write(None);
 
-        ptr::addr_of_mut!((*dst).close_immediate).write(true);
-        ptr::addr_of_mut!((*dst).lock_scripter).write(false);
-        ptr::addr_of_mut!((*dst).close_pending).write(false);
-        ptr::addr_of_mut!((*dst).last_current_thread).write(0);
-        ptr::addr_of_mut!((*dst).current_thread).write(0);
-        ptr::addr_of_mut!((*dst).main_thread_exited).write(false);
-        ptr::addr_of_mut!((*dst).game_should_exit).write(false);
-        ptr::addr_of_mut!((*dst).cursor_table).write(StableHashMap::default());
-        ptr::addr_of_mut!((*dst).current_cursor_index).write(0);
-        ptr::addr_of_mut!((*dst).halt).write(false);
-        #[cfg(feature = "old_school")]
-        ptr::addr_of_mut!((*dst).old_school_scale).write(1.0);
-        ptr::addr_of_mut!((*dst).debug_vm).write(Default::default());
+            ptr::addr_of_mut!((*dst).close_immediate).write(true);
+            ptr::addr_of_mut!((*dst).lock_scripter).write(false);
+            ptr::addr_of_mut!((*dst).close_pending).write(false);
+            ptr::addr_of_mut!((*dst).last_current_thread).write(0);
+            ptr::addr_of_mut!((*dst).current_thread).write(0);
+            ptr::addr_of_mut!((*dst).main_thread_exited).write(false);
+            ptr::addr_of_mut!((*dst).game_should_exit).write(false);
+            ptr::addr_of_mut!((*dst).cursor_table).write(StableHashMap::default());
+            ptr::addr_of_mut!((*dst).current_cursor_index).write(0);
+            ptr::addr_of_mut!((*dst).halt).write(false);
+            #[cfg(feature = "old_school")]
+            ptr::addr_of_mut!((*dst).old_school_scale).write(1.0);
+            ptr::addr_of_mut!((*dst).debug_vm).write(Default::default());
+        }
         uefi_game_data_stage!("[UEFI] GameData init complete");
     }
 }

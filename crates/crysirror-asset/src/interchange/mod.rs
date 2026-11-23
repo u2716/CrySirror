@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
-//! Interchange importers: FBX (binary) and MikuMikuDance PMX are converted
+//! Interchange importers: FBX (binary), MikuMikuDance PMX and Custom Maid 3D 2
+//! `.model`/`.anm` are converted
 //! into an in-memory GLB, recognised by content rather than file name, so
 //! every glTF consumer in the engine accepts them. VRM is glTF already.
 //!
 //! What a source format carries that glTF and the engine cannot represent is
 //! listed in the GLB's `extras` and surfaces in `ImportReport::dropped`.
+pub mod cm3d2;
 pub mod fbx;
 pub mod glb;
 pub mod pmx;
@@ -13,6 +15,8 @@ use anyhow::Result;
 use std::{borrow::Cow, collections::BTreeMap};
 
 pub const DROPPED_EXTRA: &str = "crysirror_import_dropped";
+/// Document extras key of spring-bone chains ([`crate::spring::SpringChain`]).
+pub const SPRINGS_EXTRA: &str = "crysirror_springs";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
@@ -20,13 +24,22 @@ pub enum Format {
     FbxBinary,
     FbxAscii,
     Pmx,
+    Cm3d2Mesh,
+    Cm3d2Animation,
 }
+
+/// Clip name of a converted `.anm` (one clip per file).
+pub const CM3D2_CLIP: &str = "anm";
 
 pub fn sniff(bytes: &[u8]) -> Format {
     if bytes.starts_with(b"Kaydara FBX Binary  \0") {
         Format::FbxBinary
     } else if bytes.starts_with(b"PMX ") {
         Format::Pmx
+    } else if bytes.starts_with(cm3d2::MESH_SIGNATURE) {
+        Format::Cm3d2Mesh
+    } else if bytes.starts_with(cm3d2::ANIM_SIGNATURE) {
+        Format::Cm3d2Animation
     } else if bytes.len() < 4096 && bytes.windows(13).any(|w| w == b"FBXHeaderExte")
         || bytes.starts_with(b"; FBX ")
     {
@@ -47,6 +60,10 @@ pub fn to_gltf<'a>(
         Format::Gltf => Ok(Cow::Borrowed(bytes)),
         Format::FbxBinary => Ok(Cow::Owned(fbx::convert(bytes, external)?.to_glb()?)),
         Format::Pmx => Ok(Cow::Owned(pmx::convert(bytes, external)?.to_glb()?)),
+        Format::Cm3d2Mesh => Ok(Cow::Owned(cm3d2::convert_mesh(bytes, external)?.to_glb()?)),
+        Format::Cm3d2Animation => {
+            Ok(Cow::Owned(cm3d2::convert_animation(bytes, CM3D2_CLIP)?.to_glb()?))
+        }
         Format::FbxAscii => {
             anyhow::bail!("ASCII FBX is not supported; re-export as binary FBX or glTF")
         }

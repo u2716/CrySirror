@@ -11,6 +11,8 @@ pub mod cluster;
 pub mod indices;
 pub mod interchange;
 pub mod pbr;
+pub mod sky;
+pub mod spring;
 pub mod terrain;
 pub mod tqmo;
 use anyhow::{bail, ensure, Context, Result};

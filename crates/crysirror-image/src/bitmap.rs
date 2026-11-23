@@ -47,6 +47,8 @@ pub enum PixelMath {
     /// MaskScalar256's RGB interpolation that keeps the destination alpha
     /// (krkr `TVPAlphaBlend_HDA`: sopa = s.a, or s.a*opacity>>8 below 255).
     MaskHoldAlphaScalar256,
+    /// Interpolate all four stored channels by source alpha /256.
+    MaskRgbaScalar256,
     /// Explicit per-mask /256 profile: mask0 skips; mask255 uses weight and
     /// 256-weight; partial masks use a=mask*weight>>8 and 255-a. RGB products
     /// are summed then shifted. Destination alpha is retained.
@@ -328,13 +330,14 @@ fn combine(d: &mut [u8], s: &[u8], opacity: u8, mode: PixelMath) {
                 d[3] = 0;
             }
         }
-        PixelMath::MaskHoldAlphaScalar256 => {
+        PixelMath::MaskHoldAlphaScalar256 | PixelMath::MaskRgbaScalar256 => {
             let a = if opacity == 255 {
                 u32::from(s[3])
             } else {
                 u32::from(s[3]) * op >> 8
             } as i32;
-            for c in 0..3 {
+            let channels = if mode == PixelMath::MaskRgbaScalar256 { 4 } else { 3 };
+            for c in 0..channels {
                 d[c] = (i32::from(d[c]) + ((i32::from(s[c]) - i32::from(d[c])) * a).div_euclid(256))
                     as u8;
             }

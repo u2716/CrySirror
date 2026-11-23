@@ -235,7 +235,7 @@ fn mime_for_path(path: &Path) -> Option<&'static str> {
 }
 
 /// Releases strings returned by the Sena C ABI.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_free_c_string(ptr: *mut c_char) {
     if !ptr.is_null() {
         unsafe {
@@ -245,13 +245,13 @@ pub extern "C" fn sena_free_c_string(ptr: *mut c_char) {
 }
 
 /// Alias retained for the platform launcher headers.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_string_free(ptr: *mut c_char) {
     sena_free_c_string(ptr);
 }
 
 /// Returns a display name for a game directory.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn sena_game_name_from_dir(game_root_utf8: *const c_char) -> *mut c_char {
     match path_from_cstr(game_root_utf8) {
         Ok(path) => {
@@ -267,7 +267,7 @@ pub unsafe extern "C" fn sena_game_name_from_dir(game_root_utf8: *const c_char) 
 }
 
 /// Returns a best-effort cover image path for launcher UI previews.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn sena_game_cover_path_from_dir(
     game_root_utf8: *const c_char,
 ) -> *mut c_char {
@@ -281,7 +281,7 @@ pub unsafe extern "C" fn sena_game_cover_path_from_dir(
 }
 
 /// Returns the MIME type for the cover image discovered by `sena_game_cover_path_from_dir`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn sena_game_cover_mime_from_dir(
     game_root_utf8: *const c_char,
 ) -> *mut c_char {
@@ -296,13 +296,13 @@ pub unsafe extern "C" fn sena_game_cover_mime_from_dir(
 }
 
 /// Runs the desktop Sena engine with `game_root_utf8` as the game directory.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn sena_run_entry(game_root_utf8: *const c_char) -> i32 {
     sena_run_entry_nls(game_root_utf8, ptr::null(), ptr::null())
 }
 
 /// Runs the desktop Sena engine with an explicit text/resource encoding.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn sena_run_entry_nls(
     game_root_utf8: *const c_char,
     nls_utf8: *const c_char,
@@ -338,7 +338,7 @@ pub unsafe extern "C" fn sena_run_entry_nls(
 }
 
 /// Diagnostic checkpoint APIs use the portable save format, not native PAL exports.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn sena_host_save_checkpoint(handle: *mut c_void, slot: i32) -> i32 {
     let Some(host) = handle.cast::<SenaFfiHost>().as_mut() else { return 0; };
     match host.engine.save_checkpoint(slot) {
@@ -347,7 +347,7 @@ pub unsafe extern "C" fn sena_host_save_checkpoint(handle: *mut c_void, slot: i3
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn sena_host_load_checkpoint(handle: *mut c_void, slot: i32) -> i32 {
     let Some(host) = handle.cast::<SenaFfiHost>().as_mut() else { return 0; };
     if host.frame_generation != 0 { return 0; }
@@ -358,7 +358,7 @@ pub unsafe extern "C" fn sena_host_load_checkpoint(handle: *mut c_void, slot: i3
 }
 
 /// Creates a platform-owned PAL host that renders each frame into an RGBA buffer.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn sena_host_create(
     game_root_utf8: *const c_char,
     nls_utf8: *const c_char,
@@ -423,7 +423,7 @@ pub unsafe extern "C" fn sena_host_create(
 }
 
 /// Advances the host by one platform frame and refreshes the RGBA framebuffer.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_host_step(handle: *mut c_void, dt_ms: u32) -> i32 {
     let acknowledged = {
         let mut results = messagebox_results().lock().unwrap();
@@ -500,7 +500,7 @@ pub extern "C" fn sena_host_step(handle: *mut c_void, dt_ms: u32) -> i32 {
     host.last_status
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_host_resize(handle: *mut c_void, width: u32, height: u32) {
     if let Some(host) = host_from_handle(handle) {
         host.engine.handle_event(PalEvent::Resized {
@@ -510,7 +510,7 @@ pub extern "C" fn sena_host_resize(handle: *mut c_void, width: u32, height: u32)
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_host_touch(handle: *mut c_void, phase: i32, x: f64, y: f64) {
     let Some(host) = host_from_handle(handle) else {
         return;
@@ -535,7 +535,7 @@ pub extern "C" fn sena_host_touch(handle: *mut c_void, phase: i32, x: f64, y: f6
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn sena_host_key(handle: *mut c_void, key_utf8: *const c_char, pressed: i32) {
     let Some(host) = host_from_handle(handle) else {
         return;
@@ -550,35 +550,35 @@ pub unsafe extern "C" fn sena_host_key(handle: *mut c_void, key_utf8: *const c_c
         }));
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_host_frame_rgba(handle: *mut c_void) -> *const u8 {
     host_from_handle(handle)
         .map(|host| if host.rgba.is_empty() { ptr::null() } else { host.rgba.as_ptr() })
         .unwrap_or(ptr::null())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_host_frame_width(handle: *mut c_void) -> u32 {
     host_from_handle(handle)
         .map(|host| host.frame_width)
         .unwrap_or(0)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_host_frame_height(handle: *mut c_void) -> u32 {
     host_from_handle(handle)
         .map(|host| host.frame_height)
         .unwrap_or(0)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_host_frame_generation(handle: *mut c_void) -> u64 {
     host_from_handle(handle)
         .map(|host| host.frame_generation)
         .unwrap_or(0)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_host_destroy(handle: *mut c_void) {
     messagebox_results().lock().unwrap().remove(&(handle as usize));
     if !handle.is_null() {
@@ -600,7 +600,7 @@ pub extern "C" fn sena_host_destroy(handle: *mut c_void) {
 /// (`dlopen failed: cannot locate symbol "android_main"`), which is what the
 /// launcher saw when it asked the engine for a game's title.
 #[cfg(target_os = "android")]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn android_main(_app: *mut c_void) {
     log::warn!(
         "android_main was called, but the Android host drives the engine through JNI"
@@ -638,7 +638,7 @@ fn init_android_diagnostics() {}
 /// aborts the process, so the first SOUND init took the whole player down with
 /// it. `platform/android/app/src/main/cpp/sena_jni.cpp` passes the `JavaVM` and
 /// a global reference to the application context.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_android_init_context(java_vm_ptr: *mut c_void, context_ptr: *mut c_void) {
     init_android_diagnostics();
 
@@ -664,7 +664,7 @@ pub extern "C" fn sena_android_init_context(java_vm_ptr: *mut c_void, context_pt
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn sena_android_create(
     _native_window_ptr: *mut c_void,
     surface_width_px: u32,
@@ -683,7 +683,7 @@ pub unsafe extern "C" fn sena_android_create(
     )
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_android_set_native_messagebox_callback(
     handle: *mut c_void,
     callback: NativeMessageboxCallback,
@@ -692,7 +692,7 @@ pub extern "C" fn sena_android_set_native_messagebox_callback(
     set_native_messagebox_callback(handle, callback, user_data);
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_android_submit_messagebox_result(
     handle: *mut c_void,
     request_id: u64,
@@ -701,12 +701,12 @@ pub extern "C" fn sena_android_submit_messagebox_result(
     submit_messagebox_result(handle, request_id, value);
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_android_step(handle: *mut c_void, dt_ms: u32) -> i32 {
     sena_host_step(handle, dt_ms)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_android_resize(
     handle: *mut c_void,
     surface_width_px: u32,
@@ -715,7 +715,7 @@ pub extern "C" fn sena_android_resize(
     sena_host_resize(handle, surface_width_px, surface_height_px);
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_android_set_surface(
     handle: *mut c_void,
     _native_window_ptr: *mut c_void,
@@ -725,37 +725,37 @@ pub extern "C" fn sena_android_set_surface(
     sena_host_resize(handle, surface_width_px, surface_height_px);
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_android_touch(handle: *mut c_void, phase: i32, x_px: f64, y_px: f64) {
     sena_host_touch(handle, phase, x_px, y_px);
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_android_destroy(handle: *mut c_void) {
     sena_host_destroy(handle);
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_android_frame_rgba(handle: *mut c_void) -> *const u8 {
     sena_host_frame_rgba(handle)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_android_frame_width(handle: *mut c_void) -> u32 {
     sena_host_frame_width(handle)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_android_frame_height(handle: *mut c_void) -> u32 {
     sena_host_frame_height(handle)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_android_frame_generation(handle: *mut c_void) -> u64 {
     sena_host_frame_generation(handle)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn sena_ios_create(
     _ui_view: *mut c_void,
     surface_width: u32,
@@ -774,7 +774,7 @@ pub unsafe extern "C" fn sena_ios_create(
     )
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_ios_resize_viewport(
     handle: *mut c_void,
     _surface_width: u32,
@@ -787,7 +787,7 @@ pub extern "C" fn sena_ios_resize_viewport(
     sena_host_resize(handle, viewport_width.max(1), viewport_height.max(1));
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn sena_ios_logical_size(
     _handle: *mut c_void,
     width_out: *mut u32,
@@ -809,7 +809,7 @@ pub unsafe extern "C" fn sena_ios_logical_size(
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_ios_set_native_messagebox_callback(
     handle: *mut c_void,
     callback: NativeMessageboxCallback,
@@ -818,7 +818,7 @@ pub extern "C" fn sena_ios_set_native_messagebox_callback(
     set_native_messagebox_callback(handle, callback, user_data);
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_ios_submit_messagebox_result(
     handle: *mut c_void,
     request_id: u64,
@@ -827,42 +827,42 @@ pub extern "C" fn sena_ios_submit_messagebox_result(
     submit_messagebox_result(handle, request_id, value);
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_ios_step(handle: *mut c_void, dt_ms: u32) -> i32 {
     sena_host_step(handle, dt_ms)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_ios_resize(handle: *mut c_void, surface_width: u32, surface_height: u32) {
     sena_host_resize(handle, surface_width, surface_height);
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_ios_touch(handle: *mut c_void, phase: i32, x_points: f64, y_points: f64) {
     sena_host_touch(handle, phase, x_points, y_points);
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_ios_destroy(handle: *mut c_void) {
     sena_host_destroy(handle);
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_ios_frame_rgba(handle: *mut c_void) -> *const u8 {
     sena_host_frame_rgba(handle)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_ios_frame_width(handle: *mut c_void) -> u32 {
     sena_host_frame_width(handle)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_ios_frame_height(handle: *mut c_void) -> u32 {
     sena_host_frame_height(handle)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_ios_frame_generation(handle: *mut c_void) -> u64 {
     sena_host_frame_generation(handle)
 }
@@ -872,12 +872,12 @@ pub struct SenaPumpHandle {
     _private: [u8; 0],
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn sena_pump_create(game_root_utf8: *const c_char) -> *mut SenaPumpHandle {
     sena_pump_create_nls(game_root_utf8, ptr::null(), ptr::null())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn sena_pump_create_nls(
     game_root_utf8: *const c_char,
     nls_utf8: *const c_char,
@@ -886,7 +886,7 @@ pub unsafe extern "C" fn sena_pump_create_nls(
     sena_host_create(game_root_utf8, nls_utf8, lang_utf8, 1280, 720) as *mut SenaPumpHandle
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_pump_set_native_messagebox_callback(
     handle: *mut SenaPumpHandle,
     callback: NativeMessageboxCallback,
@@ -895,7 +895,7 @@ pub extern "C" fn sena_pump_set_native_messagebox_callback(
     set_native_messagebox_callback(handle as *mut c_void, callback, user_data);
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_pump_submit_messagebox_result(
     handle: *mut SenaPumpHandle,
     request_id: u64,
@@ -904,12 +904,12 @@ pub extern "C" fn sena_pump_submit_messagebox_result(
     submit_messagebox_result(handle as *mut c_void, request_id, value);
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_pump_step(_handle: *mut SenaPumpHandle, _timeout_ms: u32) -> i32 {
     sena_host_step(_handle as *mut c_void, _timeout_ms.max(1))
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_pump_destroy(_handle: *mut SenaPumpHandle) {
     sena_host_destroy(_handle as *mut c_void);
 }
@@ -1071,7 +1071,7 @@ mod native_messagebox_tests {
 
 /// Create an independent audio-thread handle. The VM handle stays on its owner thread.
 #[cfg(feature = "host-audio")]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_host_audio_sink(handle: *mut c_void) -> *mut c_void {
     host_from_handle(handle)
         .map(|host| Box::into_raw(Box::new(host.engine.audio().host_sink())).cast())
@@ -1080,7 +1080,7 @@ pub extern "C" fn sena_host_audio_sink(handle: *mut c_void) -> *mut c_void {
 
 /// Fill at most 16384 stereo frames at 48000 Hz. The sink may outlive its engine.
 #[cfg(feature = "host-audio")]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn sena_audio_render_i16(sink: *mut c_void, output: *mut i16, frames: usize) {
     if output.is_null() || frames == 0 || frames > 16384 {
         return;
@@ -1094,7 +1094,7 @@ pub unsafe extern "C" fn sena_audio_render_i16(sink: *mut c_void, output: *mut i
 
 /// Stop/join the audio consumer before releasing its handle.
 #[cfg(feature = "host-audio")]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn sena_audio_sink_destroy(sink: *mut c_void) {
     if !sink.is_null() {
         drop(Box::from_raw(sink as *mut crate::native_vm::audio::host_backend::AudioSink));
@@ -1102,7 +1102,7 @@ pub unsafe extern "C" fn sena_audio_sink_destroy(sink: *mut c_void) {
 }
 
 /// Mouse buttons for native controller cursors: 0 left, 1 right, 2 middle.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_host_mouse_button(handle: *mut c_void, button: u32, pressed: i32) {
     let button = match button {
         0 => MouseButton::Left,

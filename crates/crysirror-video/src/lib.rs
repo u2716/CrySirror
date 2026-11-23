@@ -7,6 +7,8 @@
 #![forbid(unsafe_code)]
 pub mod amv;
 pub mod avi;
+pub mod cmv;
+pub mod mgv;
 pub mod imoavi;
 pub mod isobmff;
 pub mod mpeg;
@@ -35,6 +37,8 @@ pub enum Container {
     Avi,
     /// IMOAVI100: indexed Motion-JPEG/raw pictures with native redirects.
     ImoAvi,
+    /// Purple Software CMV3/5/6/7/8/9 movie container.
+    Cmv,
     /// WebM (Matroska) with a VP8 video track.
     WebM,
 }
@@ -89,6 +93,9 @@ pub fn sniff(bytes: &[u8]) -> Result<Container> {
     if isobmff::is_mp4(bytes) {
         return Ok(Container::Mp4);
     }
+    if matches!(bytes.get(..4), Some(b"CMV3" | b"CMV5" | b"CMV6" | b"CMV7" | b"CMV8" | b"CMV9")) {
+        return Ok(Container::Cmv);
+    }
     if bytes.starts_with(b"OggS") {
         return Ok(Container::Ogg);
     }
@@ -123,8 +130,14 @@ pub fn open(bytes: Vec<u8>) -> Result<Box<dyn VideoStream>> {
         Container::Asf => Box::new(AsfStream::new(bytes)?),
         Container::Mp4 => Box::new(isobmff::Mp4Stream::new(Cursor::new(bytes))?),
         Container::Amv => Box::new(AmvStream::new(bytes)?),
-        Container::Avi => Box::new(avi::AviStream::new(bytes)?),
+        Container::Avi => {
+            let wmv3 = avi::stream::Movie::open(Cursor::new(bytes.as_slice()))
+                .is_ok_and(|movie| movie.codec().ok() == Some("wmv3"));
+            if wmv3 { Box::new(avi::stream::MemoryMovie::new(bytes)?) }
+            else { Box::new(avi::AviStream::new(bytes)?) }
+        }
         Container::ImoAvi => Box::new(imoavi::Movie::new(Cursor::new(bytes))?),
+        Container::Cmv => Box::new(cmv::Movie::new(Cursor::new(bytes))?),
         Container::WebM => Box::new(webm::WebmStream::new(bytes)?),
     })
 }

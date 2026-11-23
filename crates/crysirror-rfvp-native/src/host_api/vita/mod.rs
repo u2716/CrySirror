@@ -7,7 +7,7 @@ mod texture_policy;
 mod thumbnail;
 pub use render::PsvRenderer;
 
-extern "C" {
+unsafe extern "C" {
     pub fn rfvp_psv_gpu_init() -> i32;
     pub fn rfvp_psv_gpu_fini();
 }

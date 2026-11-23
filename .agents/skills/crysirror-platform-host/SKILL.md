@@ -115,6 +115,13 @@ Do not create an extra confirmation step when that action is already authorized.
 
 ## Validate the changed boundary and document it
 
+For desktop engine acceptance, use the production GUI player in headless
+mode with `--no-audio`. Exercise settings and menu interactions before long
+story replays as described in the
+[engine acceptance workflow](../../../docs/ENGINE_ONBOARDING.md#validation-and-completion).
+Keep OS-specific window, native menu and audio output evidence scoped to the
+host environment that exercised it.
+
 Use the smallest authorized Release check or lifecycle exercise. Record the
 actual target/toolchain/features, artifact, signing state and observed behavior.
 Keep emulator/simulator and physical-device results separate. Do not claim a

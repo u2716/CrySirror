@@ -1,0 +1,37 @@
+[package]
+name = "crysirror-amanatsu"
+version = "0.1.0"
+edition = "2024"
+license = "MPL-2.0"
+publish = false
+description = "甘夏ろけーしょん (ILLGAMES AmanatsuLocation, Unity 6 IL2CPP) native semantics for CrySirror (adopt mode)"
+autoexamples = false
+autobenches = false
+
+[lib]
+doctest = false
+
+[features]
+runtime = ["dep:crysirror-runtime"]
+
+[dependencies]
+lru = "0.18"
+crysirror-asset.workspace = true
+crysirror-audio.workspace = true
+anyhow.workspace = true
+crysirror-core.workspace = true
+crysirror-unity.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+crysirror-image.workspace = true
+crysirror-runtime = { workspace = true, optional = true }
+glam.workspace = true
+crysirror-vfx.workspace = true
+
+[dev-dependencies]
+crysirror-dotnet.workspace = true
+serde_json.workspace = true
+crysirror-image.workspace = true
+image.workspace = true
+crysirror-core.workspace = true
+crysirror-unity.workspace = true

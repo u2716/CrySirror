@@ -25,11 +25,19 @@ including our own, are references rather than guaranteed original parity.
 Use [archive onboarding](../crysirror-archive-onboarding/SKILL.md) for shared
 container/decoder registration instead of private unpackers in an `adopt` VM.
 
-Before capability mapping or shared API changes, use
-[engine semantics](../crysirror-engine-semantics/SKILL.md): establish ABI/profile
-differences, maintain and document opcode/syscall/subselector contracts, then
-assess existing capabilities and API compatibility. Keep this order for new
-work and changes to existing native handlers.
+Start with ABI version management. Use
+[engine semantics](../crysirror-engine-semantics/SKILL.md) to establish the
+supported profiles, detection criteria and compatibility boundaries before
+capability mapping or shared API changes. For a complete integration, reverse
+and implement the full opcode, operand, syscall and subselector catalogue of
+each supported profile, including entries absent from the supplied game.
+Finish this pass before starting game behavior acceptance. Use scoped builds
+and synthetic regression tests during implementation.
+
+Land complete syscall contracts one at a time. Follow the per-syscall coverage rules
+in [engine semantics](../crysirror-engine-semantics/SKILL.md#2-maintain-opcode-and-syscall-inventories).
+Record unfinished experiments and existing gaps using
+[SATD](../crysirror-satd/SKILL.md).
 
 For resource ownership, caches, asynchronous allocation and CPU/GPU pressure,
 use [memory management](../crysirror-memory-management/SKILL.md). Read the affected
@@ -60,7 +68,7 @@ only after checking its mode and native evidence.
 | Shared host/output | Connect graphics, text, input, audio, storage and original-save policy according to the selected mode. |
 | Resources | Reuse shared archive/image/audio services, or retain the documented integrated resource boundary; avoid extraction-to-temp requirements. |
 | Platforms | Declare the actual desktop, mobile, browser and native console paths and remaining services separately. |
-| Acceptance | Maintain readable opcode/syscall or host-contract tables and distinguish registration, source implementation, compilation and observed behavior. |
+| Acceptance | Require full supported-profile dispatch coverage and complete the applicable GUI headless scenarios in the onboarding guide. |
 
 A factory, detection match or frame upload alone does not complete this route.
 Use the detailed [onboarding guide](../../../docs/ENGINE_ONBOARDING.md) for the
@@ -125,9 +133,11 @@ relevant source comments. Put dated behavior evidence in focused validation
 notes. Do not turn STATUS.md/HANDOFF into implementation specifications or save
 temporary build freezes/agent ownership as lasting instructions.
 
-Default validation is `cargo check --release -p <crate>` plus the touched
-crate's unit tests. Do not launch game, offscreen or route runs, or
-whole-workspace regressions, unless the owner asks for them; add no superficial
-tests. Authorized offscreen execution does not authorize reading the user's
-screen. Report source implementation,
-compilation and observed paths separately, with actual remaining boundaries.
+Run the applicable scoped Release checks and unit tests during implementation.
+For complete integration acceptance, use the normal desktop GUI player with
+`play --headless --no-audio` and an isolated writable user-data directory.
+When a title screen exists, exercise settings and other reachable menus
+before long story replays. Follow the
+[acceptance order and evidence rules](../../../docs/ENGINE_ONBOARDING.md#validation-and-completion).
+Follow the owner's execution scope and report implementation, compilation
+and observed behavior separately.

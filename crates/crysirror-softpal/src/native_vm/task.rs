@@ -385,14 +385,14 @@ impl TaskSystem {
         }
         let idx = self.alloc_node()?;
         let parent_idx = parent.filter(|h| self.is_alive(*h)).map(|h| h.pool_index());
-        let gen = self.nodes[idx].generation;
+        let generation = self.nodes[idx].generation;
         self.nodes[idx].kind = TaskKind::Raw;
         self.nodes[idx].process = process;
         self.nodes[idx].end_process = end_process;
         self.nodes[idx].task_data = vec![0; data_size];
         self.nodes[idx].message = 0;
         self.insert_task(idx, flags, parent_idx, name);
-        Some(TaskHandle::encode(idx, gen))
+        Some(TaskHandle::encode(idx, generation))
     }
 
     /// PalTaskCreate machine semantics with translated task pointers and
@@ -501,10 +501,10 @@ impl TaskSystem {
         })?;
         let parent_idx = parent.filter(|h| self.is_alive(*h)).map(|h| h.pool_index());
         let anim = PalSheetAnimation::create(sprites, desc, self.pal_time_ms)?;
-        let gen = self.nodes[idx].generation;
+        let generation = self.nodes[idx].generation;
         self.nodes[idx].kind = TaskKind::AnimationSheet(anim);
         self.insert_task(idx, 0, parent_idx, "Animation");
-        Ok(TaskHandle::encode(idx, gen))
+        Ok(TaskHandle::encode(idx, generation))
     }
 
     /// Create a sequence animation task. `parent` = None means root list.
@@ -522,10 +522,10 @@ impl TaskSystem {
         })?;
         let parent_idx = parent.filter(|h| self.is_alive(*h)).map(|h| h.pool_index());
         let anim = PalSequenceAnimation::create(sprites, desc, self.pal_time_ms)?;
-        let gen = self.nodes[idx].generation;
+        let generation = self.nodes[idx].generation;
         self.nodes[idx].kind = TaskKind::AnimationSequence(anim);
         self.insert_task(idx, 0, parent_idx, "PalAnimationEx");
-        Ok(TaskHandle::encode(idx, gen))
+        Ok(TaskHandle::encode(idx, generation))
     }
 
     /// Create a PalWait blocking task. The first visit only initializes its
@@ -534,14 +534,14 @@ impl TaskSystem {
     /// Returns None if the pool is full.
     pub fn create_wait_frame(&mut self, remaining: i32) -> Option<TaskHandle> {
         let idx = self.alloc_node()?;
-        let gen = self.nodes[idx].generation;
+        let generation = self.nodes[idx].generation;
         self.nodes[idx].kind = TaskKind::WaitFrame {
             remaining,
             initialized: false,
         };
         self.nodes[idx].task_data = remaining.to_le_bytes().to_vec();
         self.insert_wait_task(idx, "PalWait");
-        let handle = TaskHandle::encode(idx, gen);
+        let handle = TaskHandle::encode(idx, generation);
         if debug_vm_wait_trace_enabled() {
             log::debug!("[trace-wait] create_wait_frame handle={handle:?} remaining={remaining}");
         }
@@ -553,7 +553,7 @@ impl TaskSystem {
     /// Returns None if the pool is full.
     pub fn create_wait_time(&mut self, duration_ms: u32) -> Option<TaskHandle> {
         let idx = self.alloc_node()?;
-        let gen = self.nodes[idx].generation;
+        let generation = self.nodes[idx].generation;
         self.nodes[idx].kind = TaskKind::WaitTime {
             duration_ms,
             start_ms: 0,
@@ -564,7 +564,7 @@ impl TaskSystem {
         task_data.extend_from_slice(&0_u32.to_le_bytes());
         self.nodes[idx].task_data = task_data;
         self.insert_wait_task(idx, "PalWaitTime");
-        let handle = TaskHandle::encode(idx, gen);
+        let handle = TaskHandle::encode(idx, generation);
         if debug_vm_wait_trace_enabled() {
             log::debug!(
                 "[trace-wait] create_wait_time handle={handle:?} duration_ms={duration_ms}"
@@ -638,11 +638,11 @@ impl TaskSystem {
     /// Returns None if the pool is full.
     pub fn create_wait_click(&mut self) -> Option<TaskHandle> {
         let idx = self.alloc_node()?;
-        let gen = self.nodes[idx].generation;
+        let generation = self.nodes[idx].generation;
         self.nodes[idx].kind = TaskKind::WaitClick;
         self.nodes[idx].task_data.clear();
         self.insert_task(idx, BLOCKING_FLAG, None, "PalWaitClick");
-        let handle = TaskHandle::encode(idx, gen);
+        let handle = TaskHandle::encode(idx, generation);
         log::debug!("[trace-wait] create_wait_click handle={handle:?}");
         Some(handle)
     }
@@ -662,7 +662,7 @@ impl TaskSystem {
         voice_gated: bool,
     ) -> Option<TaskHandle> {
         let idx = self.alloc_node()?;
-        let gen = self.nodes[idx].generation;
+        let generation = self.nodes[idx].generation;
         self.nodes[idx].kind = TaskKind::WaitClickOrTime {
             duration_ms: duration_ms.max(1),
             start_ms: self.pal_time_ms,
@@ -673,7 +673,7 @@ impl TaskSystem {
         task_data.extend_from_slice(&self.pal_time_ms.to_le_bytes());
         self.nodes[idx].task_data = task_data;
         self.insert_task(idx, BLOCKING_FLAG, None, "PalWaitClickTime");
-        let handle = TaskHandle::encode(idx, gen);
+        let handle = TaskHandle::encode(idx, generation);
         log::debug!(
             "[trace-wait] create_wait_click_or_time handle={handle:?} duration_ms={} start_ms={}",
             duration_ms.max(1),

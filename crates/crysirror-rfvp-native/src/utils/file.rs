@@ -6,7 +6,12 @@ use std::{
 };
 
 #[cfg(not(target_os = "uefi"))]
-use std::{env, path};
+use std::{env, path, sync::RwLock};
+
+#[cfg(not(target_os = "uefi"))]
+static BASE_PATH: RwLock<Option<PathBuf>> = RwLock::new(None);
+#[cfg(not(target_os = "uefi"))]
+static HCB_ROOT: RwLock<Option<PathBuf>> = RwLock::new(None);
 
 pub struct FileReaderError {
     _msg: String,
@@ -46,7 +51,7 @@ pub fn open_file(path: &Path) -> Result<File, FileReaderError> {
 
 #[cfg(not(target_os = "uefi"))]
 pub fn set_base_path(path: &str) {
-    env::set_var("FVP_BASE_PATH", path);
+    *BASE_PATH.write().unwrap_or_else(|e| e.into_inner()) = Some(path.into());
 }
 
 #[cfg(target_os = "uefi")]
@@ -54,7 +59,7 @@ pub fn set_base_path(_path: &str) {}
 
 #[cfg(not(target_os = "uefi"))]
 pub fn set_hcb_root_path(path: &str) {
-    env::set_var("FVP_HCB_ROOT", path);
+    *HCB_ROOT.write().unwrap_or_else(|e| e.into_inner()) = Some(path.into());
 }
 
 #[cfg(target_os = "uefi")]
@@ -62,10 +67,9 @@ pub fn set_hcb_root_path(_path: &str) {}
 
 #[cfg(not(target_os = "uefi"))]
 pub fn hcb_root_path() -> Option<PathBuf> {
-    env::var("FVP_HCB_ROOT")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .map(PathBuf::from)
+    HCB_ROOT.read().unwrap_or_else(|e| e.into_inner()).clone()
+        .or_else(|| env::var("FVP_HCB_ROOT").ok().map(PathBuf::from))
+        .filter(|p| !p.as_os_str().is_empty())
 }
 
 #[cfg(target_os = "uefi")]
@@ -89,9 +93,10 @@ pub fn app_base_path() -> PathBuilder {
         }
     }
 
-    if let Ok(base_path) = env::var("FVP_BASE_PATH") {
+    if let Some(base_path) = BASE_PATH.read().unwrap_or_else(|e| e.into_inner()).clone()
+        .or_else(|| env::var("FVP_BASE_PATH").ok().map(PathBuf::from)) {
         return PathBuilder {
-            path_buff: PathBuf::from(base_path),
+            path_buff: base_path,
         };
     }
 

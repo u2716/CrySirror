@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //! CPU-only image surfaces and decoder dispatch. No GPU, window or VM policy.
 #![forbid(unsafe_code)]
+pub mod block_compressed;
 pub mod label_image;
 pub mod matte_span;
 pub mod lens;
@@ -13,6 +14,7 @@ pub mod pna;
 pub mod psd;
 use anyhow::{Result, ensure};
 use std::{collections::BTreeMap, io::Cursor, sync::Arc};
+mod exhibit_gyu;
 mod fixed_blend;
 mod formats;
 mod standard_encoding;
@@ -20,6 +22,7 @@ pub use formats::{ImageDecodeContext, ImageFormat, ImageSource};
 
 pub const MAX_DECODED_BYTES: usize = 64 * 1024 * 1024;
 pub mod nvsg;
+pub mod sqz;
 pub mod padding;
 pub mod pixels;
 mod png;
@@ -88,6 +91,7 @@ pub mod color;
 pub mod composition;
 pub mod crx;
 pub mod crxd;
+pub mod kiss_tex;
 pub mod cursor;
 pub mod cximage;
 mod dds;
@@ -266,7 +270,9 @@ impl Default for DecoderRegistry {
             this.decoders.insert(extension.into(), Arc::new(Standard));
         }
         this.decoders.insert("pdt".into(), Arc::new(Pdt));
+        this.formats.insert(exhibit_gyu::ID, Arc::new(exhibit_gyu::Format));
         this.formats.insert("circus/crx", Arc::new(crx::Format));
+        this.formats.insert(kiss_tex::ID, Arc::new(kiss_tex::Format));
         this.formats
             .insert("engine/packed-bitmap", Arc::new(packed_bitmap::Format));
         this
@@ -367,6 +373,10 @@ pub mod surface;
 
 pub mod avg32;
 pub mod g00;
+pub mod gdi_region;
+pub mod alpha_cells;
+pub mod layer_stack;
+pub mod channel_matte;
 /// Shared MPL PDT10/PDT11 image codec; native cut/pattern metadata stays in adapters.
 pub mod pdt;
 pub mod reallive_wipe;
@@ -450,6 +460,8 @@ pub mod alpha_planes;
 pub mod particle;
 
 pub mod alpha_stamps;
+pub mod packed_stamps;
+pub mod row_strip;
 
 pub mod alpha_mask;
 pub mod block_average;

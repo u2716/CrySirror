@@ -68,7 +68,7 @@ def run(source_root: Path):
         (temp/'src/original_ui.rs').write_text(helpers+'''\npub fn probe(p:(f64,f64),w:(u32,u32))->(Option<(i32,i32)>,(i32,i32,i32,i32)){(map_window_to_virtual(p.0,p.1,w,(640,360)),UiSurfaceTransform::new((640,360),w).map_rect(17,23,80,24))}\n''')
         modules.append('mod original_ui;')
         (temp/'src/main.rs').write_text(DRIVER.replace('ORIGINAL_MODULES','\n'.join(modules)))
-        (temp/'Cargo.toml').write_text('[package]\nname="crysirror-scene-differential"\nversion="0.0.0"\nedition="2021"\n[dependencies]\ncrysirror-scene={path='+json.dumps(str(ROOT/'crates/crysirror-scene'))+'}\n')
+        (temp/'Cargo.toml').write_text('[package]\nname="crysirror-scene-differential"\nversion="0.0.0"\nedition="2024"\n[dependencies]\ncrysirror-scene={path='+json.dumps(str(ROOT/'crates/crysirror-scene'))+'}\n')
         result=subprocess.run(['cargo','run','--quiet','--offline','--manifest-path',str(temp/'Cargo.toml'),'--target-dir',str(ROOT/'target/scene-differential')],capture_output=True,text=True)
         if result.returncode:
             raise RuntimeError(result.stderr)

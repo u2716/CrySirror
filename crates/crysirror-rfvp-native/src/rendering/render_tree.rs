@@ -477,9 +477,8 @@ impl ParticleEmitter {
 
     pub fn update(&mut self, dt: f32, local_to_world: &Affine2) {
         use rand::{rngs::SmallRng, Rng, SeedableRng};
-        static mut RNG: Option<SmallRng> = None;
-        let rng = unsafe { RNG.get_or_insert_with(|| SmallRng::from_entropy()) };
-        let mut rng = rng.clone();
+        static RNG: std::sync::OnceLock<SmallRng> = std::sync::OnceLock::new();
+        let mut rng = RNG.get_or_init(SmallRng::from_entropy).clone();
 
         // Spawn
         self.acc += self.spec.spawn_rate * dt;

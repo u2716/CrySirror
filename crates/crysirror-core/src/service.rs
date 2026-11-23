@@ -25,6 +25,12 @@ mod audio_sequence;
 pub use audio_sequence::*;
 mod audio_replacement;
 pub use audio_replacement::*;
+mod audio_source_meter;
+pub use audio_source_meter::*;
+mod audio_pcm16_gain;
+pub use audio_pcm16_gain::*;
+mod audio_resident;
+pub use audio_resident::*;
 mod civil_time;
 pub use civil_time::*;
 mod http;
@@ -231,6 +237,8 @@ pub struct AudioParameters {
     /// Optional stepped attenuation installed atomically with the new source.
     /// Its clock starts at actual publication, not preparation-request time.
     pub gain_envelope: Option<AudioGainEnvelopeSpec>,
+    /// Optional legacy quantized fader. Ordinary playback uses a float gain.
+    pub pcm16_gain: Option<AudioPcm16Gain>,
     /// Mixer voice gain, default 1.
     pub gain: f32,
     /// Legacy amplitude applied by the shared decoded-source wrapper, default 1.
@@ -284,6 +292,7 @@ impl Default for AudioParameters {
         Self {
             mix_group: None,
             gain_envelope: None,
+            pcm16_gain: None,
             gain: 1.,
             decode_gain: 1.,
             rate: 1.,
@@ -348,8 +357,9 @@ pub struct AudioPlaybackInfo {
     /// Output frames while input transport is running, including decoder/seek/
     /// preparation holds. Excludes fully paused/delayed input and effect tails.
     /// Pause fades count until frozen; seek, loop and playback rate do not reset it.
+    /// Explicit retained-source activation starts a new playback interval.
     pub transport_frames: u64,
-    /// A stop fade retains completion even after source EOF.
+    /// A stop fade or scheduled retirement is pending on the allocated voice.
     pub stopping: bool,
     /// Input will pause when its current fade completes.
     pub pausing: bool,
@@ -991,6 +1001,17 @@ pub trait FileSystem {
     }
 }
 
+/// Frame selection for indexed movies using a native millisecond clock.
+/// Half-rate modes select even indices only for 30 Hz source material.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IndexedMoviePacing {
+    NativeRate,
+    HalfRate30,
+    /// Drop an extra frame after a decode over 30 ms, then select even
+    /// indices after 30 observations of lateness.
+    Adaptive30,
+}
+
 /// Engine media resources, independent of a script VM or a window.
 #[derive(Clone,Copy,Debug)]
 pub struct MediaSourceOptions {
@@ -1104,6 +1125,14 @@ pub enum MediaPhase {
     Stopped,
     Failed,
 }
+/// Position of a movie's decoded PCM source, independent of the output device.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MediaAudioClock {
+    NoTrack,
+    Inactive,
+    Playing(u64),
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct MediaInfo {
     pub phase: MediaPhase,
@@ -1918,6 +1947,18 @@ pub trait HostServices: FileSystem {
             "encoded audio resource preparation",
         ))
     }
+    /// Decode a scoped reader once into reusable PCM on an audio worker.
+    /// An optional PCM16 byte limit truncates decoders without a frame count,
+    /// measured in the decoder's mono/stereo layout before mixer conversion.
+    fn begin_resident_audio(
+        &mut self,
+        _client: ClientId,
+        _reader: Arc<dyn AssetReader>,
+        _name: &str,
+        _unknown_pcm16_bytes: Option<u64>,
+    ) -> Result<ResidentAudioJob> {
+        Err(crate::Error::Unsupported("resident audio preparation"))
+    }
     /// Prepare a new immutable resource using a bounded CPU transform.
     fn begin_transformed_audio_resource(
         &mut self,
@@ -1977,6 +2018,35 @@ pub trait HostServices: FileSystem {
             "channel audio transport inspection",
         ))
     }
+    /// Mark the currently allocated channel for retirement at the next
+    /// nonempty mixer render, or cancel that mark. Returns whether its
+    /// mark changed. It has no effect on a pending replacement generation.
+    fn set_audio_channel_retirement(
+        &mut self,
+        _client: ClientId,
+        _channel: u32,
+        _retire: bool,
+    ) -> Result<bool> {
+        Err(crate::Error::Unsupported("audio channel retirement"))
+    }
+    /// Activate a parked or retiring retained source at its current cursor
+    /// and start a new transport timing interval.
+    /// An exhausted source reports active through the next nonempty mix and
+    /// generates no more PCM. Returns whether an allocated slot was activated.
+    fn resume_retained_audio_channel(
+        &mut self,
+        _client: ClientId,
+        _channel: u32,
+        _looping: bool,
+    ) -> Result<bool> {
+        Err(crate::Error::Unsupported("resume retained audio channel"))
+    }
+    /// Read the delayed stereo mean absolute PCM16 level at the most recent
+    /// published mixer boundary. An inactive metered source reports zeroes.
+    /// None means the channel lacks a live metered source.
+    fn audio_source_level(&self, _client: ClientId, _channel: u32) -> Result<Option<[u32; 2]>> {
+        Err(crate::Error::Unsupported("channel audio source meter"))
+    }
     /// Replace this channel's gain track without moving or reopening its
     /// source. Output time advances it even through pause/decoder starvation.
     /// None cancels it at the last applied gain. An absent voice stays absent.
@@ -2004,6 +2074,17 @@ pub trait HostServices: FileSystem {
     }
     fn begin_audio_seek(&mut self, _client: ClientId, _channel: u32, _frame: u64) -> Result<u64> {
         Err(crate::Error::Unsupported("channel audio seek"))
+    }
+    /// Hold a retained voice and its controls while rewinding its decoder to
+    /// frame zero. The seek receipt publishes activation with the new loop
+    /// mode on the same scoped voice. Cancellation releases the hold.
+    fn begin_retained_audio_rewind(
+        &mut self,
+        _client: ClientId,
+        _channel: u32,
+        _looping: bool,
+    ) -> Result<u64> {
+        Err(crate::Error::Unsupported("retained audio rewind"))
     }
     /// Retained scoped seek receipt; Ready is distinct from later voice EOF.
     fn audio_seek_preparation(
@@ -2057,6 +2138,24 @@ pub trait HostServices: FileSystem {
     fn media_reader(&mut self,_client:ClientId,_id:u32,_source:Arc<dyn AssetReader>,_options:MediaSourceOptions)->Result<VfsPath>{
         Err(crate::Error::Unsupported("reader-backed engine media"))
     }
+    /// Start reader-backed media whose embedded audio uses a legacy PCM16
+    /// fader. The fader follows the retained track through seek or restart.
+    fn media_reader_with_pcm16_gain(
+        &mut self,
+        _client: ClientId,
+        _id: u32,
+        _source: Arc<dyn AssetReader>,
+        _options: MediaSourceOptions,
+        _gain: AudioPcm16Gain,
+    ) -> Result<VfsPath> {
+        Err(crate::Error::Unsupported("reader media with PCM16 gain"))
+    }
+    /// Start an indexed CMV with an audio-master clock (elapsed time for a silent
+    /// stream) and decode only pictures requested by the presentation owner.
+    fn indexed_movie_reader(&mut self, _client: ClientId, _id: u32, _source: Arc<dyn AssetReader>,
+        _options: MediaSourceOptions, _gain: AudioPcm16Gain, _pacing: IndexedMoviePacing) -> Result<VfsPath> {
+        Err(crate::Error::Unsupported("indexed movie playback"))
+    }
     fn media_info(&self, _client: ClientId, _id: u32) -> Result<MediaInfo> {
         Err(crate::Error::Unsupported("engine media status"))
     }
@@ -2069,6 +2168,13 @@ pub trait HostServices: FileSystem {
     /// window dimensions. Hosts publish the accepted size at their tick boundary.
     fn request_canvas_size(&mut self, _client: ClientId, _size: [u32; 2]) -> Result<()> {
         Err(crate::Error::Unsupported("logical canvas resizing"))
+    }
+    /// Publish decoded straight RGBA pixels for a presenting host's window icon.
+    /// Virtual hosts accept the same bounded logical request.
+    fn request_window_icon(
+        &mut self, _client: ClientId, _size: [u32; 2], _rgba: Vec<u8>,
+    ) -> Result<()> {
+        Err(crate::Error::Unsupported("native window icon"))
     }
     /// Current focus published by the physical or explicitly virtual window
     /// owner. None means no focus model, rather than an inactive window.
@@ -2083,6 +2189,8 @@ pub trait HostServices: FileSystem {
     fn window_minimized(&self, _client: ClientId) -> Result<Option<bool>> {
         Ok(None)
     }
+    /// Maximized state of the client's presenting window, if the host models it.
+    fn window_maximized(&self, _client: ClientId) -> Result<Option<bool>> { Ok(None) }
     /// Actual fullscreen state published by the physical or explicitly virtual window owner.
     /// An accepted UI request alone does not establish this observation.
     /// None means neither a physical nor virtual window observation is available.
@@ -2182,6 +2290,9 @@ pub trait HostServices: FileSystem {
     ) -> Result<Option<Arc<dyn crate::image_processing::ImageResource>>> {
         Err(crate::Error::Unsupported("media frame image lease"))
     }
+    fn media_audio_clock(&self, _client: ClientId, _id: u32) -> Result<MediaAudioClock> {
+        Err(crate::Error::Unsupported("media PCM clock"))
+    }
     fn media_frame(&self, _client: ClientId, _id: u32) -> Result<Option<MediaFrame>> {
         Err(crate::Error::Unsupported("engine media picture"))
     }
@@ -2194,6 +2305,16 @@ pub trait HostServices: FileSystem {
     /// must retain their native event until audio_preparation reports Ready.
     fn begin_audio(&mut self, _client: ClientId, _request: AudioRequest) -> Result<u64> {
         Err(crate::Error::Unsupported("channel audio preparation"))
+    }
+    /// Prepare playback with a source-level meter installed at publication.
+    /// A preparation that retains existing playback also retains its meter.
+    fn begin_metered_audio(
+        &mut self,
+        _client: ClientId,
+        _request: AudioRequest,
+        _meter: AudioSourceMeterSpec,
+    ) -> Result<u64> {
+        Err(crate::Error::Unsupported("metered channel audio preparation"))
     }
     fn audio_preparation(&mut self, _client: ClientId, _ticket: u64) -> Result<AudioPreparation> {
         Err(crate::Error::Unsupported(
@@ -2209,6 +2330,44 @@ pub trait HostServices: FileSystem {
     }
     fn submit_audio(&mut self, _client: ClientId, _request: AudioRequest) -> Result<()> {
         Err(crate::Error::Unsupported("shared channel audio"))
+    }
+    /// Update the legacy fader on a live client channel. Missing channels stay
+    /// empty. A live channel must have opted into this fader at publication.
+    fn update_audio_pcm16_gain(
+        &mut self,
+        _client: ClientId,
+        _channel: u32,
+        _update: AudioPcm16GainUpdate,
+    ) -> Result<()> {
+        Err(crate::Error::Unsupported("channel PCM16 gain"))
+    }
+    /// Set the client-scoped PCM16 device attenuation (0–256). It affects
+    /// opt-in live and future voices between the secondary and stereo stages.
+    fn set_audio_pcm16_device_gain(&mut self, _client: ClientId, _gain: u16) -> Result<()> {
+        Err(crate::Error::Unsupported("client PCM16 device gain"))
+    }
+    /// Atomically replace the own gain of live channels and the retained gain
+    /// of existing media slots in one client scope. Missing audio channels are
+    /// ignored. Unknown media slots or invalid gains reject the whole update.
+    /// Independent transport fades, source identity and media clocks survive.
+    fn set_playback_gains(
+        &mut self,
+        _client: ClientId,
+        _audio: &[(u32, f32)],
+        _media: &[(u32, f32)],
+    ) -> Result<()> {
+        Err(crate::Error::Unsupported("atomic playback gain update"))
+    }
+    /// Atomically replace only the listed client channels. Prepared play
+    /// recipes must address this scope. Channels with no recipe are cleared.
+    /// None clears the entire supplied scope without preparing a source.
+    fn replace_audio_channels(
+        &mut self,
+        _client: ClientId,
+        _channels: &[u32],
+        _prepared: Option<&Arc<dyn AudioReplacementResource>>,
+    ) -> Result<()> {
+        Err(crate::Error::Unsupported("scoped audio replacement"))
     }
     /// Submit a bounded block already mixed by a shared CPU audio service.
     /// Native adapters never create output devices. Current output rate: 48kHz.
@@ -2253,6 +2412,28 @@ pub trait HostServices: FileSystem {
         _rgba: &[u8],
     ) -> Result<VfsPath> {
         Err(crate::Error::Unsupported("decoded image upload"))
+    }
+    /// Register an adapter-built glTF binary (GLB) model under a host-minted,
+    /// immutable client-scoped asset path, for world `scene`/`model` geometry.
+    /// Used when a native format's scene graph is assembled by the VM (for
+    /// example Unity prefabs) rather than stored as one file.
+    fn upload_model(&mut self, _client: ClientId, _id: u32, _glb: &[u8]) -> Result<VfsPath> {
+        Err(crate::Error::Unsupported("model upload"))
+    }
+    /// Register an adapter-built linear-RGB equirectangular environment
+    /// (`width = 2 × height`, rows from +Y down) as a Radiance `.hdr` asset
+    /// under a host-minted client-scoped path, for `Environment.hdr` (for
+    /// example a time-of-day sky). Released with `release_model`.
+    fn upload_hdr(&mut self, _client: ClientId, _id: u32, _width: u32, _height: u32, _rgb: &[[f32; 3]]) -> Result<VfsPath> {
+        Err(crate::Error::Unsupported("environment upload"))
+    }
+    /// End the caller's use of an `upload_model` (or `upload_hdr`) path. The host drops the
+    /// model bytes once no world entity of the client references the asset
+    /// (checked at the end of each tick, so a despawn in the same tick is
+    /// enough); an identical later upload registers it again. Releasing a
+    /// path still in use only defers the drop.
+    fn release_model(&mut self, _client: ClientId, _path: &VfsPath) -> Result<()> {
+        Err(crate::Error::Unsupported("model release"))
     }
     /// Decode provider-owned encoded image bytes (for example an image embedded
     /// in a native container the VFS does not mount) with the engine's shared

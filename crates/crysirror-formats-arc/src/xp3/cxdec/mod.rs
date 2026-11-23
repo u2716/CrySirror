@@ -11,6 +11,7 @@
 //! protected entry is checksum-verified again before it is published.
 //! Unknown/unsupported layouts fail visibly.
 mod engine;
+pub(super) mod nana;
 pub(super) mod pe;
 mod recover;
 mod special;
@@ -75,13 +76,10 @@ pub(super) fn open(
         !modules.is_empty() && modules.len() <= MAX_MODULES,
         "CXDEC module list must name 1..=16 companions"
     );
+    let module_names = modules.iter().map(|m| m.as_str().context("CXDEC module name must be a string")).collect::<Result<Vec<_>>>()?;
     let mut facts = Vec::new();
-    for m in modules {
-        let name = m.as_str().context("CXDEC module name must be a string")?;
-        let bytes = read_all(
-            ctx.open_sibling(name)?.as_ref(),
-            pe::MAX_MODULE_BYTES as u64,
-        )?;
+    for &name in &module_names {
+        let bytes = read_module(ctx, name)?;
         facts.extend(analyzed(name, &bytes).iter().cloned());
     }
     ensure!(
@@ -91,27 +89,30 @@ pub(super) fn open(
     let mut derived = None;
     let mut special_report = serde_json::Value::Null;
     let mut setup = None;
+    let mut recovered_nana = false;
     match specials.len() {
         0 => {}
         1 => {
-            let (d, report, s) = apply_special_names(&mut base, &specials[0], &facts, ctx)?;
-            derived = Some(d);
-            special_report = report;
-            setup = Some(s);
+            match apply_special_names(&mut base, &specials[0], &facts, ctx) {
+                Ok((d, report, s)) => {
+                    derived = Some(d);
+                    special_report = report;
+                    setup = Some(s);
+                }
+                Err(error) => {
+                    if specials[0].tag != *b"dls:" { return Err(error); }
+                    let names = nana::installed_names(&base, &specials[0], &module_names, ctx)
+                        .with_context(|| format!("XP3 Special startup parameters: {error}"))?;
+                    for (entry, name) in base.entries.iter_mut().zip(names) { entry.path = name; }
+                    special_report = serde_json::json!("dls:");
+                    recovered_nana = true;
+                }
+            }
         }
         _ => bail!("multiple XP3 indirect Special descriptors"),
     }
-    // Content bytes are filtered here, never by the generic pipeline.
-    let mut protected = BTreeSet::new();
-    for (e, plan) in base.entries.iter().zip(base.plans.iter_mut()) {
-        if let EntryPlan::Segments { encrypted, .. } = plan {
-            if *encrypted {
-                protected.insert(e.id);
-            }
-            *encrypted = false;
-        }
-    }
-    let candidates = match &derived {
+    let protected = adler_xor::take_protected(&mut base);
+    let mut candidates = match &derived {
         Some(d) => {
             let c = recover::coherent_candidates(&facts, &d.control_block, (d.mask, d.offset));
             if c.is_empty() {
@@ -129,7 +130,14 @@ pub(super) fn open(
         }
         None => recover::generic_candidates(&facts),
     };
+    if recovered_nana {
+        candidates.retain(|(profile, _)| matches!(profile.generator, engine::GeneratorKind::Cabbage { .. }) && profile.prefix8.is_none());
+    }
     let samples = samples(&base, &protected, ctx)?;
+    if recovered_nana && samples.is_empty() {
+        ensure!(base.entries.iter().filter(|e| protected.contains(&e.id)).all(|e| e.size <= SAMPLE_BYTES),
+            "Nana protected entries exceed the content validation sample limit");
+    }
     let engine = select(candidates, &samples)?;
     let engine_report = engine.as_ref().map(|(e, src)| {
         let p = e.profile();
@@ -185,6 +193,22 @@ pub(super) fn open(
         embedded,
         report,
     }))
+}
+
+fn read_module(ctx: &DecodeContext, name: &str) -> Result<Vec<u8>> {
+    let source = match ctx.open_sibling(name) {
+        Ok(source) => source,
+        Err(error) => {
+            // Installed plans name modules relative to the game directory.
+            let parent = ctx.source_name.as_deref().and_then(|p| p.rsplit_once('/')).map(|(dir, _)| dir);
+            let Some(arc) = parent.filter(|dir| dir.rsplit('/').next().is_some_and(|p| p.eq_ignore_ascii_case("arc"))) else {
+                return Err(error);
+            };
+            let path = arc.rsplit_once('/').map_or_else(|| name.to_owned(), |(root, _)| format!("{root}/{name}"));
+            ctx.open_dependency(&path)?
+        }
+    };
+    read_all(source.as_ref(), pe::MAX_MODULE_BYTES as u64)
 }
 
 /// The `Storages.setupArchiveData` argument that authenticated this archive's
@@ -498,12 +522,17 @@ impl Archive for CxArchive {
         out
     }
     fn open(&self, id: u32, ctx: &DecodeContext) -> Result<Arc<dyn AssetReader>> {
+        self.verified_reader(id, ctx).map(|(reader, _)| reader)
+    }
+}
+impl CxArchive {
+    fn verified_reader(&self, id: u32, ctx: &DecodeContext) -> Result<(Arc<dyn AssetReader>, bool)> {
         if let Some(data) = self.embedded.get(&id) {
-            return ctx.memory_shared(data.clone());
+            return Ok((ctx.memory_shared(data.clone())?, false));
         }
         let raw = self.base.open(id, ctx)?;
         if !self.protected.contains(&id) {
-            return Ok(raw);
+            return Ok((raw, false));
         }
         let e = self
             .base
@@ -516,6 +545,7 @@ impl Archive for CxArchive {
         let mut chunk = vec![0; 65536];
         let mut at = 0u64;
         while at < e.size {
+            ctx.check_cancelled()?;
             let n = (e.size - at).min(chunk.len() as u64) as usize;
             crysirror_resource::read_exact_at(raw.as_ref(), at, &mut chunk[..n])?;
             original.update(&chunk[..n]);
@@ -526,7 +556,7 @@ impl Archive for CxArchive {
             at += n as u64;
         }
         if original.finish() == hash {
-            return Ok(raw);
+            return Ok((raw, false));
         }
         let engine = self
             .engine
@@ -537,11 +567,11 @@ impl Archive for CxArchive {
             "CXDEC decoded entry checksum mismatch: {}",
             e.path
         );
-        Ok(Arc::new(FilterReader {
+        Ok((Arc::new(FilterReader {
             source: raw,
             engine,
             hash,
-        }))
+        }), true))
     }
 }
 struct FilterReader {
@@ -597,7 +627,7 @@ fn adler32(data: &[u8]) -> u32 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::xp3) mod tests {
     use super::engine::{CxdecProfile, GeneratorKind};
     use super::*;
     use crysirror_core::{service::MemoryAssetReader, state::ClientId};
@@ -699,7 +729,7 @@ mod tests {
         (pe, control)
     }
 
-    fn xp3_archive(files: &[(&str, Vec<u8>, u32, bool)]) -> Vec<u8> {
+    pub(in crate::xp3) fn xp3_archive(files: &[(&str, Vec<u8>, u32, bool)]) -> Vec<u8> {
         let mut out = b"XP3\r\n \n\x1a\x8bg\x01".to_vec();
         out.extend(0u64.to_le_bytes());
         let mut index = Vec::new();
@@ -730,7 +760,7 @@ mod tests {
         out.extend(index);
         out
     }
-    fn chunk(tag: &[u8], body: &[u8]) -> Vec<u8> {
+    pub(super) fn chunk(tag: &[u8], body: &[u8]) -> Vec<u8> {
         let mut c = tag.to_vec();
         c.extend((body.len() as u64).to_le_bytes());
         c.extend(body);

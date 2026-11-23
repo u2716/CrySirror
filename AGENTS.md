@@ -59,6 +59,7 @@ Read STATUS.md, docs/ARCHITECTURE.md and docs/NATIVE_ADAPTERS.md before editing.
 - Keep project/VM data distinct from GPU/device pointers and executable code.
 - Never distribute user game data, fonts, credentials or proprietary SDK files.
 - Document implementation, compilation and behavior validation separately.
+- Use Rust edition 2024 for CrySirror-owned crates. New workspace members inherit the edition from the root manifest.
 - Run Python tooling tests and cargo checks/tests when the environment permits.
   Use `cargo check/test --release` for local validation (owner preference).
 - Current contracts belong in adapter docs, native findings beside their code,
@@ -66,6 +67,11 @@ Read STATUS.md, docs/ARCHITECTURE.md and docs/NATIVE_ADAPTERS.md before editing.
   implementation specifications or temporary build/agent coordination to
   STATUS.md or HANDOFF logs. An ignored GPU test is not a pass.
 - After API changes, regenerate docs/api and log fingerprint changes (docs/api/README.md).
+- Use [ADR 0105](docs/adr/0105-self-admitted-technical-debt.md) and the
+  [SATD skill](.agents/skills/crysirror-satd/SKILL.md) for every incomplete
+  experiment or implementation. Append history when completing part of the
+  scope or moving code. Delete the record only after full implementation and
+  validation.
 
 ## Engine onboarding skill
 

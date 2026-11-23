@@ -121,6 +121,9 @@ crysirror-shader-tools cook-vita CAPTURE_DIR crates/crysirror-wgpu-gxm/cooked
 
 The current index joins captures of KiriKiri (game-kr), System4 (game-rance7)
 and WillPlus (game-OTOCHIKA). All three produce the same seven modules.
+The quad v2 hash includes the existing GXP variants and the separate
+continuous-mask and canvas-stencil fragments. GXM selects the mask
+variants from the draw flags and retains the sampling policy.
 
 `cook-vita` always adds the renderer's box filter and lite ray modules,
 because the renderer creates them only when a blurred transition or a

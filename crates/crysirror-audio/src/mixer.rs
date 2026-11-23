@@ -6,13 +6,15 @@
 mod release;
 mod retained;
 mod gain_envelope;
+pub(crate) mod source_meter;
 use crate::decoder::{AudioSource, Clip, SourceBufferStatus, SourceRead, StereoFrame};
 use crate::doppler::{DopplerInfo, DopplerSettings};
 use crate::envelope::Ramp;
 use crate::mix_groups::MixGroups;
 use anyhow::{Context, Result, bail, ensure};
 use crysirror_core::service::{
-    AudioMixGroupInfo, AudioMixGroupSettings, AudioResumePolicy, AudioResumeSettings,
+    AudioMixGroupInfo, AudioMixGroupSettings, AudioPcm16Gain, AudioPcm16GainUpdate,
+    AudioResumePolicy, AudioResumeSettings,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -524,6 +526,11 @@ struct Voice {
     stepped_gain: Option<crate::gain_envelope::Envelope>,
     source_peak: f32,
     source_taps: [f32; 4],
+    source_meter: Option<source_meter::SourceMeter>,
+    retire_on_render: bool,
+    rearmed_at_eof: bool,
+    rewind_hold: bool,
+    pcm16_gain: Option<AudioPcm16Gain>,
     balance:crate::balance::Balance,
     doppler: Ramp,
     doppler_settings: Option<DopplerSettings>,
@@ -559,6 +566,17 @@ struct Voice {
     source_ended: bool,
     tail_left: usize,
     tail_elapsed: usize,
+}
+impl Voice {
+    fn source_level(&self) -> Option<[u32; 2]> {
+        self.source_meter.as_ref().map(|meter| {
+            if self.retire_on_render || self.spec.paused || !self.spec.transport_active || self.source_ended {
+                [0; 2]
+            } else {
+                meter.level()
+            }
+        })
+    }
 }
 struct ScheduledResume {
     left: u64,
@@ -683,6 +701,7 @@ fn publish_seek(v: &mut Voice, frame: u64) {
         effect.reset();
     }
     v.source_ended = false;
+    v.rearmed_at_eof = false;
     v.tail_left = 0;
     v.tail_elapsed = 0;
     if let Some(voice) = &mut v.binaural {
@@ -706,6 +725,7 @@ struct Client {
     ducking: Ducking,
     duck: Ramp,
     duck_output: f32,
+    pcm16_device_gain: u16,
     dialogue_voices: usize,
     random: u64,
     previous: BTreeMap<String, usize>,
@@ -719,6 +739,7 @@ impl Client {
             ducking: Default::default(),
             duck: Ramp::new(1.),
             duck_output: 1.,
+            pcm16_device_gain: 256,
             dialogue_voices: 0,
             random: seed.max(1),
             previous: BTreeMap::new(),
@@ -729,6 +750,7 @@ impl Client {
     }
 }
 struct VoiceObservation {
+    source_level: Option<[u32; 2]>,
     stepped_gain: Option<crysirror_core::service::AudioGainEnvelopeInfo>,
     doppler: DopplerInfo,
     spec: VoiceSpec,
@@ -819,6 +841,7 @@ impl Mixer {
             observations.insert(
                 h,
                 VoiceObservation {
+                    source_level: v.source_level(),
                     stepped_gain: v.stepped_gain.map(|envelope| envelope.info()),
                     doppler: self.doppler_info(h.client, h)?,
                     spec: v.spec.clone(),
@@ -843,6 +866,7 @@ impl Mixer {
             clone.ducking = c.ducking;
             clone.duck = c.duck;
             clone.duck_output = c.duck_output;
+            clone.pcm16_device_gain = c.pcm16_device_gain;
             clone.previous = c.previous.clone();
             if let Some(r) = &c.reverb {
                 reverbs.insert(owner, r.settings.clone());
@@ -1061,6 +1085,13 @@ impl Mixer {
         self.client(client)?.ducking = config;
         Ok(())
     }
+    /// Retain the Q8 device stage for this client's current and future
+    /// PCM16 faders. This control does not act on ordinary float voices.
+    pub fn set_pcm16_device_gain(&mut self, client: u32, gain: u16) -> Result<()> {
+        ensure!(gain <= 256, "PCM16 device gain must be 0..256");
+        self.client(client)?.pcm16_device_gain = gain;
+        Ok(())
+    }
     pub fn set_listener(&mut self, client: u32, listener: Listener) -> Result<()> {
         ensure!(
             listener.velocity.is_none_or(finite3)
@@ -1259,13 +1290,66 @@ impl Mixer {
                 .and_then(Option::as_ref)
                 .is_some_and(|v| {
                     v.handle == h
-                        && !v.source_ended
-                        && (v.spec.looping
-                            || v.cursor
-                                .source
-                                .frame_count()
-                                .is_none_or(|n| v.position < n as f64))
+                        && !v.retire_on_render
+                        && (v.rearmed_at_eof
+                            || (!v.source_ended
+                                && (v.spec.looping
+                                    || v.cursor.source.frame_count().is_none_or(|n| v.position < n as f64))))
                 })
+    }
+    pub(crate) fn set_voice_retirement(
+        &mut self,
+        client: u32,
+        h: VoiceHandle,
+        retire: bool,
+    ) -> Result<bool> {
+        let voice = self.voice(client, h)?;
+        Ok(std::mem::replace(&mut voice.retire_on_render, retire) != retire)
+    }
+    pub(crate) fn resume_retained_voice(
+        &mut self,
+        client: u32,
+        h: VoiceHandle,
+        looping: bool,
+    ) -> Result<bool> {
+        let voice = self.voice(client, h)?;
+        ensure!(voice.spec.retain_on_finish, "audio source is not retained");
+        ensure!(!voice.rewind_hold, "audio rewind is pending");
+        if voice.spec.transport_active && !voice.spec.paused && !voice.retire_on_render {
+            return Ok(false);
+        }
+        Self::activate_retained_voice(voice, looping);
+        Ok(true)
+    }
+    fn activate_retained_voice(voice: &mut Voice, looping: bool) {
+        let at_eof = voice.source_ended
+            || (!voice.spec.looping
+                && voice.cursor.source.frame_count().is_some_and(|end| voice.position >= end as f64));
+        voice.rearmed_at_eof = at_eof;
+        voice.spec.looping = looping;
+        voice.spec.loop_passes = None;
+        voice.remaining_loop_passes = None;
+        voice.retire_on_render = false;
+        voice.spec.paused = false;
+        voice.spec.transport_active = true;
+        voice.transport_frames = 0;
+    }
+    pub(crate) fn set_rewind_hold(&mut self, client: u32, h: VoiceHandle, hold: bool) -> Result<()> {
+        self.voice(client, h)?.rewind_hold = hold;
+        Ok(())
+    }
+    pub(crate) fn finish_rewind(
+        &mut self,
+        client: u32,
+        h: VoiceHandle,
+        resume: Option<bool>,
+    ) -> Result<()> {
+        let voice = self.voice(client, h)?;
+        voice.rewind_hold = false;
+        if let Some(looping) = resume {
+            Self::activate_retained_voice(voice, looping);
+        }
+        Ok(())
     }
     pub fn stop(&mut self, client: u32, h: VoiceHandle, fade_ms: f32) -> Result<()> {
         duration(fade_ms)?;
@@ -1806,7 +1890,12 @@ impl Mixer {
     /// is reopened, no ramp is reset, and no seek/deadline is cancelled.
     pub fn set_transport_active(&mut self,client:u32,h:VoiceHandle,active:bool)->Result<()> {
         self.validate_transport_active(client,h,active)?;
-        self.voice(client,h)?.spec.transport_active=active;Ok(())
+        let voice = self.voice(client, h)?;
+        voice.spec.transport_active = active;
+        if !active {
+            voice.rearmed_at_eof = false;
+        }
+        Ok(())
     }
     pub fn pause(&mut self, client: u32, h: VoiceHandle, paused: bool) -> Result<()> {
         let voice = self.voice(client, h)?;
@@ -1974,13 +2063,13 @@ impl Mixer {
         self.spec(client, h)?;
         let voice = self.voices[h.slot as usize].as_ref().unwrap();
         Ok(crysirror_core::service::AudioPlaybackInfo {
-            source_peak: if voice.spec.paused || !voice.spec.transport_active || voice.source_ended {0.}else{voice.source_peak},
-            source_taps: if voice.spec.paused || !voice.spec.transport_active || voice.source_ended {[0.;4]}else{voice.source_taps},
+            source_peak: if voice.retire_on_render || voice.spec.paused || !voice.spec.transport_active || voice.source_ended {0.}else{voice.source_peak},
+            source_taps: if voice.retire_on_render || voice.spec.paused || !voice.spec.transport_active || voice.source_ended {[0.;4]}else{voice.source_taps},
             balance:voice.balance.info(),
             age_frames: voice.age_frames,
             transport_frames: voice.transport_frames,
             first_pass_complete: voice.first_pass_complete,
-            stopping: voice.stop_after_fade || voice.gain_stop_after_fade,
+            stopping: voice.retire_on_render || voice.stop_after_fade || voice.gain_stop_after_fade,
             pausing: voice.pause_after_fade,
             source_playing: self.source_is_playing(client, h),
             paused: voice.spec.paused,
@@ -2006,6 +2095,59 @@ impl Mixer {
             },
             resume_delay_frames: voice.resume_after.as_ref().map_or(0, |s| s.left),
         })
+    }
+    pub(crate) fn install_source_meter(
+        &mut self,
+        client: u32,
+        handle: VoiceHandle,
+        meter: source_meter::SourceMeter,
+    ) -> Result<()> {
+        self.voice(client, handle)?.source_meter = Some(meter);
+        Ok(())
+    }
+    pub(crate) fn install_pcm16_gain(
+        &mut self,
+        client: u32,
+        handle: VoiceHandle,
+        control: AudioPcm16Gain,
+    ) -> Result<()> {
+        self.voice(client, handle)?.pcm16_gain = Some(control);
+        Ok(())
+    }
+    pub(crate) fn update_pcm16_gain(
+        &mut self,
+        client: u32,
+        handle: VoiceHandle,
+        update: AudioPcm16GainUpdate,
+    ) -> Result<()> {
+        let control = self
+            .voice(client, handle)?
+            .pcm16_gain
+            .as_mut()
+            .context("voice has no PCM16 fader")?;
+        match update {
+            AudioPcm16GainUpdate::Multiplier(value) => control.multiplier = value,
+            AudioPcm16GainUpdate::Stereo(values) => control.stereo = values,
+        }
+        Ok(())
+    }
+    pub fn source_level(&self, client: u32, handle: VoiceHandle) -> Result<Option<[u32; 2]>> {
+        if let Some(published) = &self.published {
+            ensure!(client == handle.client, "foreign audio handle");
+            return published
+                .voices
+                .get(&handle)
+                .map(|voice| voice.source_level)
+                .context("audio voice ended or stale");
+        }
+        ensure!(client == handle.client, "foreign audio handle");
+        let voice = self
+            .voices
+            .get(handle.slot as usize)
+            .and_then(Option::as_ref)
+            .context("audio voice ended")?;
+        ensure!(voice.handle == handle, "stale audio handle");
+        Ok(voice.source_level())
     }
     pub fn pause_client(&mut self, client: u32, paused: bool) {
         if self.is_rendering() {
@@ -2293,11 +2435,22 @@ impl Mixer {
     /// limiter/clamp belongs at the hardware/export boundary, not per voice.
     pub fn render(&mut self, out: &mut [StereoFrame]) -> Result<()> {
         self.idle()?;
-        self.service_sources()?;
         ensure!(
             out.len() <= self.config.sample_rate as usize * 10,
             "audio render block exceeds 10 seconds"
         );
+        if !out.is_empty() {
+            for slot in &mut self.voices {
+                if let Some(voice) = slot {
+                    if voice.retire_on_render {
+                        *slot = None;
+                    } else if std::mem::take(&mut voice.rearmed_at_eof) {
+                        retained::source_finished(voice);
+                    }
+                }
+            }
+        }
+        self.service_sources()?;
         out.fill([0.; 2]);
         let rate = self.config.sample_rate;
         for v in self.voices.iter_mut().flatten() {
@@ -2378,6 +2531,7 @@ impl Mixer {
                 if v.spec.bus == Bus::Voice
                     && v.spec.transport_active
                     && !v.spec.paused
+                    && !v.rewind_hold
                     && !v.binaural_pending
                     && !v.reflection_pending
                     && !v.source_ended
@@ -2413,6 +2567,10 @@ impl Mixer {
                 let slot = &mut self.voices[live_index];
                 let (effect, step) = (&spatial[live_index], &rates[live_index]);
                 let Some(v) = slot else { continue };
+                if v.rewind_hold {
+                    v.age_frames = v.age_frames.saturating_add(1);
+                    continue;
+                }
                 if gain_envelope::finished(v) { *slot = None; continue; }
                 let stepped_sample_gain = v.stepped_gain.as_mut().map(|envelope| {
                     let sample = envelope.gain;
@@ -2593,6 +2751,9 @@ impl Mixer {
                 let mut s = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
                 if !v.source_ended {v.source_peak=v.source_peak.max(s[0].abs()).max(s[1].abs());}
                 if !v.source_ended {
+                    if let Some(meter) = &mut v.source_meter {
+                        meter.record(s);
+                    }
                     for (tap,&at) in v.source_taps.iter_mut().zip(&taps) {
                         if at/2==frame_index { *tap=s[at%2]; }
                     }
@@ -2602,17 +2763,30 @@ impl Mixer {
                 }
                 if let Some(echo)=&mut v.echo {s=echo.process(s);}
                 if let Some(effect) = &mut v.stereo_effect { s = effect.process(s)?; }
-                let echo = if let Some(effect) = &mut v.reflections {
+                let mut echo = if let Some(effect) = &mut v.reflections {
                     effect.process_frame((s[0] + s[1]) * 0.5)?
                 } else {
                     [0.; 2]
                 };
                 let c = &self.clients[&v.handle.client];
                 let master_gain = c.level(Bus::Master);
-                let mut gain = stepped_sample_gain.unwrap_or_else(|| v.gain.step())
-                    * v.envelope.step()
-                    * c.level(v.spec.bus)
-                    * self.groups.output(v.mix_group);
+                let own_gain = stepped_sample_gain.unwrap_or_else(|| v.gain.step());
+                let transport_gain = v.envelope.step();
+                let voice_gain = if let Some(control) = v.pcm16_gain {
+                    let fading_out = v.envelope.target == 0.;
+                    s = crate::levels::apply_pcm16_gain(
+                        s, control, own_gain, transport_gain, fading_out, c.pcm16_device_gain,
+                    );
+                    if v.reflections.is_some() {
+                        echo = crate::levels::apply_pcm16_gain(
+                            echo, control, own_gain, transport_gain, fading_out, c.pcm16_device_gain,
+                        );
+                    }
+                    1.
+                } else {
+                    own_gain * transport_gain
+                };
+                let mut gain = voice_gain * c.level(v.spec.bus) * self.groups.output(v.mix_group);
                 let pan = v.pan.step();
                 if pan != 0.5 && v.binaural.is_none() {
                     s[0] *= (1. - pan).sqrt() * std::f32::consts::SQRT_2;
@@ -2719,6 +2893,9 @@ impl Mixer {
             for &live_index in &live {
                 let slot = &mut self.voices[live_index];
                 let Some(v) = slot else { continue };
+                if v.rewind_hold {
+                    continue;
+                }
                 if v.stop_after_fade {
                     v.stop_remaining = v.stop_remaining.saturating_sub(1);
                     if v.stop_remaining == 0 {
@@ -2860,6 +3037,11 @@ fn new_voice(
         stepped_gain,
         source_peak: 0.,
         source_taps: [0.;4],
+        source_meter: None,
+        retire_on_render: false,
+        rearmed_at_eof: false,
+        rewind_hold: false,
+        pcm16_gain: None,
         balance:Default::default(),
         doppler: Ramp::new(1.),
         doppler_settings: None,
@@ -2901,6 +3083,7 @@ fn new_voice(
 // No current voice/decoder/history is copied to construct this value.
 pub(crate) struct ClientVoiceReplacement {
     owner: u32,
+    retired_slots: Vec<usize>,
     voices: Vec<(usize, Voice)>,
     sequence: u64,
     new_client: Option<Client>,
@@ -2910,10 +3093,8 @@ impl ClientVoiceReplacement {
         self.voices.iter().map(|(_, voice)| voice.handle)
     }
     pub(crate) fn install(self, mixer: &mut Mixer) {
-        for old in &mut mixer.voices {
-            if old.as_ref().is_some_and(|v| v.handle.client == self.owner) {
-                *old = None;
-            }
+        for slot in self.retired_slots {
+            mixer.voices[slot] = None;
         }
         if let Some(client) = self.new_client {
             mixer.clients.insert(self.owner, client);
@@ -2933,6 +3114,7 @@ impl Mixer {
         &self,
         owner: u32,
         channels: Vec<crate::channels::PreparedChannel>,
+        scope: Option<&[VoiceHandle]>,
     ) -> Result<ClientVoiceReplacement> {
         self.idle()?;
         ensure!(owner > 0, "audio replacement owner");
@@ -2940,15 +3122,26 @@ impl Mixer {
             self.clients.contains_key(&owner) || self.clients.len() < 64,
             "audio replacement client capacity"
         );
+        let retired_slots = self.voices.iter().enumerate()
+            .filter_map(|(slot, voice)| {
+                let voice = voice.as_ref()?;
+                (voice.handle.client == owner
+                    && scope.is_none_or(|handles| handles.contains(&voice.handle))).then_some(slot)
+            })
+            .collect::<Vec<_>>();
         if let Some(client) = self.clients.get(&owner) {
             ensure!(
-                client.reverb.is_none(),
+                scope.is_some() || client.reverb.is_none(),
                 "audio replacement needs a prepared client reverb history"
             );
             ensure!(
                 client
                     .voice_limit
-                    .is_none_or(|limit| channels.len() <= limit),
+                    .is_none_or(|limit| {
+                        let existing = self.voices.iter().flatten()
+                            .filter(|voice| voice.handle.client == owner).count();
+                        existing - retired_slots.len() + channels.len() <= limit
+                    }),
                 "audio replacement client voice limit"
             );
         }
@@ -2957,7 +3150,7 @@ impl Mixer {
             .iter()
             .enumerate()
             .filter_map(|(slot, v)| {
-                if v.as_ref().is_none_or(|v| v.handle.client == owner) {
+                if v.is_none() || retired_slots.binary_search(&slot).is_ok() {
                     Some(slot)
                 } else {
                     None
@@ -3024,6 +3217,7 @@ impl Mixer {
             voice.cursor.start = channel.start;
             voice.cursor.next = channel.start;
             voice.pan = Ramp::new(channel.pan);
+            voice.pcm16_gain = channel.pcm16_gain;
             voices.push((slot, voice));
         }
         let new_client = if self.clients.contains_key(&owner) {
@@ -3039,6 +3233,7 @@ impl Mixer {
         };
         Ok(ClientVoiceReplacement {
             owner,
+            retired_slots,
             voices,
             sequence,
             new_client,

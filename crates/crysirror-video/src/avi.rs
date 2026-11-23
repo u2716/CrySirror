@@ -8,6 +8,8 @@
 //! with the pure-Rust `oxideav-cinepak` decoder into RGBA; audio is returned
 //! as interleaved little-endian PCM for the engine mixer. Nothing here owns
 //! a clock, a VM buffer or a device.
+pub mod stream;
+
 use anyhow::{Context, Result, bail, ensure};
 use oxideav_cinepak::{CinepakDecoder, CinepakFrame, CinepakPixelFormat};
 
@@ -369,10 +371,12 @@ mod tests {
     }
 
     fn strl(fcc_type: &[u8; 4], strf: Vec<u8>) -> Vec<u8> {
-        list(
-            b"strl",
-            [chunk(b"strh", fcc_type.to_vec()), chunk(b"strf", strf)].concat(),
-        )
+        let mut head=vec![0;56];
+        head[..4].copy_from_slice(fcc_type);
+        head[20..24].copy_from_slice(&1u32.to_le_bytes());
+        head[24..28].copy_from_slice(&15u32.to_le_bytes());
+        head[32..36].copy_from_slice(&1u32.to_le_bytes());
+        list(b"strl",[chunk(b"strh", head),chunk(b"strf",strf)].concat())
     }
 
     fn synthetic_avi(video_strf: Vec<u8>) -> Vec<u8> {
@@ -405,6 +409,28 @@ mod tests {
         body.extend_from_slice(&hdrl);
         body.extend_from_slice(&movi);
         chunk(b"RIFF", body)
+    }
+
+    #[test]
+    fn streaming_avi_reads_native_codec_parameters_and_pcm_separately() {
+        let mut format = vec![0; 46];
+        format[..4].copy_from_slice(&46u32.to_le_bytes());
+        format[4..8].copy_from_slice(&768u32.to_le_bytes());
+        format[8..12].copy_from_slice(&478u32.to_le_bytes());
+        format[16..20].copy_from_slice(b"WMV3");
+        let source = std::io::Cursor::new(synthetic_avi(format));
+        let mut movie = stream::Movie::open(source).unwrap();
+        assert_eq!(movie.codec().unwrap(), "wmv3");
+        assert_eq!(movie.metadata().size, [768,478]);
+        assert!(movie.has_audio());
+        let mut packets=0;
+        movie.pcm(||false,|pts,rate,channels,samples|{
+            assert_eq!((pts,rate,channels),(0,22050,2));
+            assert_eq!(samples.len(),2);
+            packets+=1;
+            Ok(true)
+        }).unwrap();
+        assert_eq!(packets,1);
     }
 
     #[test]

@@ -1,0 +1,46 @@
+# Uncharted 2 PS3 installed-resource verification
+
+## 2026-11-23 — BCAS20097 01.00
+
+The local `PS3_GAME/PARAM.SFO` identifies *Uncharted 2: Among Thieves*, title ID BCAS20097, APP_VER and VERSION 01.00. The following measurements concern clear on-disc resources and do not require execution of the PlayStation binary. The input directory was opened read-only. No assets were added to the repository.
+
+| Mounted source under `PS3_GAME/USRDIR/build/main` | Named files |
+| --- | ---: |
+| `pak22.psarc` | 781 |
+| `actor27.psarc` | 1,311 |
+| `dc1.psarc` | 177 |
+| `text1.psarc` | 51 |
+| `sound1/banks.psarc` | 182 |
+| `sound1/music.psarc` | 446 |
+| `sound1/streams.psarc` | 357 |
+| `sound1/speech/english.psarc` | 17,127 |
+| **Total** | **20,432** |
+
+The 5,596,444,529-byte level archive uses 40-bit big-endian entry addresses. An independent bounded-block reader provided the comparison digests. The checked first directory record in `pak22.txt` is `con-1-start`. Its exact package match is 9,350,592 bytes; SHA-256 is `27351f592bf987f6978b740c224a0c1ecbddeb2f56f7641e33936ca9009ef253`. Its sound-bank reference maps to `convoy-local.bnk`, 3,998,544 bytes; SHA-256 is `df4158e4c8645b0f7934c633a9dee8ef7064a8591fe83c61ec2959f9820c268a`. The catalog also declares `con-1-start-ingame`. The archive has a numbered `con-1-start-ingame10.pak`, whose native selection rule remains open.
+
+The 50,442,560-byte `train-cliff.pak` yields SHA-256 `3423bea4eabc7699e5adee0169f9807e24cf666210ce8933cb28d795aae2b945`. Native item types include the background section, material and light tables and collision data. Reading their headers establishes the resource directory; traversing them into renderable level geometry is outstanding.
+
+The 51 native localization tables cover 17 numeric language slots and three categories. The pool holds UTF-8 strings; records contain sorted big-endian IDs and offsets relative to the pool. Independent inspection counted 120,564 string records; the same ID `0x00049e15` resolves to the English “Slow Motion” and Japanese “スローモーション”.
+
+The release `level_resources` example ran to completion on macOS for `con-1-start`, `train-cliff` and `war-1-market-coop`. Every run mounted all eight archives and parsed all localization tables. The controller DDS decoded through the shared image pipeline to 1280 × 720 with 9,076 distinct RGBA values. The full convoy and train package digests matched the independent reads above.
+
+| Selected level | Verified inner PAK directory |
+| --- | --- |
+| `con-1-start` | 10 pages and 48 items, including 35 VRAM descriptors and the native camera table. The declared sound bank resolved in its separate mount. |
+| `train-cliff` | 38 pages and 107 items, including 95 VRAM descriptors and the background, lights and material table. |
+| `war-1-market-coop` | Physical archive offset 4,312,806,630, 21,901,568 logical bytes, six pages and 173 items, including water and two collision records. Both referenced actor packages resolved through the actor mount with 32 and 38 items. |
+
+Six release regression checks passed. The native checks exercise duplicate/malformed level IDs, repeated cache references, localized key lookups and invalid string boundaries, and page-relative item names and broken links. Shared format checks exercise mounted seeks across three block forms, partial final reads, EOF, corrupted zlib, invalid flags, invalid hashes, invalid offsets and directory traversal. The format registry check confirms the new ID is present once.
+
+Run from the repository root:
+
+```sh
+cargo test --release --offline --locked -p crysirror-naughty-dog --lib
+cargo test --release --offline --locked -p crysirror-formats-arc --test psarc
+cargo test --release --offline --locked -p crysirror-formats-arc --test archives explicit_registration_lists_only_implemented_decoders
+cargo run --release --offline --locked -p crysirror-naughty-dog --example level_resources -- "$HOME/Downloads/game-Uncharted2" train-cliff
+```
+
+Runtime entry, game-script execution, geometry, texture bindings, real-time audio, playable controls and native saves have no gameplay verification. Package selection for numbered names is unresolved. [Current implementation and scoped gaps](../../crates/crysirror-naughty-dog/README.md)
+
+The verified local release executable is available at `target/uncharted2-validation/level_resources`. The same directory holds `con-1-start.log`, `train-cliff.log` and `war-1-market-coop.log` from the three installed-data runs.

@@ -17348,7 +17348,7 @@ fn unix_local_date_time(secs: i64) -> Option<LocalDateTime> {
         tm_gmtoff: i64,
         tm_zone: *const i8,
     }
-    extern "C" {
+    unsafe extern "C" {
         fn localtime_r(timer: *const i64, result: *mut LibcTm) -> *mut LibcTm;
     }
     unsafe {

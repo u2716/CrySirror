@@ -13,3 +13,6 @@ doctest = false
 
 [lints.rust]
 warnings = "allow"
+
+[dependencies]
+crysirror-tjs2.workspace = true

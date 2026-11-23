@@ -1452,13 +1452,13 @@ mod cpu_eviction_tests {
             .flat_map(|y| (0..70).map(move |x| (x, y)))
             .map(|(x, y)| g.hit_alpha(x, y).map(|a| if a != 0 { 255 } else { 0 }))
             .collect();
-        let gen = g.get_generation();
+        let generation = g.get_generation();
 
         assert!(g.can_evict_cpu_pixels());
         g.evict_cpu_pixels();
         assert!(g.get_texture().is_none());
         assert!(g.is_cpu_evicted());
-        assert_eq!(g.get_generation(), gen);
+        assert_eq!(g.get_generation(), generation);
 
         let got: Vec<Option<u8>> = (0..3)
             .flat_map(|y| (0..70).map(move |x| (x, y)))

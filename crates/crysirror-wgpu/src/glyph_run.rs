@@ -47,7 +47,7 @@ pub(super) fn key(assets: &Assets, owner: u32, paint: &Paint) -> Result<String> 
         baseline: phase(g.baseline),
     };
     Ok(format!(
-        "{}:{}:raster={:?}:decorations={:?}",
+        "{}:{}:raster={:?}:decorations={:?}:gradient={:?}",
         text.glyph_cell_key(font, request)?,
         style_key(
             *bold,
@@ -56,7 +56,8 @@ pub(super) fn key(assets: &Assets, owner: u32, paint: &Paint) -> Result<String> 
             horizontal_scale(&text, font, g, *size)?
         ),
         g.style.map_or(Default::default(),|s|s.raster),
-        (g.style.is_some_and(|s|s.underline),g.style.is_some_and(|s|s.strikeout))
+        (g.style.is_some_and(|s|s.underline),g.style.is_some_and(|s|s.strikeout)),
+        g.style.and_then(|s|s.gradient)
     ))
 }
 fn horizontal_scale(
@@ -133,18 +134,20 @@ pub(super) fn cache_keys(assets: &Assets, owner: u32, paint: &Paint, needed: &mu
                     };
                     let scale = horizontal_scale(&text, font, g, *size)?;
                     let outline=g.style.map_or(*outline,|s|s.outline);
-                    for pass in outline
+                    let gradient = g.style.and_then(|s| s.gradient);
+                    for (pass, fill) in outline
                         .filter(|o| o.radius > 0)
-                        .map(Some)
+                        .map(|o| (Some(o), None))
                         .into_iter()
-                        .chain(std::iter::once(None))
+                        .chain(g.style.and_then(|s|s.shadow).map(|_| (None, None)))
+                        .chain(std::iter::once((None, gradient)))
                     {
                         needed.insert(format!(
-                            "{}:{}:raster={:?}:decorations={:?}",
+                            "{}:{}:raster={:?}:decorations={:?}:gradient={:?}",
                             text.glyph_cell_key(font, request)?,
                             style_key(g.bold.unwrap_or(g.style.map_or(*bold,|s|s.bold)), blur, &pass, scale),
                             g.style.map_or(Default::default(),|s|s.raster),
-                            (g.style.is_some_and(|s|s.underline),g.style.is_some_and(|s|s.strikeout))
+                            (g.style.is_some_and(|s|s.underline),g.style.is_some_and(|s|s.strikeout)), fill
                         ));
                     }
                 }
@@ -250,10 +253,10 @@ impl Renderer {
                     })
                     .transpose()?
                     .unwrap_or(0.);
-                for (outline_pass,pass_color,pass_offset) in shadow
-                    .map(|s|(None,s.color,s.offset)).into_iter()
-                    .chain(outline.filter(|o|o.radius>0).map(|o|(Some(o),o.color,[0.;2])))
-                    .chain(std::iter::once((None,fill_color,[0.;2])))
+                for (outline_pass,pass_color,pass_offset,gradient) in shadow
+                    .map(|s|(None,s.color,s.offset,None)).into_iter()
+                    .chain(outline.filter(|o|o.radius>0).map(|o|(Some(o),o.color,[0.;2],None)))
+                    .chain(std::iter::once((None,fill_color,[0.;2],g.style.and_then(|s|s.gradient))))
                 {
                     count = count.checked_add(1).context("glyph frame count overflow")?;
                     ensure!(
@@ -274,7 +277,7 @@ impl Renderer {
                         bold,
                         glyphs: vec![PositionedGlyph {
                 image: None,
-                            style: Some(crysirror_scene::layer::PositionedGlyphStyle{raster,underline,strikeout,..Default::default()}), font: None,
+                            style: Some(crysirror_scene::layer::PositionedGlyphStyle{raster,underline,strikeout,gradient,..Default::default()}), font: None,
                             horizontal_scale: Some(horizontal_scale),
                             font_width: None,
                             cell_width: None,
@@ -441,6 +444,18 @@ impl Renderer {
                                     .flat_map(|alpha| [255, 255, 255, *alpha])
                                     .collect(),
                             };
+                        }
+                        if let Some(fill) = gradient {
+                            let scale = f32::from(fill.cell_size) / size;
+                            for (i, pixel) in bitmap.rgba.chunks_exact_mut(4).enumerate() {
+                                let x = bitmap.origin[0] + (i % bitmap.width as usize) as i32;
+                                let y = bitmap.origin[1] + (i / bitmap.width as usize) as i32;
+                                let rgb = fill.sample(
+                                    (x as f32 * scale).floor() as i32,
+                                    ((y as f32 + size) * scale).floor() as i32,
+                                );
+                                pixel[..3].copy_from_slice(&rgb);
+                            }
                         }
                         self.glyph_cells.insert(key.clone(), bitmap);
                     }

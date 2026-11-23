@@ -435,12 +435,7 @@ impl Renderer {
         });
         let quad_shader = d.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("quad shader"),
-            // Existing native packages are keyed by the exact v1 module hash.
-            // Keep that ABI until their v2 programs are cooked; reject the new
-            // coverage profile explicitly below instead of altering old draws.
-            source: wgpu::ShaderSource::Wgsl(if cfg!(any(target_os="vita",target_os="horizon")) {
-                crysirror_shaders::wgsl::QUAD
-            } else { crysirror_shaders::wgsl::QUAD_V2 }.into()),
+            source: wgpu::ShaderSource::Wgsl(crysirror_shaders::wgsl::QUAD_V2.into()),
         });
         let mesh_shader = d.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("mesh shader"),
@@ -1005,11 +1000,14 @@ impl Renderer {
             }
             ensure!(p.output.is_none() || !stored_blend::uses_stored(p), "stored-byte routed blending requires target-scoped destination capture");
             ensure!(p.output.is_none() || (p.coverage == crysirror_scene::layer::coverage::Operation::None && p.composite.is_none() && matches!(p.paint, Paint::Solid {..} | Paint::Image {..} | Paint::Text {..} | Paint::GlyphRun {..})), "unsupported routed composition payload");
-            ensure!(!cfg!(any(target_os="vita",target_os="horizon"))
-                || p.filter.as_ref().and_then(|f|f.mask.as_ref()).and_then(|m|m.coverage).is_none(),
-                "continuous mask coverage needs the console quad v2 shader package");
-            ensure!(!cfg!(any(target_os="vita",target_os="horizon")) || p.filter.as_ref().is_none_or(|f|f.stencil.is_none()),
-                "canvas stencil needs the console quad v2 shader package");
+            if let Some(filter) = p.filter.as_ref().filter(|filter| {
+                cfg!(target_os = "vita")
+                    && (filter.stencil.is_some()
+                        || filter.mask.as_ref().is_some_and(|mask| mask.coverage.is_some()))
+            }) {
+                ensure!(filter.distortion.is_none() && !stored_blend::uses_stored(p),
+                    "Vita continuous masks and canvas stencils require undistorted GPU blending");
+            }
             if p.filter.as_ref().and_then(|f|f.stencil.as_ref()).is_some_and(|s|s.rgba) {
                 ensure!(!matches!(p.paint,Paint::ProjectedMesh{..}) && matches!(p.blend,Blend::Normal|Blend::Add|Blend::Subtract|Blend::Multiply|Blend::Screen), "component matte needs a supported 2D blend");
             }

@@ -5,6 +5,7 @@ import argparse
 import concurrent.futures
 import hashlib
 import json
+import os
 import re
 import shutil
 import signal
@@ -65,6 +66,12 @@ def main():
         signal.signal(sig, lambda *_: stop.set())
     initial_log = args.log_file.stat().st_size if args.log_file.exists() else 0
     config = args.config.read_text()
+    with zipfile.ZipFile(args.vpk) as archive:
+        if any(Path(n).is_absolute() or '..' in Path(n).parts for n in archive.namelist()):
+            parser.error('unsafe VPK path')
+    # Vita3K's SDL frontend can render to a headless surface. Its console flag
+    # alone still opens a window on builds using that frontend.
+    env = dict(os.environ, SDL_VIDEO_DRIVER='offscreen', SDL_AUDIO_DRIVER='dummy')
 
     def valid(folder, name):
         try:
@@ -84,17 +91,13 @@ def main():
         def worker(index):
             root = base / str(index)
             fs = root / 'fs'
-            for path in ['ux0/app/CRYSHADR1', 'ux0/data', 'ux0/user/00', 'ur0/data']:
+            for path in ['ux0/data', 'ux0/user/00', 'ur0/data']:
                 (fs / path).mkdir(parents=True, exist_ok=True)
             shutil.copyfile(module, fs / 'ur0/data/libshacccg.suprx')
             for name in ['vs0', 'sa0', 'os0']:
                 source = (args.fs_root / name).resolve()
                 if source.exists():
                     (fs / name).symlink_to(source, target_is_directory=True)
-            with zipfile.ZipFile(args.vpk) as archive:
-                if any(Path(n).is_absolute() or '..' in Path(n).parts for n in archive.namelist()):
-                    raise ValueError('unsafe VPK path')
-                archive.extractall(fs / 'ux0/app/CRYSHADR1')
             private_config = re.sub(r'(?m)^pref-path:.*$', f'pref-path: {fs}', config)
             private_config = re.sub(r'(?m)^log-level:.*$', 'log-level: 6', private_config)
             cfg = root / 'config.yml'
@@ -115,8 +118,8 @@ def main():
                     report.unlink()
                 with log.open('w') as stderr:
                     process = subprocess.Popen([str(args.vita3k.resolve()), '--console', '--frontend', 'sdl',
-                                                '-c', str(cfg), '-f', '-w', '-l', '6', '-r', 'CRYSHADR1'],
-                                               stdout=stderr, stderr=subprocess.STDOUT)
+                                                '-c', str(cfg), '-f', '-w', '-l', '6', str(args.vpk.resolve())],
+                                               stdout=stderr, stderr=subprocess.STDOUT, env=env)
                     deadline = time.monotonic() + args.timeout
                     try:
                         while time.monotonic() < deadline and not stop.is_set():
@@ -147,6 +150,8 @@ def main():
                     print(f'Compiled {name}', flush=True)
                 else:
                     missing.append(name)
+                    if not report.exists():
+                        shutil.copyfile(log, args.output / (name + '.log'))
                     print(f'Failed {name}', flush=True)
             return missing
 

@@ -44,7 +44,7 @@ use blocking resolution by default for complete, reproducible output.
 
 Requests deduplicate by client, resource kind and canonical path. Tickets carry
 store/client identity. Each client may have 32 loading requests; there are at
-most 4096 retained entries and 256 MiB of accounted prepared CPU payloads.
+most 4096 retained entries. Prepared CPU payloads follow the host budget in ADR 0052.
 Completed entries must be released when no longer needed. This accounting is
 not a bound on all transient decoder allocations, exported Arc references,
 existing byte caches or GPU memory.

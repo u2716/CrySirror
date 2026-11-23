@@ -50,6 +50,19 @@ space, an available descriptor or a kernel memblock slot.
    shutdown. Stop/join producers and resolve device ownership before destroying
    their resources; retained caches/arenas need an explicit lifetime and bound.
 
+Adapter-built models (`HostServices::upload_model`) stay in the client asset
+cache until the adapter calls `release_model`. The runtime drops the bytes at
+the end of the first tick in which no world entity of that client references the
+asset, so an adapter releases a model when it despawns or rebuilds the entity
+that drew it. Unreleased models count toward prepared CPU residency. On 64-bit Windows, macOS, Linux, iOS and Android the host defaults to no aggregate prepared-cache cap. Other targets retain the 256 MiB default. A configured host budget still enforces admission, and diagnostics report a null budget when uncapped.
+
+The prepared CPU asset cache normally keeps recently used images for five
+seconds so repeated draws can reuse the decode. When a new result would
+exceed the budget, it can reclaim the least recently used automatic entries
+immediately. Explicit tickets, live streaming leases and payloads still held
+by consumers retain their residency. If reclaiming every eligible entry would
+still leave too little space, admission fails and the cache keeps its entries.
+
 Reuse shared caches and size classes before creating new per-VM copies. Keep
 keys, saves, original input data and native policy separate from disposable
 derived caches. Do not change the game's logical resolution or omit native

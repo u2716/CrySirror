@@ -12,7 +12,7 @@ use crysirror_core::{
     Error,
 };
 use crysirror_tasks::{Cancellation, Task, TaskPool};
-use crysirror_video::{amv, asf, imoavi, isobmff, mpeg, theora, webm};
+use crysirror_video::{amv, asf, avi, cmv, imoavi, mgv, isobmff, mpeg, theora, webm};
 use std::{
     cell::Cell,
     io::{Read, Seek, SeekFrom},
@@ -143,6 +143,22 @@ pub(crate) fn begin(
                 result.has_audio = Some(info.has_audio);
                 result.duration_ms = info.duration_ms;
                 result.frame_ms = info.frame_ms;
+            } else if mgv::is_input(&mut input)? {
+                let layout = mgv::Layout::read(&mut input)?;
+                result.size = layout.size;
+                result.container = "mgv".into();
+                result.video_decoder = "theora".into();
+                result.duration_ms = Some(layout.duration_ms());
+                result.frame_ms = Some(layout.frame_ms());
+                result.has_audio = Some(layout.audio.is_some());
+            } else if cmv::is_input(&mut input)? {
+                let index = cmv::Index::read(&mut input)?;
+                result.size = index.metadata.size;
+                result.container = "cmv".into();
+                result.video_decoder = "jbpd/jbpe".into();
+                result.duration_ms = index.metadata.duration_ms;
+                result.frame_ms = index.metadata.frame_ms;
+                result.has_audio = Some(index.audio.is_some());
             } else if imoavi::is_input(&mut input)? {
                 let movie = imoavi::Movie::open(input, ||cancel.is_cancelled())?;
                 let info = movie.info();
@@ -152,6 +168,15 @@ pub(crate) fn begin(
                 result.duration_ms = Some(info.duration_ms);
                 result.frame_ms = Some(info.frame_ms);
                 result.has_audio = Some(info.has_audio);
+            } else if avi::stream::is_input(&mut input)? {
+                let movie = avi::stream::Movie::open(input)?;
+                let info = movie.metadata();
+                result.size = info.size;
+                result.container = "avi".into();
+                result.video_decoder = movie.codec()?.into();
+                result.duration_ms = info.duration_ms;
+                result.frame_ms = info.frame_ms;
+                result.has_audio = Some(movie.has_audio());
             } else if asf::is_asf(&mut input)? {
                 let done = Cell::new(false);
                 let mut metadata = None;

@@ -160,7 +160,7 @@ impl<'a> Image<'a> {
 }
 
 /// `EPropertyGenFlags` (low 6 bits; 0x40 marks ObjectPtr / native bool).
-mod gen {
+mod property_flags {
     pub const BYTE: u8 = 0x00;
     pub const INT8: u8 = 0x01;
     pub const INT16: u8 = 0x02;
@@ -369,7 +369,7 @@ impl<'a> Reflection<'a> {
         let kind = self.img.byte(p + 24) & 0x3F;
         let dim = self.img.w(p + 48).max(1);
         let func = self.img.q(p + 56);
-        use gen::*;
+        use property_flags::*;
         let ty = match kind {
             BYTE => PropType::Byte {
                 enum_name: (func != 0).then(|| self.enum_name(func)).flatten(),

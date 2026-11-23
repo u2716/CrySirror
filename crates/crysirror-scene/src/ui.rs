@@ -2,6 +2,7 @@
 // License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 //! Retained widgets/layout/focus/input and rendering. Button capture/release and
 //! letterbox mapping are ported from RFVP exit_confirm_ui.rs (see SOURCE_NOTES.md).
+pub mod color_picker;
 pub mod cursor;
 pub mod dialog;
 pub mod hit_mask;
@@ -1034,6 +1035,7 @@ impl UiSystem {
             .chain(self.window_requests.position.as_ref().map(|v| v.0))
             .chain(self.window_requests.visible.as_ref().map(|v| v.0))
             .chain(self.window_requests.minimized.as_ref().map(|v| v.0))
+            .chain(self.window_requests.icon.as_ref().map(|v| v.0))
             .chain(self.window_requests.drag)
             .chain(self.window_requests.reset_shape)
             .chain(self.window_requests.ime_cursor_area.as_ref().map(|v|v.0))

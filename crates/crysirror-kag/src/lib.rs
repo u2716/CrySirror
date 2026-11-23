@@ -1,6 +1,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. A copy is available at https://mozilla.org/MPL/2.0/.
 mod error;
+pub mod krkr_store;
 mod parser;
 mod source;
 mod tag;

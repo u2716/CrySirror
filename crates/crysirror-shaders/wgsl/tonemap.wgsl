@@ -5,6 +5,10 @@ struct Post {
     params: vec4<f32>,
     // x: auto exposure enabled, y: compensation (stops)
     adapt: vec4<f32>,
+    // rgb: colour filter, w: unused
+    tint: vec4<f32>,
+    // x: contrast, y: saturation (1 neutral)
+    grade: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> post: Post;
 @group(0) @binding(1) var hdr: texture_2d<f32>;
@@ -44,6 +48,11 @@ fn fs_tonemap(i: FsOut) -> @location(0) vec4<f32> {
         let avg_log = textureLoad(adapted, vec2<i32>(0, 0), 0).r;
         c = c * (0.18 * exp2(post.adapt.y - avg_log));
     }
+    // Colour adjustments: filter, contrast around middle grey, saturation.
+    c = c * post.tint.rgb;
+    c = 0.18 * pow(max(c, vec3<f32>(0.0)) / 0.18, vec3<f32>(post.grade.x));
+    let luma = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+    c = max(mix(vec3<f32>(luma), c, post.grade.y), vec3<f32>(0.0));
     var o: vec3<f32>;
     if post.params.y < 0.5 {
         o = pbr_neutral(c);

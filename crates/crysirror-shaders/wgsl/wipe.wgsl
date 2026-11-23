@@ -243,6 +243,37 @@ fn affected_color(uv: vec2<f32>) -> vec4<f32> {
     // progress 0 to 255.  Types 1 and 2 are the corresponding fixed FRONT and
     // fixed NEXT modes.  These inputs are complete scenes, not isolated
     // transparent target layers.
+    if (kind == 1002) {
+        let canvas = vec2<u32>(u32(option(1)), u32(option(2)));
+        let x_grows = option(3) != 0.0;
+        let y_grows = option(4) != 0.0;
+        let extent = select(canvas.y, canvas.x, x_grows);
+        let phase = min(u32(option(0)), extent);
+        let size = vec2<u32>(select(canvas.x, phase, x_grows),
+            select(canvas.y, phase * canvas.y / extent, y_grows));
+        let pixel = min(vec2<u32>(uv * vec2<f32>(canvas)), canvas - vec2<u32>(1));
+        if (all(pixel < size)) {
+            let source = pixel * canvas / max(size, vec2<u32>(1));
+            return textureSampleLevel(current_tex, current_smp, (vec2<f32>(source)+0.5)/vec2<f32>(canvas), 0.0);
+        }
+        if (option(5) == 0.0) { return next; }
+        if (all(pixel >= size)) {
+            let source = (pixel-size) * canvas / max(canvas-size, vec2<u32>(1));
+            return textureSampleLevel(next_tex, next_smp, (vec2<f32>(source)+0.5)/vec2<f32>(canvas), 0.0);
+        }
+        return vec4<f32>(0.0,0.0,0.0,1.0);
+    }
+    if (kind == 1001) {
+        if (p >= 1.0) { return current; }
+        let rule = round(textureSample(mask_tex, mask_smp, uv).r * 255.0);
+        let level = select(rule, 255.0 - rule, option(1) != 0.0);
+        let phase = option(0);
+        if (option(2) == 0.0) { return select(next, current, phase >= level); }
+        let weight = clamp(phase + level - 256.0, 0.0, 255.0);
+        let old_rgb = round(next.rgb * 255.0);
+        let new_rgb = round(current.rgb * 255.0);
+        return vec4<f32>((old_rgb + floor((new_rgb-old_rgb)*weight/256.0))/255.0, 1.0);
+    }
     if (kind == 0) {
         if (p <= 0.0) { return next; }
         if (p >= 1.0) { return current; }

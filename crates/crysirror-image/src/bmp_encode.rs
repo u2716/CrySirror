@@ -8,7 +8,7 @@
 //! `TVPDither32BitTo8Bit_c` (`visual/tvpgl.c`) at commit
 //! fd5c4baa6a2ef5978db1bd043634351f48667daf (krkrz, modified BSD licence),
 //! reimplemented here; no source is copied.
-use anyhow::{Result, ensure};
+use anyhow::{ensure, Result};
 
 /// Pixel storage of an encoded BMP.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -19,6 +19,23 @@ pub enum BmpDepth {
     Bgr24,
     /// 8bpp rows indexing the fixed 6x7x6 palette through a 4x4 ordered dither.
     Dither252,
+}
+
+const BMP_HEADER_BYTES: u32 = 54;
+
+fn header(size: [u32; 2], depth: u16, offset: u32, length: u32, image_bytes: u32) -> [u8; 54] {
+    let [width, height] = size;
+    let mut header = [0; 54];
+    header[..2].copy_from_slice(b"BM");
+    header[2..6].copy_from_slice(&length.to_le_bytes());
+    header[10..14].copy_from_slice(&offset.to_le_bytes());
+    header[14..18].copy_from_slice(&40u32.to_le_bytes());
+    header[18..22].copy_from_slice(&width.to_le_bytes());
+    header[22..26].copy_from_slice(&height.to_le_bytes());
+    header[26..28].copy_from_slice(&1u16.to_le_bytes());
+    header[28..30].copy_from_slice(&depth.to_le_bytes());
+    header[34..38].copy_from_slice(&image_bytes.to_le_bytes());
+    header
 }
 
 const DITHER_4X4: [[u8; 4]; 4] = [[0, 12, 2, 14], [8, 4, 10, 6], [3, 15, 1, 13], [11, 7, 9, 5]];
@@ -110,19 +127,16 @@ pub fn encode_bmp(width: u32, height: u32, rgba: &[u8], depth: BmpDepth) -> Resu
     } else {
         0
     };
-    let offset = 14 + 40 + palette_bytes;
+    let offset = BMP_HEADER_BYTES + palette_bytes;
     let size = offset + pitch * height;
     let mut out = Vec::with_capacity(size as usize);
-    out.extend_from_slice(&0x4d42u16.to_le_bytes());
-    out.extend_from_slice(&size.to_le_bytes());
-    out.extend_from_slice(&[0; 4]);
-    out.extend_from_slice(&offset.to_le_bytes());
-    out.extend_from_slice(&40u32.to_le_bytes());
-    out.extend_from_slice(&width.to_le_bytes());
-    out.extend_from_slice(&height.to_le_bytes());
-    out.extend_from_slice(&1u16.to_le_bytes());
-    out.extend_from_slice(&((pixel_bytes * 8) as u16).to_le_bytes());
-    out.extend_from_slice(&[0; 24]); // BI_RGB, sizes, resolution, colour counts
+    out.extend_from_slice(&header(
+        [width, height],
+        (pixel_bytes * 8) as u16,
+        offset,
+        size,
+        0,
+    ));
     if depth == BmpDepth::Dither252 {
         for entry in dither252_palette() {
             out.extend_from_slice(&entry);
@@ -150,9 +164,167 @@ pub fn encode_bmp(width: u32, height: u32, rgba: &[u8], depth: BmpDepth) -> Resu
     Ok(out)
 }
 
+/// Exact output admission for a BGR24 box-averaged BMP.
+pub fn box_average_bmp_len(size: [u32; 2]) -> Result<usize> {
+    let [width, height] = size;
+    crate::rgba_len(width, height)?;
+    let pitch = (3 * width).next_multiple_of(4);
+    Ok((BMP_HEADER_BYTES + pitch * height) as usize)
+}
+
+/// Encode a bottom-up BGR24 thumbnail directly from a straight RGBA frame.
+/// Origins use a truncated 10-bit fixed-point step. The integer part of that
+/// step sets the box extent. Average only in-bounds RGB samples, or write
+/// black if either extent is zero, and write the BMP image byte length.
+pub fn encode_box_average_bmp(
+    source: [u32; 2],
+    rgba: &[u8],
+    size: [u32; 2],
+    check: &dyn Fn() -> Result<()>,
+) -> Result<Vec<u8>> {
+    encode_box_average_bmp_with_rows(source, rgba, size, BoxSampleRows::VerticalRatio, check)
+}
+
+/// Fixed-point interval used to advance from one output row to the next.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum BoxSampleRows {
+    VerticalRatio,
+    /// Use the horizontal interval on both axes. The sample box itself
+    /// still has the height derived from the vertical ratio.
+    HorizontalRatio,
+}
+
+pub fn encode_box_average_bmp_with_rows(
+    source: [u32; 2],
+    rgba: &[u8],
+    size: [u32; 2],
+    rows: BoxSampleRows,
+    check: &dyn Fn() -> Result<()>,
+) -> Result<Vec<u8>> {
+    check()?;
+    ensure!(
+        crate::rgba_len(source[0], source[1])? == rgba.len(),
+        "thumbnail source layout"
+    );
+    let length = box_average_bmp_len(size)?;
+    let [width, height] = size;
+    let pitch = (3 * width).next_multiple_of(4) as usize;
+    let mut out = Vec::new();
+    out.try_reserve_exact(length)?;
+    out.extend_from_slice(&header(
+        size,
+        24,
+        BMP_HEADER_BYTES,
+        length as u32,
+        (length - BMP_HEADER_BYTES as usize) as u32,
+    ));
+    out.resize(length, 0);
+
+    let step = std::array::from_fn::<_, 2, _>(|axis| {
+        (u64::from(source[axis]) << 10) / u64::from(size[axis])
+    });
+    let extent = step.map(|value| (value >> 10) as usize);
+    let row_step = match rows {
+        BoxSampleRows::VerticalRatio => step[1],
+        BoxSampleRows::HorizontalRatio => {
+            ensure!(!extent.contains(&0), "empty thumbnail averaging box");
+            let last = (u64::from(height - 1) * step[0]) >> 10;
+            ensure!(last + extent[1] as u64 <= u64::from(source[1]), "thumbnail sampling exceeds frame height");
+            step[0]
+        }
+    };
+    if extent.contains(&0) {
+        check()?;
+        return Ok(out);
+    }
+    for y in 0..height as usize {
+        check()?;
+        let top = ((y as u64 * row_step) >> 10) as usize;
+        let bottom = (top + extent[1]).min(source[1] as usize);
+        let row = BMP_HEADER_BYTES as usize + (height as usize - 1 - y) * pitch;
+        for (x, pixel) in out[row..row + width as usize * 3]
+            .chunks_exact_mut(3)
+            .enumerate()
+        {
+            let left = ((x as u64 * step[0]) >> 10) as usize;
+            let right = (left + extent[0]).min(source[0] as usize);
+            let count = right.saturating_sub(left) * bottom.saturating_sub(top);
+            if count == 0 {
+                continue;
+            }
+            let mut rgb = [0u64; 3];
+            for y in top..bottom {
+                check()?;
+                let start = 4 * (y * source[0] as usize + left);
+                for input in rgba[start..start + (right - left) * 4].chunks_exact(4) {
+                    for channel in 0..3 {
+                        rgb[channel] += u64::from(input[channel]);
+                    }
+                }
+            }
+            if rows == BoxSampleRows::HorizontalRatio {
+                rgb = rgb.map(|value| value & u64::from(u32::MAX));
+            }
+            let [r, g, b] = rgb.map(|value| (value / count as u64) as u8);
+            pixel.copy_from_slice(&[b, g, r]);
+        }
+    }
+    check()?;
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn thumbnail_averages_truncated_integer_boxes_and_encodes_native_rows() {
+        let mut pixels = Vec::new();
+        for y in 0..5 {
+            for x in 0..8 {
+                pixels.extend_from_slice(&[10 * x + y, 2 * x + 10 * y, x + 3 * y, 15]);
+            }
+        }
+        let bmp = encode_box_average_bmp([8, 5], &pixels, [3, 2], &|| Ok(())).unwrap();
+        assert_eq!(bmp.len(), box_average_bmp_len([3, 2]).unwrap());
+        assert_eq!(&bmp[10..14], &54u32.to_le_bytes());
+        assert_eq!(&bmp[28..30], &24u16.to_le_bytes());
+        assert_eq!(&bmp[34..38], &24u32.to_le_bytes());
+        assert_eq!(
+            &bmp[54..],
+            [8, 26, 7, 10, 30, 27, 13, 36, 57, 0, 0, 0, 2, 6, 5, 4, 10, 25, 7, 16, 55, 0, 0, 0]
+        );
+
+        let black = encode_box_average_bmp([8, 5], &pixels, [3, 6], &|| Ok(())).unwrap();
+        assert!(black[54..].iter().all(|&byte| byte == 0));
+        assert!(box_average_bmp_len([0, 2]).is_err());
+        assert!(encode_box_average_bmp([8, 5], &pixels[..12], [3, 2], &|| Ok(())).is_err());
+        let checks = std::cell::Cell::new(0);
+        assert!(encode_box_average_bmp([8, 5], &pixels, [3, 2], &|| {
+            checks.set(checks.get() + 1);
+            ensure!(checks.get() < 3, "cancelled");
+            Ok(())
+        })
+        .is_err());
+    }
+
+    #[test]
+    fn horizontal_row_interval_keeps_the_vertical_box_height() {
+        let mut pixels = Vec::new();
+        for y in 0..8 {
+            for _ in 0..4 {
+                pixels.extend_from_slice(&[y, 0, 0, 255]);
+            }
+        }
+        let bmp = encode_box_average_bmp_with_rows(
+            [4, 8], &pixels, [2, 2], BoxSampleRows::HorizontalRatio, &|| Ok(()),
+        ).unwrap();
+        // Rows average source y = 2..6 and 0..4 in bottom-up BMP order.
+        assert_eq!([bmp[56], bmp[64]], [3, 1]);
+        assert!(encode_box_average_bmp_with_rows(
+            [8, 4], &pixels, [2, 2], BoxSampleRows::HorizontalRatio, &|| Ok(()),
+        ).is_err());
+    }
 
     #[test]
     fn header_rows_and_padding_match_the_native_writer() {

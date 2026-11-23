@@ -594,6 +594,1186 @@
       "status": "gxp_compiled"
     },
     {
+      "bindings": [
+        {
+          "binding": 0,
+          "dimensions": "cg_size_image",
+          "group": 0,
+          "name": "image",
+          "texture_unit": 0
+        },
+        {
+          "binding": 1,
+          "dimensions": "cg_size_mask_image",
+          "group": 1,
+          "name": "mask_image",
+          "texture_unit": 1
+        },
+        {
+          "binding": 2,
+          "dimensions": "cg_size_curve_image",
+          "group": 1,
+          "name": "curve_image",
+          "texture_unit": 2
+        },
+        {
+          "binding": 0,
+          "dimensions": "cg_size_ordered_coverage",
+          "group": 2,
+          "name": "ordered_coverage",
+          "texture_unit": 3
+        }
+      ],
+      "cg_blake3": "e53dd221b00b2023d1dcf712ad4df056d2d7f4c1e2761f05fa16d5d80d910426",
+      "compiler_optimization": 1,
+      "compiler_options": {
+        "compiler": "libshacccg_version: SDK 3.0.0, graphics/release_branches/release_03.000/shacc r13225, sys/release_branches/release_03.000 r85995",
+        "fastint": "0",
+        "fastmath": "0",
+        "fastprecision": "0",
+        "optimization": "1",
+        "program_bytes": "51692"
+      },
+      "compute_lowering": null,
+      "distortion_variant": 0,
+      "entry": "fs_filtered",
+      "file": "shared_quad_v2_fs_filtered_s0_d0_f.cg",
+      "filter_record": "one LayerFilter per draw, split batches by flat filter index",
+      "gxp": "gxp/shared_quad_v2_fs_filtered_s0_d0_f.gxp",
+      "gxp_blake3": "d7520af2814d7cd1a2f2229fa0f91e3da121ee9963586e9639df192324e1b170",
+      "loop_limits": [
+        10,
+        3,
+        3,
+        16
+      ],
+      "module": "quad_v2",
+      "name": "quad_v2-fs_filtered_s0_d0",
+      "native_entry": "main",
+      "position": "vertex attributes / fragment WPOS, top-left pixel centers",
+      "sampling_variant": 0,
+      "stage": "fragment",
+      "status": "gxp_compiled",
+      "uniforms": [
+        {
+          "binding": 0,
+          "group": 1,
+          "members": [
+            {
+              "byte_offset": 0,
+              "name": "a",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 16,
+              "name": "b",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 32,
+              "name": "c",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 48,
+              "name": "d",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 64,
+              "name": "e",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 80,
+              "name": "f",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 96,
+              "name": "g",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 112,
+              "name": "h",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 128,
+              "name": "i",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            }
+          ],
+          "name": "selected_filter"
+        }
+      ],
+      "wgsl_blake3": "7b744e1dcf7e5aca82e87a51b08349fa27dd5d8f67db44b2dd40263419de933c",
+      "wipe_variant": null
+    },
+    {
+      "bindings": [
+        {
+          "binding": 0,
+          "dimensions": "cg_size_image",
+          "group": 0,
+          "name": "image",
+          "texture_unit": 0
+        },
+        {
+          "binding": 1,
+          "dimensions": "cg_size_mask_image",
+          "group": 1,
+          "name": "mask_image",
+          "texture_unit": 1
+        },
+        {
+          "binding": 2,
+          "dimensions": "cg_size_curve_image",
+          "group": 1,
+          "name": "curve_image",
+          "texture_unit": 2
+        },
+        {
+          "binding": 0,
+          "dimensions": "cg_size_ordered_coverage",
+          "group": 2,
+          "name": "ordered_coverage",
+          "texture_unit": 3
+        }
+      ],
+      "cg_blake3": "b88be0dc3034a3bedf708b069806ddf4931e68835da97e41af14f73d8c744d33",
+      "compiler_optimization": 1,
+      "compiler_options": {
+        "compiler": "libshacccg_version: SDK 3.0.0, graphics/release_branches/release_03.000/shacc r13225, sys/release_branches/release_03.000 r85995",
+        "fastint": "0",
+        "fastmath": "0",
+        "fastprecision": "0",
+        "optimization": "1",
+        "program_bytes": "58652"
+      },
+      "compute_lowering": null,
+      "distortion_variant": 0,
+      "entry": "fs_filtered",
+      "file": "shared_quad_v2_fs_filtered_s1_d0_f.cg",
+      "filter_record": "one LayerFilter per draw, split batches by flat filter index",
+      "gxp": "gxp/shared_quad_v2_fs_filtered_s1_d0_f.gxp",
+      "gxp_blake3": "ee5a577835efd6052909d56db6087513f7d9c68bc470d2def4c780f38facaf60",
+      "loop_limits": [
+        10,
+        3,
+        3,
+        16
+      ],
+      "module": "quad_v2",
+      "name": "quad_v2-fs_filtered_s1_d0",
+      "native_entry": "main",
+      "position": "vertex attributes / fragment WPOS, top-left pixel centers",
+      "sampling_variant": 1,
+      "stage": "fragment",
+      "status": "gxp_compiled",
+      "uniforms": [
+        {
+          "binding": 0,
+          "group": 1,
+          "members": [
+            {
+              "byte_offset": 0,
+              "name": "a",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 16,
+              "name": "b",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 32,
+              "name": "c",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 48,
+              "name": "d",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 64,
+              "name": "e",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 80,
+              "name": "f",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 96,
+              "name": "g",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 112,
+              "name": "h",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 128,
+              "name": "i",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            }
+          ],
+          "name": "selected_filter"
+        }
+      ],
+      "wgsl_blake3": "7b744e1dcf7e5aca82e87a51b08349fa27dd5d8f67db44b2dd40263419de933c",
+      "wipe_variant": null
+    },
+    {
+      "bindings": [
+        {
+          "binding": 0,
+          "dimensions": "cg_size_image",
+          "group": 0,
+          "name": "image",
+          "texture_unit": 0
+        },
+        {
+          "binding": 1,
+          "dimensions": "cg_size_mask_image",
+          "group": 1,
+          "name": "mask_image",
+          "texture_unit": 1
+        },
+        {
+          "binding": 2,
+          "dimensions": "cg_size_curve_image",
+          "group": 1,
+          "name": "curve_image",
+          "texture_unit": 2
+        },
+        {
+          "binding": 0,
+          "dimensions": "cg_size_ordered_coverage",
+          "group": 2,
+          "name": "ordered_coverage",
+          "texture_unit": 3
+        }
+      ],
+      "cg_blake3": "98cb0ce374396e01f6e57befa560f49004fbf5aa3033850dc2d1a9f261faa019",
+      "compiler_optimization": 1,
+      "compiler_options": {
+        "compiler": "libshacccg_version: SDK 3.0.0, graphics/release_branches/release_03.000/shacc r13225, sys/release_branches/release_03.000 r85995",
+        "fastint": "0",
+        "fastmath": "0",
+        "fastprecision": "0",
+        "optimization": "1",
+        "program_bytes": "61620"
+      },
+      "compute_lowering": null,
+      "distortion_variant": 0,
+      "entry": "fs_filtered",
+      "file": "shared_quad_v2_fs_filtered_s2_d0_f.cg",
+      "filter_record": "one LayerFilter per draw, split batches by flat filter index",
+      "gxp": "gxp/shared_quad_v2_fs_filtered_s2_d0_f.gxp",
+      "gxp_blake3": "d67006fed68b4f722d11d74c5b24cbc7eb34f85f6812b604815b613e1f5db6ff",
+      "loop_limits": [
+        10,
+        3,
+        3,
+        16
+      ],
+      "module": "quad_v2",
+      "name": "quad_v2-fs_filtered_s2_d0",
+      "native_entry": "main",
+      "position": "vertex attributes / fragment WPOS, top-left pixel centers",
+      "sampling_variant": 2,
+      "stage": "fragment",
+      "status": "gxp_compiled",
+      "uniforms": [
+        {
+          "binding": 0,
+          "group": 1,
+          "members": [
+            {
+              "byte_offset": 0,
+              "name": "a",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 16,
+              "name": "b",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 32,
+              "name": "c",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 48,
+              "name": "d",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 64,
+              "name": "e",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 80,
+              "name": "f",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 96,
+              "name": "g",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 112,
+              "name": "h",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 128,
+              "name": "i",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            }
+          ],
+          "name": "selected_filter"
+        }
+      ],
+      "wgsl_blake3": "7b744e1dcf7e5aca82e87a51b08349fa27dd5d8f67db44b2dd40263419de933c",
+      "wipe_variant": null
+    },
+    {
+      "bindings": [
+        {
+          "binding": 0,
+          "dimensions": "cg_size_image",
+          "group": 0,
+          "name": "image",
+          "texture_unit": 0
+        },
+        {
+          "binding": 1,
+          "dimensions": "cg_size_mask_image",
+          "group": 1,
+          "name": "mask_image",
+          "texture_unit": 1
+        },
+        {
+          "binding": 2,
+          "dimensions": "cg_size_curve_image",
+          "group": 1,
+          "name": "curve_image",
+          "texture_unit": 2
+        },
+        {
+          "binding": 0,
+          "dimensions": "cg_size_ordered_coverage",
+          "group": 2,
+          "name": "ordered_coverage",
+          "texture_unit": 3
+        }
+      ],
+      "cg_blake3": "a6e7ee94d610963d8c21a007a65bb2488122340f81e17ec6e08ebde3de7ddd02",
+      "compiler_optimization": 1,
+      "compiler_options": {
+        "compiler": "libshacccg_version: SDK 3.0.0, graphics/release_branches/release_03.000/shacc r13225, sys/release_branches/release_03.000 r85995",
+        "fastint": "0",
+        "fastmath": "0",
+        "fastprecision": "0",
+        "optimization": "1",
+        "program_bytes": "56940"
+      },
+      "compute_lowering": null,
+      "distortion_variant": 0,
+      "entry": "fs_filtered",
+      "file": "shared_quad_v2_fs_filtered_s3_d0_f.cg",
+      "filter_record": "one LayerFilter per draw, split batches by flat filter index",
+      "gxp": "gxp/shared_quad_v2_fs_filtered_s3_d0_f.gxp",
+      "gxp_blake3": "25bebf9db2ef5397530b02b15dd1bfcd066b82058b0fb931ebec7d84a52160cc",
+      "loop_limits": [
+        10,
+        3,
+        3,
+        16
+      ],
+      "module": "quad_v2",
+      "name": "quad_v2-fs_filtered_s3_d0",
+      "native_entry": "main",
+      "position": "vertex attributes / fragment WPOS, top-left pixel centers",
+      "sampling_variant": 3,
+      "stage": "fragment",
+      "status": "gxp_compiled",
+      "uniforms": [
+        {
+          "binding": 0,
+          "group": 1,
+          "members": [
+            {
+              "byte_offset": 0,
+              "name": "a",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 16,
+              "name": "b",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 32,
+              "name": "c",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 48,
+              "name": "d",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 64,
+              "name": "e",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 80,
+              "name": "f",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 96,
+              "name": "g",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 112,
+              "name": "h",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 128,
+              "name": "i",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            }
+          ],
+          "name": "selected_filter"
+        }
+      ],
+      "wgsl_blake3": "7b744e1dcf7e5aca82e87a51b08349fa27dd5d8f67db44b2dd40263419de933c",
+      "wipe_variant": null
+    },
+    {
+      "bindings": [
+        {
+          "binding": 0,
+          "dimensions": "cg_size_image",
+          "group": 0,
+          "name": "image",
+          "texture_unit": 0
+        },
+        {
+          "binding": 1,
+          "dimensions": "cg_size_mask_image",
+          "group": 1,
+          "name": "mask_image",
+          "texture_unit": 1
+        },
+        {
+          "binding": 2,
+          "dimensions": "cg_size_curve_image",
+          "group": 1,
+          "name": "curve_image",
+          "texture_unit": 2
+        },
+        {
+          "binding": 0,
+          "dimensions": "cg_size_ordered_coverage",
+          "group": 2,
+          "name": "ordered_coverage",
+          "texture_unit": 3
+        }
+      ],
+      "cg_blake3": "f24194aa4e9466a05cf60bfae55e031bea173a42541fb9bd4481a65aecb5dd0e",
+      "compiler_optimization": 1,
+      "compiler_options": {
+        "compiler": "libshacccg_version: SDK 3.0.0, graphics/release_branches/release_03.000/shacc r13225, sys/release_branches/release_03.000 r85995",
+        "fastint": "0",
+        "fastmath": "0",
+        "fastprecision": "0",
+        "optimization": "1",
+        "program_bytes": "72076"
+      },
+      "compute_lowering": null,
+      "distortion_variant": 0,
+      "entry": "fs_filtered",
+      "file": "shared_quad_v2_fs_filtered_s4_d0_f.cg",
+      "filter_record": "one LayerFilter per draw, split batches by flat filter index",
+      "gxp": "gxp/shared_quad_v2_fs_filtered_s4_d0_f.gxp",
+      "gxp_blake3": "a710492d38cb9c295896b111da5b7a46dd28ebed595e49c0cbcde191777c9467",
+      "loop_limits": [
+        10,
+        3,
+        3,
+        16
+      ],
+      "module": "quad_v2",
+      "name": "quad_v2-fs_filtered_s4_d0",
+      "native_entry": "main",
+      "position": "vertex attributes / fragment WPOS, top-left pixel centers",
+      "sampling_variant": 4,
+      "stage": "fragment",
+      "status": "gxp_compiled",
+      "uniforms": [
+        {
+          "binding": 0,
+          "group": 1,
+          "members": [
+            {
+              "byte_offset": 0,
+              "name": "a",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 16,
+              "name": "b",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 32,
+              "name": "c",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 48,
+              "name": "d",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 64,
+              "name": "e",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 80,
+              "name": "f",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 96,
+              "name": "g",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 112,
+              "name": "h",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 128,
+              "name": "i",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            }
+          ],
+          "name": "selected_filter"
+        }
+      ],
+      "wgsl_blake3": "7b744e1dcf7e5aca82e87a51b08349fa27dd5d8f67db44b2dd40263419de933c",
+      "wipe_variant": null
+    },
+    {
+      "bindings": [
+        {
+          "binding": 0,
+          "dimensions": "cg_size_image",
+          "group": 0,
+          "name": "image",
+          "texture_unit": 0
+        },
+        {
+          "binding": 1,
+          "dimensions": "cg_size_mask_image",
+          "group": 1,
+          "name": "mask_image",
+          "texture_unit": 1
+        },
+        {
+          "binding": 2,
+          "dimensions": "cg_size_curve_image",
+          "group": 1,
+          "name": "curve_image",
+          "texture_unit": 2
+        },
+        {
+          "binding": 0,
+          "dimensions": "cg_size_ordered_coverage",
+          "group": 2,
+          "name": "ordered_coverage",
+          "texture_unit": 3
+        }
+      ],
+      "cg_blake3": "ccf6ac9c90288e6a40e7726448b7cc366e3334e93bf38e23a07bc65ea8435ae2",
+      "compiler_optimization": 1,
+      "compiler_options": {
+        "compiler": "libshacccg_version: SDK 3.0.0, graphics/release_branches/release_03.000/shacc r13225, sys/release_branches/release_03.000 r85995",
+        "fastint": "0",
+        "fastmath": "0",
+        "fastprecision": "0",
+        "optimization": "1",
+        "program_bytes": "51700"
+      },
+      "compute_lowering": null,
+      "distortion_variant": 0,
+      "entry": "fs_filtered_premultiply",
+      "file": "shared_quad_v2_fs_filtered_premultiply_s0_d0_f.cg",
+      "filter_record": "one LayerFilter per draw, split batches by flat filter index",
+      "gxp": "gxp/shared_quad_v2_fs_filtered_premultiply_s0_d0_f.gxp",
+      "gxp_blake3": "8e799e6b821cebb8f0a9221005530ace7289f3b385244c2ba9389cca2842a858",
+      "loop_limits": [
+        10,
+        3,
+        3,
+        16
+      ],
+      "module": "quad_v2",
+      "name": "quad_v2-fs_filtered_premultiply_s0_d0",
+      "native_entry": "main",
+      "position": "vertex attributes / fragment WPOS, top-left pixel centers",
+      "sampling_variant": 0,
+      "stage": "fragment",
+      "status": "gxp_compiled",
+      "uniforms": [
+        {
+          "binding": 0,
+          "group": 1,
+          "members": [
+            {
+              "byte_offset": 0,
+              "name": "a",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 16,
+              "name": "b",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 32,
+              "name": "c",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 48,
+              "name": "d",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 64,
+              "name": "e",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 80,
+              "name": "f",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 96,
+              "name": "g",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 112,
+              "name": "h",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 128,
+              "name": "i",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            }
+          ],
+          "name": "selected_filter"
+        }
+      ],
+      "wgsl_blake3": "7b744e1dcf7e5aca82e87a51b08349fa27dd5d8f67db44b2dd40263419de933c",
+      "wipe_variant": null
+    },
+    {
+      "bindings": [
+        {
+          "binding": 0,
+          "dimensions": "cg_size_image",
+          "group": 0,
+          "name": "image",
+          "texture_unit": 0
+        },
+        {
+          "binding": 1,
+          "dimensions": "cg_size_mask_image",
+          "group": 1,
+          "name": "mask_image",
+          "texture_unit": 1
+        },
+        {
+          "binding": 2,
+          "dimensions": "cg_size_curve_image",
+          "group": 1,
+          "name": "curve_image",
+          "texture_unit": 2
+        },
+        {
+          "binding": 0,
+          "dimensions": "cg_size_ordered_coverage",
+          "group": 2,
+          "name": "ordered_coverage",
+          "texture_unit": 3
+        }
+      ],
+      "cg_blake3": "7d4c2bda3478032863eb90d588d80c6a03ec172a3305e84bc29226d81277dd7f",
+      "compiler_optimization": 1,
+      "compiler_options": {
+        "compiler": "libshacccg_version: SDK 3.0.0, graphics/release_branches/release_03.000/shacc r13225, sys/release_branches/release_03.000 r85995",
+        "fastint": "0",
+        "fastmath": "0",
+        "fastprecision": "0",
+        "optimization": "1",
+        "program_bytes": "58660"
+      },
+      "compute_lowering": null,
+      "distortion_variant": 0,
+      "entry": "fs_filtered_premultiply",
+      "file": "shared_quad_v2_fs_filtered_premultiply_s1_d0_f.cg",
+      "filter_record": "one LayerFilter per draw, split batches by flat filter index",
+      "gxp": "gxp/shared_quad_v2_fs_filtered_premultiply_s1_d0_f.gxp",
+      "gxp_blake3": "0a43d3b993bcacb818d4213d9d7d4db176540e958e77fc0e78f1bd91ab16bd68",
+      "loop_limits": [
+        10,
+        3,
+        3,
+        16
+      ],
+      "module": "quad_v2",
+      "name": "quad_v2-fs_filtered_premultiply_s1_d0",
+      "native_entry": "main",
+      "position": "vertex attributes / fragment WPOS, top-left pixel centers",
+      "sampling_variant": 1,
+      "stage": "fragment",
+      "status": "gxp_compiled",
+      "uniforms": [
+        {
+          "binding": 0,
+          "group": 1,
+          "members": [
+            {
+              "byte_offset": 0,
+              "name": "a",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 16,
+              "name": "b",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 32,
+              "name": "c",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 48,
+              "name": "d",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 64,
+              "name": "e",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 80,
+              "name": "f",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 96,
+              "name": "g",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 112,
+              "name": "h",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 128,
+              "name": "i",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            }
+          ],
+          "name": "selected_filter"
+        }
+      ],
+      "wgsl_blake3": "7b744e1dcf7e5aca82e87a51b08349fa27dd5d8f67db44b2dd40263419de933c",
+      "wipe_variant": null
+    },
+    {
+      "bindings": [
+        {
+          "binding": 0,
+          "dimensions": "cg_size_image",
+          "group": 0,
+          "name": "image",
+          "texture_unit": 0
+        },
+        {
+          "binding": 1,
+          "dimensions": "cg_size_mask_image",
+          "group": 1,
+          "name": "mask_image",
+          "texture_unit": 1
+        },
+        {
+          "binding": 2,
+          "dimensions": "cg_size_curve_image",
+          "group": 1,
+          "name": "curve_image",
+          "texture_unit": 2
+        },
+        {
+          "binding": 0,
+          "dimensions": "cg_size_ordered_coverage",
+          "group": 2,
+          "name": "ordered_coverage",
+          "texture_unit": 3
+        }
+      ],
+      "cg_blake3": "6bf47e5a6cb98dcacf804bee35251eec7b24c379ea17fce431bd21d8c0f4a83c",
+      "compiler_optimization": 1,
+      "compiler_options": {
+        "compiler": "libshacccg_version: SDK 3.0.0, graphics/release_branches/release_03.000/shacc r13225, sys/release_branches/release_03.000 r85995",
+        "fastint": "0",
+        "fastmath": "0",
+        "fastprecision": "0",
+        "optimization": "1",
+        "program_bytes": "61628"
+      },
+      "compute_lowering": null,
+      "distortion_variant": 0,
+      "entry": "fs_filtered_premultiply",
+      "file": "shared_quad_v2_fs_filtered_premultiply_s2_d0_f.cg",
+      "filter_record": "one LayerFilter per draw, split batches by flat filter index",
+      "gxp": "gxp/shared_quad_v2_fs_filtered_premultiply_s2_d0_f.gxp",
+      "gxp_blake3": "d58bc3dfe831c6cf904545f5c873ec887767bdd63e6be702710366d9ba064814",
+      "loop_limits": [
+        10,
+        3,
+        3,
+        16
+      ],
+      "module": "quad_v2",
+      "name": "quad_v2-fs_filtered_premultiply_s2_d0",
+      "native_entry": "main",
+      "position": "vertex attributes / fragment WPOS, top-left pixel centers",
+      "sampling_variant": 2,
+      "stage": "fragment",
+      "status": "gxp_compiled",
+      "uniforms": [
+        {
+          "binding": 0,
+          "group": 1,
+          "members": [
+            {
+              "byte_offset": 0,
+              "name": "a",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 16,
+              "name": "b",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 32,
+              "name": "c",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 48,
+              "name": "d",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 64,
+              "name": "e",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 80,
+              "name": "f",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 96,
+              "name": "g",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 112,
+              "name": "h",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 128,
+              "name": "i",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            }
+          ],
+          "name": "selected_filter"
+        }
+      ],
+      "wgsl_blake3": "7b744e1dcf7e5aca82e87a51b08349fa27dd5d8f67db44b2dd40263419de933c",
+      "wipe_variant": null
+    },
+    {
+      "bindings": [
+        {
+          "binding": 0,
+          "dimensions": "cg_size_image",
+          "group": 0,
+          "name": "image",
+          "texture_unit": 0
+        },
+        {
+          "binding": 1,
+          "dimensions": "cg_size_mask_image",
+          "group": 1,
+          "name": "mask_image",
+          "texture_unit": 1
+        },
+        {
+          "binding": 2,
+          "dimensions": "cg_size_curve_image",
+          "group": 1,
+          "name": "curve_image",
+          "texture_unit": 2
+        },
+        {
+          "binding": 0,
+          "dimensions": "cg_size_ordered_coverage",
+          "group": 2,
+          "name": "ordered_coverage",
+          "texture_unit": 3
+        }
+      ],
+      "cg_blake3": "9b51be9a4a891fbb42d6506fd9a75982d5ce1b9c74f9dc51096831266cdb6232",
+      "compiler_optimization": 1,
+      "compiler_options": {
+        "compiler": "libshacccg_version: SDK 3.0.0, graphics/release_branches/release_03.000/shacc r13225, sys/release_branches/release_03.000 r85995",
+        "fastint": "0",
+        "fastmath": "0",
+        "fastprecision": "0",
+        "optimization": "1",
+        "program_bytes": "56948"
+      },
+      "compute_lowering": null,
+      "distortion_variant": 0,
+      "entry": "fs_filtered_premultiply",
+      "file": "shared_quad_v2_fs_filtered_premultiply_s3_d0_f.cg",
+      "filter_record": "one LayerFilter per draw, split batches by flat filter index",
+      "gxp": "gxp/shared_quad_v2_fs_filtered_premultiply_s3_d0_f.gxp",
+      "gxp_blake3": "6bf872f32eeee986f1f4f265a8fc6979d37797c471966a4c9d062daec1b382b2",
+      "loop_limits": [
+        10,
+        3,
+        3,
+        16
+      ],
+      "module": "quad_v2",
+      "name": "quad_v2-fs_filtered_premultiply_s3_d0",
+      "native_entry": "main",
+      "position": "vertex attributes / fragment WPOS, top-left pixel centers",
+      "sampling_variant": 3,
+      "stage": "fragment",
+      "status": "gxp_compiled",
+      "uniforms": [
+        {
+          "binding": 0,
+          "group": 1,
+          "members": [
+            {
+              "byte_offset": 0,
+              "name": "a",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 16,
+              "name": "b",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 32,
+              "name": "c",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 48,
+              "name": "d",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 64,
+              "name": "e",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 80,
+              "name": "f",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 96,
+              "name": "g",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 112,
+              "name": "h",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 128,
+              "name": "i",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            }
+          ],
+          "name": "selected_filter"
+        }
+      ],
+      "wgsl_blake3": "7b744e1dcf7e5aca82e87a51b08349fa27dd5d8f67db44b2dd40263419de933c",
+      "wipe_variant": null
+    },
+    {
+      "bindings": [
+        {
+          "binding": 0,
+          "dimensions": "cg_size_image",
+          "group": 0,
+          "name": "image",
+          "texture_unit": 0
+        },
+        {
+          "binding": 1,
+          "dimensions": "cg_size_mask_image",
+          "group": 1,
+          "name": "mask_image",
+          "texture_unit": 1
+        },
+        {
+          "binding": 2,
+          "dimensions": "cg_size_curve_image",
+          "group": 1,
+          "name": "curve_image",
+          "texture_unit": 2
+        },
+        {
+          "binding": 0,
+          "dimensions": "cg_size_ordered_coverage",
+          "group": 2,
+          "name": "ordered_coverage",
+          "texture_unit": 3
+        }
+      ],
+      "cg_blake3": "d427a5ee2e30d67bf6829b5787c6cf95c942663d9849375bca98514425b42d61",
+      "compiler_optimization": 1,
+      "compiler_options": {
+        "compiler": "libshacccg_version: SDK 3.0.0, graphics/release_branches/release_03.000/shacc r13225, sys/release_branches/release_03.000 r85995",
+        "fastint": "0",
+        "fastmath": "0",
+        "fastprecision": "0",
+        "optimization": "1",
+        "program_bytes": "72084"
+      },
+      "compute_lowering": null,
+      "distortion_variant": 0,
+      "entry": "fs_filtered_premultiply",
+      "file": "shared_quad_v2_fs_filtered_premultiply_s4_d0_f.cg",
+      "filter_record": "one LayerFilter per draw, split batches by flat filter index",
+      "gxp": "gxp/shared_quad_v2_fs_filtered_premultiply_s4_d0_f.gxp",
+      "gxp_blake3": "a2c817172ca5e05ed927f033760788928a68aa7741e520d425a4b3d3fc15cea3",
+      "loop_limits": [
+        10,
+        3,
+        3,
+        16
+      ],
+      "module": "quad_v2",
+      "name": "quad_v2-fs_filtered_premultiply_s4_d0",
+      "native_entry": "main",
+      "position": "vertex attributes / fragment WPOS, top-left pixel centers",
+      "sampling_variant": 4,
+      "stage": "fragment",
+      "status": "gxp_compiled",
+      "uniforms": [
+        {
+          "binding": 0,
+          "group": 1,
+          "members": [
+            {
+              "byte_offset": 0,
+              "name": "a",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 16,
+              "name": "b",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 32,
+              "name": "c",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 48,
+              "name": "d",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 64,
+              "name": "e",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 80,
+              "name": "f",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 96,
+              "name": "g",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 112,
+              "name": "h",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            },
+            {
+              "byte_offset": 128,
+              "name": "i",
+              "type": "Vector { size: Quad, scalar: Scalar { kind: Float, width: 4 } }"
+            }
+          ],
+          "name": "selected_filter"
+        }
+      ],
+      "wgsl_blake3": "7b744e1dcf7e5aca82e87a51b08349fa27dd5d8f67db44b2dd40263419de933c",
+      "wipe_variant": null
+    },
+    {
       "bindings": [],
       "cg_blake3": "afb5356f319abc159c401688e20fc8552f96d9a3e3d2ba036ae78ae6a471c6f9",
       "compiler_optimization": 3,
@@ -24416,7 +25596,7 @@
   ],
   "errors": [],
   "native_compiled": true,
-  "native_program_count": 240,
+  "native_program_count": 250,
   "source_files": [
     {
       "blake3": "2cbc66f931ee0e9ecd46bdf1ce00b461c56031147419f54866024627dc4504f5",
@@ -24505,6 +25685,10 @@
     {
       "blake3": "10628618e5e69aa1a831400c4bc5d6998be00ccbec973acf40556174bc9aca95",
       "name": "quad.wgsl"
+    },
+    {
+      "blake3": "7b744e1dcf7e5aca82e87a51b08349fa27dd5d8f67db44b2dd40263419de933c",
+      "name": "quad_v2.wgsl"
     },
     {
       "blake3": "6f05988d6d4101def331d79bab09ab6f6dc7cad0a5d13e8bc55c0fc939d1936e",

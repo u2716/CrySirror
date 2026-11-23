@@ -1,0 +1,15 @@
+[package]
+name = "crysirror-dotnet"
+version = "0.1.0"
+edition = "2024"
+license = "MPL-2.0"
+publish = false
+description = "Bounded ECMA-335 metadata reader and constant static-initializer evaluator for installed .NET assemblies"
+autoexamples = false
+autobenches = false
+
+[lib]
+doctest = false
+
+[dependencies]
+anyhow.workspace = true

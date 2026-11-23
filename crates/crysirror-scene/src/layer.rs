@@ -678,9 +678,49 @@ pub struct GlyphOutline {pub radius:u8,pub color:[u8;4],pub kernel:GlyphOutlineK
 #[derive(Clone,Copy,Debug,PartialEq,Serialize,Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GlyphShadow {pub offset:[f32;2],pub color:[u8;4]}
+/// A two-colour fill sampled in the original square glyph cell, before reveal scaling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GlyphGradient {
+    /// Direction in cell coordinates.
+    pub axis: GlyphGradientAxis,
+    /// RGB endpoints in stored byte space.
+    pub colors: [[u8; 3]; 2],
+    /// Authored cell side length in pixels.
+    pub cell_size: u16,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GlyphGradientAxis {
+    Vertical,
+    Horizontal,
+    Diagonal,
+}
+
+impl GlyphGradient {
+    pub fn sample(self, x: i32, y: i32) -> [u8; 3] {
+        let size = i32::from(self.cell_size.max(1));
+        let (x,y) = (x.clamp(0, size-1), y.clamp(0, size-1));
+        std::array::from_fn(|c| {
+            let from = i32::from(self.colors[0][c]);
+            let step = ((i32::from(self.colors[1][c]) - from) << 10) / size;
+            let offset = match self.axis {
+                GlyphGradientAxis::Vertical => y * step,
+                GlyphGradientAxis::Horizontal => x * step,
+                GlyphGradientAxis::Diagonal => (x + y) * (step / 2),
+            };
+            (((from << 10) + offset) >> 10) as u8
+        })
+    }
+}
+
 #[derive(Clone,Copy,Debug,Default,PartialEq,Serialize,Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PositionedGlyphStyle {
+    /// Colour only the glyph face. Its outline and shadow retain their own colours.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gradient: Option<GlyphGradient>,
     /// Keep CJK glyphs upright when the containing line rotates clockwise by
     /// 90 degrees. Brackets/dashes retain that outer rotation; flow is unchanged.
     #[serde(default)]
@@ -701,6 +741,7 @@ pub struct PositionedGlyphStyle {
 impl PositionedGlyphStyle {
     fn validate(self)->Result<()> {
         self.raster.validate()?;
+        ensure!(self.gradient.is_none_or(|g| g.cell_size > 0), "empty glyph gradient cell");
         ensure!(self.outline.is_none_or(|o|o.radius<=16),"glyph style outline radius");
         ensure!(self.shadow.is_none_or(|s|s.offset.iter().all(|v|v.is_finite()&&v.abs()<=1024.)),"glyph style shadow offset");
         Ok(())
@@ -1487,7 +1528,8 @@ struct LayerTxn {
 pub struct TransitionSpec {
     /// Transition effect.
     pub effect: TransitionEffect,
-    /// Duration in milliseconds.
+    /// Duration in milliseconds. A hard byte rule with a stationary threshold
+    /// accepts u64::MAX to hold a caller-updated mask until EndTransition.
     pub duration_ms: u64,
     /// Progress curve (Siglus speed modes 0-3).
     #[serde(default)]
@@ -1510,6 +1552,37 @@ pub enum TransitionEffect {
         /// CDIBOverlap Alpha mode 2).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         vague: Option<u16>,
+    },
+    /// An integer-clock reveal over an 8-bit grayscale rule. In hard mode
+    /// a pixel is replaced when its rule is at or below the current phase.
+    /// Soft mode uses (rule + phase - 256), clamped to a byte, as a /256
+    /// blend weight over stored color bytes.
+    ByteRule {
+        /// Client-scoped rule image stretched over the output.
+        asset: String,
+        /// Complement the stored rule byte before comparison or blending.
+        invert: bool,
+        /// Select the byte-weighted blend instead of threshold replacement.
+        soft: bool,
+        /// Phase numerator advanced per clock step.
+        numerator: u32,
+        /// Divisor applied after multiplication by the integral step count.
+        denominator: u32,
+        /// Milliseconds per discrete clock step.
+        step_ms: u32,
+    },
+    /// Stretch scene pixels into a top-left rectangle at discrete clock steps.
+    PixelStretch {
+        /// Logical incoming and outgoing raster dimensions.
+        canvas: [u32; 2],
+        /// Grow horizontally, vertically, or on both axes.
+        axes: [bool; 2],
+        /// Shrink the outgoing scene into the lower-right rectangle over black.
+        shrink_outgoing: bool,
+        /// Logical pixels per step before division by the clock denominator.
+        numerator: u32,
+        denominator: u32,
+        step_ms: u32,
     },
     /// direction 0 down, 1 up, 2 right, 3 left (Siglus type 200, both scenes move).
     Slide { direction: u8 },
@@ -1627,8 +1700,10 @@ impl Easing {
 /// Transition codes implemented by shared GPU pipelines. Engine-owned effects
 /// use their own range; Siglus page curls (300/301) remain unsupported.
 pub fn transition_code_supported(code: i32) -> bool {
-    matches!(code, 0..=2 | 5..=199 | 200 | 210..=215 | 220 | 221 | 230 | 231 | 240..=243 | 900 | 901 | 910..=912 | ORDERED_DITHER_TRANSITION_CODE)
+    matches!(code, 0..=2 | 5..=199 | 200 | 210..=215 | 220 | 221 | 230 | 231 | 240..=243 | 900 | 901 | 910..=912 | ORDERED_DITHER_TRANSITION_CODE | BYTE_RULE_TRANSITION_CODE | PIXEL_STRETCH_TRANSITION_CODE)
 }
+pub const PIXEL_STRETCH_TRANSITION_CODE: i32 = 1002;
+pub const BYTE_RULE_TRANSITION_CODE: i32 = 1001;
 pub const ORDERED_DITHER_TRANSITION_CODE: i32 = 1000;
 /// Types whose mask comes from `wipe_mask::generate` when none is given.
 pub fn transition_code_uses_generated_mask(code: i32) -> bool {
@@ -1640,6 +1715,19 @@ impl TransitionSpec {
         let mut o = [0; 16];
         match &self.effect {
             TransitionEffect::Crossfade => (0, o, None),
+            TransitionEffect::PixelStretch { canvas, axes, shrink_outgoing, .. } => {
+                o[1] = canvas[0] as i32;
+                o[2] = canvas[1] as i32;
+                o[3] = i32::from(axes[0]);
+                o[4] = i32::from(axes[1]);
+                o[5] = i32::from(*shrink_outgoing);
+                (PIXEL_STRETCH_TRANSITION_CODE, o, None)
+            }
+            TransitionEffect::ByteRule { asset, invert, soft, .. } => {
+                o[1] = i32::from(*invert);
+                o[2] = i32::from(*soft);
+                (BYTE_RULE_TRANSITION_CODE, o, Some(asset.clone()))
+            }
             TransitionEffect::Mask { asset, fade, vague } => {
                 o[0] = i32::from(*fade);
                 o[1] = vague.map_or(0, i32::from);
@@ -1696,11 +1784,20 @@ impl TransitionSpec {
         }
     }
     pub fn validate(&self) -> Result<()> {
+        let held_mask = self.duration_ms == u64::MAX
+            && matches!(self.effect, TransitionEffect::ByteRule { numerator: 0, soft: false, .. });
         ensure!(
-            (1..=600_000).contains(&self.duration_ms),
-            "transition duration must be 1..=600000 ms"
+            (1..=600_000).contains(&self.duration_ms) || held_mask,
+            "invalid transition duration"
         );
         match &self.effect {
+            TransitionEffect::PixelStretch { canvas, axes, denominator, step_ms, .. } => {
+                ensure!(canvas.iter().all(|d|(1..=16384).contains(d)) && axes.iter().any(|v|*v) && *denominator>0 && *step_ms>0,"invalid pixel stretch");
+            }
+            TransitionEffect::ByteRule { asset, denominator, step_ms, .. } => {
+                VfsPath::new(Mount::Asset, asset).map_err(|e| anyhow::anyhow!("{e}"))?;
+                ensure!(*denominator > 0 && *step_ms > 0, "byte rule transition clock");
+            }
             TransitionEffect::Mask { asset, fade, vague } => {
                 ensure!(*fade <= 8 && !asset.is_empty(), "invalid mask transition");
                 ensure!(vague.is_none_or(|v| (1..=4096).contains(&v)), "mask vague 1..=4096");
@@ -1728,7 +1825,7 @@ impl TransitionSpec {
                 mask,
             } => {
                 ensure!(
-                    transition_code_supported(*code) && *code != ORDERED_DITHER_TRANSITION_CODE,
+                    transition_code_supported(*code) && !matches!(*code, ORDERED_DITHER_TRANSITION_CODE | BYTE_RULE_TRANSITION_CODE | PIXEL_STRETCH_TRANSITION_CODE),
                     "Siglus wipe type {code} is not supported by the compositor"
                 );
                 ensure!(
@@ -3028,6 +3125,10 @@ impl LayerSystem {
     pub fn transition_frame(&self) -> Option<TransitionFrame> {
         let t = self.transition.as_ref()?;
         let (code, mut options, mask) = t.spec.resolve();
+        if let TransitionEffect::ByteRule { numerator, denominator, step_ms, .. } | TransitionEffect::PixelStretch { numerator, denominator, step_ms, .. } = &t.spec.effect {
+            let steps = t.elapsed_ms / u64::from(*step_ms);
+            options[0] = (steps * u64::from(*numerator) / u64::from(*denominator)).min(16384) as i32;
+        }
         // Slot 15 is the per-wipe random seed (types 242/243 and random masks).
         options[15] = (t.serial as u32 as i32) & 0x7fff_ffff;
         let raw = t.elapsed_ms as f32 / t.spec.duration_ms as f32;

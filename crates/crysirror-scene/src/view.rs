@@ -42,6 +42,10 @@ pub struct Sun {
     /// Cast shadows (cascades or virtual shadow maps).
     #[serde(default = "yes")]
     pub shadows: bool,
+    /// Fraction of the light a cast shadow removes (Unity `Light.shadowStrength`):
+    /// visibility becomes `mix(1, shadow, strength)`.
+    #[serde(default = "one")]
+    pub shadow_strength: f32,
     /// Angular diameter of the sun disc in degrees (the real sun is about
     /// 0.53). Hardware ray-traced shadows sample the disc and denoise over
     /// time; 0 keeps one exact hard-shadow ray. Raster shadows ignore it.
@@ -58,6 +62,7 @@ impl Default for Sun {
             color: white3(),
             intensity: sun_lux(),
             shadows: true,
+            shadow_strength: 1.,
             angular_diameter_degrees: 0.,
         }
     }
@@ -352,6 +357,26 @@ pub enum Tonemap {
     None,
 }
 
+/// Colour adjustments before tonemapping (URP `ColorAdjustments`-style):
+/// a linear colour filter, contrast around middle grey (0.18) and
+/// saturation around Rec. 709 luminance. Neutral values are 1.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ColorGrading {
+    #[serde(default = "white3")]
+    pub color_filter: [f32; 3],
+    #[serde(default = "one")]
+    pub contrast: f32,
+    #[serde(default = "one")]
+    pub saturation: f32,
+}
+
+impl Default for ColorGrading {
+    fn default() -> Self {
+        Self { color_filter: [1.; 3], contrast: 1., saturation: 1. }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Environment {
@@ -377,6 +402,22 @@ pub struct Environment {
     /// Directional sun light; `null` for none.
     #[serde(default)]
     pub sun: Option<Sun>,
+    /// Key light of toon materials (direction, colour, intensity; shadow
+    /// fields unused), for scenes that light characters apart from the world
+    /// (Unity per-layer character lights). `null` lights them with the sun;
+    /// cast shadows always come from the sun.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub toon_light: Option<Sun>,
+    /// `toon_light.direction` is in camera space (x right, y up, z toward
+    /// the viewer): a key light attached to the camera, e.g. a Unity light
+    /// parented to it. The renderer applies the camera rotation each frame.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub toon_light_camera: bool,
+    /// Uniform ambient radiance (linear RGB) replacing the environment's
+    /// diffuse spherical harmonics, e.g. a flat `RenderSettings.ambientLight`.
+    /// Scaled by `intensity` like the environment it replaces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ambient: Option<[f32; 3]>,
     /// Bloom mix strength (0 disables).
     #[serde(default = "bloom")]
     pub bloom: f32,
@@ -407,6 +448,9 @@ pub struct Environment {
     /// Virtual shadow maps for the sun, replacing cascades (ADR 0027).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub virtual_shadows: Option<VirtualShadows>,
+    /// Colour adjustments before tonemapping; `null` is neutral.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grading: Option<ColorGrading>,
 }
 fn ao() -> f32 {
     1.
@@ -427,6 +471,9 @@ impl Default for Environment {
             tonemap: Tonemap::default(),
             show_sky: true,
             sun: Some(Sun::default()),
+            toon_light: None,
+            toon_light_camera: false,
+            ambient: None,
             bloom: bloom(),
             ambient_occlusion: ao(),
             temporal_aa: true,
@@ -437,11 +484,27 @@ impl Default for Environment {
             ray_traced_gi: None,
             geometry_lod: None,
             virtual_shadows: None,
+            grading: None,
         }
     }
 }
 impl Environment {
     pub fn validate(&self) -> Result<()> {
+        if let Some(g) = &self.grading {
+            let r = |x: f32, a: f32, b: f32| x.is_finite() && (a..=b).contains(&x);
+            ensure!(g.color_filter.iter().all(|c| r(*c, 0., 16.)) && r(g.contrast, 0., 4.) && r(g.saturation, 0., 4.), "colour grading range");
+        }
+        ensure!(
+            self.toon_light.as_ref().is_none_or(|l| l.direction.iter().chain(&l.color).all(|x| x.is_finite())
+                && l.direction.iter().any(|x| *x != 0.)
+                && l.intensity.is_finite()
+                && (0.0..=1000.).contains(&l.intensity)),
+            "toon light range"
+        );
+        ensure!(
+            self.ambient.is_none_or(|a| a.iter().all(|x| x.is_finite() && (0.0..=65504.).contains(x))),
+            "environment ambient range"
+        );
         if let Some(h) = &self.hdr {
             ensure!(
                 !h.is_empty() && !h.starts_with('/') && !h.contains("..") && !h.contains('\\'),
@@ -486,7 +549,8 @@ impl Environment {
                     && s.color.iter().all(|c| *c >= 0.)
                     && s.intensity.is_finite()
                     && (0.0..=100_000.).contains(&s.intensity)
-                    && (0.0..=10.).contains(&s.angular_diameter_degrees),
+                    && (0.0..=10.).contains(&s.angular_diameter_degrees)
+                    && (0.0..=1.).contains(&s.shadow_strength),
                 "invalid sun"
             );
         }
@@ -540,6 +604,22 @@ pub enum PbrDrawable {
         animation: Vec<crate::components::AnimationLayer>,
         /// Non-zero morph target weights by target name.
         morphs: Vec<(String, f32)>,
+        /// Coverage for all draws of this model.
+        dither: f32,
+        /// Node names whose subtrees are not drawn.
+        hidden: Vec<String>,
+        /// UV0 offsets of named nodes' meshes.
+        uv_offsets: Vec<(String, [f32; 2])>,
+        /// Toon blend-texture weights of named nodes' meshes.
+        base_blend: Vec<(String, f32)>,
+        /// Liquid levels of named nodes' meshes.
+        liquid_levels: Vec<(String, [f32; 4])>,
+        /// Instance key whose local pose is copied onto same-named nodes.
+        follow: Option<u64>,
+        /// Leader node the root nodes ride on (`AnimationState::attach`).
+        attach: Option<String>,
+        /// Procedural local poses by node name, applied last.
+        nodes: Vec<(String, crate::components::NodePose)>,
     },
     /// Untextured triangles (cubes, legacy meshes) with a base color.
     Triangles {
@@ -790,6 +870,24 @@ impl World {
                             .flat_map(|a| &a.morphs)
                             .filter(|(_, w)| **w != 0.)
                             .map(|(n, w)| (n.clone(), *w))
+                            .collect(),
+                        dither: spec.animation.as_ref().and_then(|a| a.dither).unwrap_or(1.),
+                        hidden: spec.animation.iter().flat_map(|a| a.hidden.iter().cloned()).collect(),
+                        uv_offsets: spec.animation.iter().flat_map(|a| a.uv_offsets.iter().map(|(n, o)| (n.clone(), *o))).collect(),
+                        base_blend: spec.animation.iter().flat_map(|a| a.base_blend.iter().map(|(n, w)| (n.clone(), *w))).collect(),
+                        liquid_levels: spec.animation.iter().flat_map(|a| a.liquid_levels.iter().map(|(n, l)| (n.clone(), *l))).collect(),
+                        follow: spec
+                            .animation
+                            .as_ref()
+                            .and_then(|a| a.follow)
+                            .filter(|leader| *leader != id)
+                            .map(|leader| (u64::from(client) << 32) | u64::from(leader)),
+                        attach: spec.animation.as_ref().and_then(|a| a.attach.clone()),
+                        nodes: spec
+                            .animation
+                            .iter()
+                            .flat_map(|a| &a.nodes)
+                            .map(|(n, p)| (n.clone(), *p))
                             .collect(),
                     },
                     g => {

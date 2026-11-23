@@ -1,5 +1,12 @@
 # Implementation and validation status
 
+## 2026-11-20 — Custom Maid 3D 2 boot to title (adopt, Rust port of the C# logic)
+
+- Implementation: new `crysirror-cm3d2` adapter and `crysirror-unity` (Unity 4 format-9 readers, managed-field schema decoding, prefab → GLB). Shared additions: `kiss/cm3d2-tex` image format, CM3D2 `.model`/`.anm` interchange, clip retargeting by node name (`AnimationLayer.source`), followed skeletons and node poses (`AnimationState.follow/nodes`), `HostServices::upload_model`, KAG jump/call attribute names. Contract, provenance and gaps: `crates/crysirror-cm3d2/README.md`, `SATD.md`.
+- Compilation: `cargo build --release -p crysirror-desktop --bin crysirror` passed; API reference regenerated, fingerprint unchanged (`224f952a71accc52`).
+- Tests: release tests of crysirror-asset, crysirror-kag (54), crysirror-image lib (236), crysirror-unity, crysirror-cm3d2 passed; owner-corpus tests passed (see `docs/validation/cm3d2.md`). `crysirror-scene` lib: 104 passed, `input_routes::tests::menu_collision_leaves_ui_journal_and_clock_uncommitted` fails in an unmodified file; `crysirror-image` `tests/effects.rs` still does not compile (known).
+- Behavior (headless, muted): logo, warning, `AllMain.ks` and the title with its 3D background; nothing after the title is implemented.
+
 ## 2026-11-08 — Majiro playable bring-up (adopt)
 
 - Implementation: `crysirror-majiro` now executes the owner game 暁の護衛 through the title, scenario text, choices UI, save and load. VM: arrays, click/AIP/destructor targets (0x83B..0x847), destructors on return and kill, argument stores, native string storage, `RunScript`, same-update `wait(-2)` rounds. Pages/sprites are retained native pictures composed with the new shared `crysirror_image::transparency_planes` kernels and shared RCT/RC8 plane readers; the primary picture is published as an engine image layer. Text uses engine glyph jobs with native PROC layout and hooks. Input/hit regions, music/sound/voice, buffered file readers, message history recording/replay, portable settings and portable save records (not MajiroSavV1.103) are connected. Contract and gaps: `crates/crysirror-majiro/README.md`.

@@ -150,3 +150,18 @@ fn bmp(bytes: &[u8], check: &dyn Fn() -> Result<()>) -> Result<LabelImage> {
         labels: labels.into(),
     })
 }
+
+impl LabelImage {
+    /// Expand stored indices through a caller-owned RGBA palette.
+    pub fn expand_rgba(&self, palette: &[[u8; 4]; 256]) -> Result<crate::ImageSurface> {
+        let [width, height] = self.size;
+        let len = crate::rgba_len(width, height)?;
+        ensure!(self.labels.len() == len / 4, "indexed image size mismatch");
+        let mut rgba = Vec::new();
+        rgba.try_reserve_exact(len)?;
+        for &index in self.labels.iter() {
+            rgba.extend_from_slice(&palette[usize::from(index)]);
+        }
+        Ok(crate::ImageSurface { width, height, rgba })
+    }
+}

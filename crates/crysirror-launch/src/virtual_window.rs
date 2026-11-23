@@ -46,6 +46,7 @@ impl VirtualWindow {
         rt.host.window_fullscreen = Some(self.fullscreen);
         rt.host.window_focused = Some(self.visible && !self.minimized);
         rt.host.window_minimized = Some(self.minimized);
+        rt.host.window_maximized = Some(false);
         rt.host.engine.ui.pointer_surface = size;
     }
 

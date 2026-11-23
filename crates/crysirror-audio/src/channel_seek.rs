@@ -14,6 +14,7 @@ struct Seek {
     voice: VoiceHandle,
     sequence: u64,
     receipt: Option<SourceSeekReceipt>,
+    rewind_looping: Option<bool>,
     result: Option<Result<(), String>>,
 }
 #[derive(Default)]
@@ -54,6 +55,25 @@ impl ChannelAudio {
     /// Offline hosts may explicitly use synchronous sources; realtime requires
     /// a nonblocking resident or buffered source.
     pub fn begin_channel_seek(&mut self, owner: u32, channel: u32, frame: u64) -> Result<u64> {
+        self.begin_channel_cursor_change(owner, channel, frame, None)
+    }
+
+    pub fn begin_retained_channel_rewind(
+        &mut self,
+        owner: u32,
+        channel: u32,
+        looping: bool,
+    ) -> Result<u64> {
+        self.begin_channel_cursor_change(owner, channel, 0, Some(looping))
+    }
+
+    fn begin_channel_cursor_change(
+        &mut self,
+        owner: u32,
+        channel: u32,
+        frame: u64,
+        rewind_looping: Option<bool>,
+    ) -> Result<u64> {
         self.mixer.idle()?;
         self.admit_channel_operation(owner)?;
         self.poll_preparations()?;
@@ -62,6 +82,16 @@ impl ChannelAudio {
             .get(&(owner, channel))
             .context("audio channel is not allocated")?;
         let info = self.mixer.playback_info(owner, voice)?;
+        ensure!(
+            rewind_looping.is_none() || info.retain_on_finish,
+            "rewind requires a retained audio source"
+        );
+        ensure!(
+            !self.seeks.entries.values().any(|seek| {
+                seek.voice == voice && seek.rewind_looping.is_some() && seek.result.is_none()
+            }),
+            "channel rewind already pending"
+        );
         ensure!(
             info.source_frames.is_none_or(|n| frame <= n),
             "channel seek outside source"
@@ -85,6 +115,12 @@ impl ChannelAudio {
             self.mixer.seek(owner, voice, frame)?;
             (0, None, Some(Ok(())))
         };
+        if let Some(looping) = rewind_looping {
+            self.mixer.set_rewind_hold(owner, voice, true)?;
+            if let Some(outcome) = &result {
+                self.mixer.finish_rewind(owner, voice, outcome.is_ok().then_some(looping))?;
+            }
+        }
         self.seeks.entries.insert(
             ticket,
             Seek {
@@ -93,6 +129,7 @@ impl ChannelAudio {
                 voice,
                 sequence,
                 receipt,
+                rewind_looping,
                 result,
             },
         );
@@ -116,7 +153,7 @@ impl ChannelAudio {
                 .context("channel seek lost completion receipt")?;
             let service_error = self.mixer.service_sources().err();
             let state = self.mixer.source_seek_state(owner, &receipt)?;
-            let result = match state {
+            let mut result = match state {
                 SourceSeekState::Ready { .. } => Some(Ok(())),
                 SourceSeekState::Failed(e) => Some(Err(e)),
                 SourceSeekState::Cancelled => {
@@ -129,6 +166,13 @@ impl ChannelAudio {
                     None
                 }
             };
+            if let (Some(looping), Some(outcome)) = (record.rewind_looping, &result) {
+                if self.mixer.is_playing(owner, record.voice) {
+                    self.mixer.finish_rewind(owner, record.voice, outcome.is_ok().then_some(looping))?;
+                } else {
+                    result = Some(Err("rewound channel was released or replaced".into()));
+                }
+            }
             self.seeks.entries.get_mut(&ticket).unwrap().result = result;
         }
         let record = &self.seeks.entries[&ticket];
@@ -148,6 +192,12 @@ impl ChannelAudio {
     /// Pending cancellation retains the old logical source position while the
     /// buffered decoder realigns. A newer seek cannot be cancelled by this ID.
     pub fn release_channel_seek(&mut self, owner: u32, ticket: u64) -> Result<()> {
+        if self.seeks.entries.get(&ticket).is_some_and(|record| {
+            record.owner == owner && record.rewind_looping.is_some() && record.result.is_none()
+        }) {
+            self.mixer.idle()?;
+            self.channel_seek_preparation(owner, ticket)?;
+        }
         let record = self
             .seeks
             .entries
@@ -159,6 +209,9 @@ impl ChannelAudio {
             if self.mixer.is_playing(owner, record.voice) {
                 self.mixer
                     .cancel_seek(owner, record.voice, record.sequence)?;
+                if record.rewind_looping.is_some() {
+                    self.mixer.finish_rewind(owner, record.voice, None)?;
+                }
             }
         }
         self.seeks.entries.remove(&ticket);
@@ -220,6 +273,13 @@ mod tests {
         }
     }
     fn setup(fail_read: bool) -> (ChannelAudio, Arc<AtomicBool>, VoiceHandle) {
+        setup_with_spec(fail_read, VoiceSpec::default())
+    }
+
+    fn setup_with_spec(
+        fail_read: bool,
+        spec: VoiceSpec,
+    ) -> (ChannelAudio, Arc<AtomicBool>, VoiceHandle) {
         let mut audio = ChannelAudio::default();
         let ready = Arc::new(AtomicBool::new(false));
         let h = audio
@@ -231,7 +291,7 @@ mod tests {
                     fail_read,
                     at: 0,
                 }),
-                VoiceSpec::default(),
+                spec,
             )
             .unwrap();
         audio.voices.insert((1, 7), h);
@@ -246,6 +306,43 @@ mod tests {
             assert!(Instant::now() < end);
             std::thread::yield_now();
         }
+    }
+    #[test]
+    fn retained_rewind_fences_decoder_and_fade_until_owner_publication() {
+        let (mut audio, ready, voice) = setup_with_spec(
+            false,
+            VoiceSpec { retain_on_finish: true, ..Default::default() },
+        );
+        audio.mixer.render(&mut [[0.; 2]; 5]).unwrap();
+        audio.mixer.stop(1, voice, 1.).unwrap();
+        let rewind = audio.begin_retained_channel_rewind(1, 7, true).unwrap();
+        assert!(audio.begin_channel_seek(1, 7, 30).is_err());
+        assert_eq!(
+            audio.channel_seek_preparation(1, rewind).unwrap().phase,
+            AudioPreparePhase::Pending,
+        );
+        let mut pending_pcm = [[0.; 2]; 80];
+        audio.mixer.render(&mut pending_pcm).unwrap();
+        assert!(pending_pcm.iter().all(|frame| *frame == [0.; 2]));
+        let before = audio.playback_info(1, 7).unwrap().unwrap();
+        assert!(before.stopping);
+        assert_eq!((before.position_frames, before.transport_frames), (5, 5));
+
+        ready.store(true, Ordering::SeqCst);
+        audio.mixer.render(&mut pending_pcm).unwrap();
+        assert!(pending_pcm.iter().all(|frame| *frame == [0.; 2]));
+        assert_eq!(
+            audio.channel_seek_preparation(1, rewind).unwrap().phase,
+            AudioPreparePhase::Ready,
+        );
+        audio.release_channel_seek(1, rewind).unwrap();
+        let after = audio.playback_info(1, 7).unwrap().unwrap();
+        assert!(after.stopping && after.looping);
+        assert_eq!((after.position_frames, after.transport_frames), (0, 0));
+        let mut pcm = [[0.; 2]; 48];
+        audio.mixer.render(&mut pcm).unwrap();
+        assert!(pcm[0][0] > 0.);
+        assert!(audio.playback_info(1, 7).unwrap().is_none());
     }
     #[test]
     fn pending_seek_keeps_logical_cursor_and_cancel_restores_prior_source_position() {

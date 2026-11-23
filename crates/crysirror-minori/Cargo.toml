@@ -1,0 +1,23 @@
+[package]
+name = "crysirror-minori"
+version.workspace = true
+edition = "2024"
+authors = ["CrySirror contributors"]
+license = "GPL-3.0-only AND MPL-2.0"
+publish = false
+description = "Minori scenario VM over CrySirror host services"
+
+[dependencies]
+anyhow.workspace = true
+crysirror-core.workspace = true
+crysirror-audio.workspace = true
+crysirror-image.workspace = true
+crysirror-runtime.workspace = true
+crysirror-resource.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+encoding_rs = "0.8"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+
+[dev-dependencies]
+tempfile = "3"

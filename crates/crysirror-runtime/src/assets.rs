@@ -259,6 +259,17 @@ impl Assets {
         self.insert(key, data)?;
         Ok(())
     }
+    /// Drop a generated resource's bytes (`release_model`); an identical
+    /// later registration inserts it again.
+    pub fn release_generated(&mut self, client: ClientId, path: &str) -> Result<()> {
+        ensure!(path.starts_with("__crysirror/"), "generated resource namespace");
+        let key = self.key(client, path)?;
+        if let Some(bytes) = self.bytes.remove(&key) {
+            self.total -= bytes.len();
+        }
+        self.release_prepared_path(client, path);
+        Ok(())
+    }
     /// Whether `path` is served by a mounted container for this client (its
     /// bytes cannot change while mounted, unlike plain project files).
     pub fn container_backed(&self, client: ClientId, path: &str) -> bool {

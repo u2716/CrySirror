@@ -36,9 +36,11 @@ pub fn adapter_registry() -> Result<AdapterRegistry> {
     crysirror_bgi_integrated::register(&mut registry)?;
     crysirror_softpal::register(&mut registry)?;
     crysirror_circus::register(&mut registry)?;
+    crysirror_cmvs::adapter::register(&mut registry)?;
     crysirror_catsystem2::register(&mut registry)?;
     crysirror_majiro::adapter::register(&mut registry)?;
     crysirror_qlie::adapter::register(&mut registry)?;
+    crysirror_minori::register(&mut registry)?;
     crysirror_sugarpot::register(&mut registry)?;
     crysirror_nsystem::register(&mut registry)?;
     crysirror_rscript::register(&mut registry)?;
@@ -48,6 +50,9 @@ pub fn adapter_registry() -> Result<AdapterRegistry> {
     crysirror_system4::factory::register(&mut registry)?;
     crysirror_avg32::register(&mut registry)?;
     crysirror_willplus::adapter::register(&mut registry)?;
+    crysirror_cm3d2::register(&mut registry)?;
+    crysirror_exhibit::register(&mut registry)?;
+    crysirror_amanatsu::register(&mut registry)?;
     Ok(registry)
 }
 pub fn load_project(path: &Path) -> Result<Project> {
@@ -81,6 +86,12 @@ pub fn load_project(path: &Path) -> Result<Project> {
     }
     for c in project.clients.iter().filter(|c| c.adapter == "majiro") {
         serde_json::from_value::<crysirror_majiro::adapter::Config>(c.config.clone())?.validate()?;
+    }
+    for c in project.clients.iter().filter(|c| c.adapter == "cm3d2") {
+        serde_json::from_value::<crysirror_cm3d2::Config>(c.config.clone())?.validate()?;
+    }
+    for c in project.clients.iter().filter(|c| c.adapter == "amanatsu") {
+        serde_json::from_value::<crysirror_amanatsu::Config>(c.config.clone())?.validate()?;
     }
     for c in project.clients.iter().filter(|c| c.adapter == "avg32") {
         serde_json::from_value::<crysirror_avg32::Config>(c.config.clone())?.validate()?;

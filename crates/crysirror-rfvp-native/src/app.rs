@@ -53,7 +53,7 @@ use crate::{config::app_config::AppConfig, subsystem::event_handler::update_inpu
 use std::{ffi::c_void, ptr::NonNull};
 
 #[cfg(target_os = "android")]
-extern "C" {
+unsafe extern "C" {
     fn ANativeWindow_acquire(window: *mut c_void);
     fn ANativeWindow_release(window: *mut c_void);
 }
@@ -928,8 +928,8 @@ impl App {
                 let gd = &mut **gd;
                 let renderer = &self.prim_renderer;
                 gd.motion_manager
-                    .restore_evicted_cpu_pixels(&gd.vfs, |id, gen| {
-                        renderer.is_graph_uploaded(id, gen)
+                    .restore_evicted_cpu_pixels(&gd.vfs, |id, generation| {
+                        renderer.is_graph_uploaded(id, generation)
                     });
             }
             let surface_size = (self.surface_config.width, self.surface_config.height);
@@ -1059,7 +1059,7 @@ impl App {
             let mut gd = gd_write(&self.game_data);
             let renderer = &self.prim_renderer;
             gd.motion_manager
-                .evict_uploaded_cpu_pixels(|id, gen| renderer.is_graph_uploaded(id, gen));
+                .evict_uploaded_cpu_pixels(|id, generation| renderer.is_graph_uploaded(id, generation));
         }
 
         let mut encoder =

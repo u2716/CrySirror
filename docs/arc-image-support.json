@@ -2620,7 +2620,7 @@
         "src/images_a.rs"
       ],
       "variants": [
-        "v1 block planes, v2 JBP1+RLE alpha, v3 JBP1, v5 LZSS differential planes, v6 8x8 delta with optional client-scoped PB3/PNG base"
+        "v1 variable-size block planes, v2 JBP1+RLE alpha, v3 JBP1, v5 LZSS differential planes, v6 8x8 delta with optional client-scoped PB3/PNG base or required native .pb3 base, v7 interleaved LZSS pixels, v8 8x8 delta over a required scoped .pb3 base"
       ],
       "limits": [
         "Only listed native variants are implemented; malformed, truncated or unsupported layouts fail.",
@@ -2631,7 +2631,9 @@
       "evidence": {
         "report": "docs/arc-images-a.json",
         "ordinary_tests": [
-          "pb3_constant_blocks_and_unknown_variant"
+          "pb3_constant_blocks_and_unknown_variant",
+          "pb3_type7_decodes_interleaved_bgra",
+          "pb3_type8_requires_its_named_base_and_replaces_only_selected_tiles"
         ],
         "test_source": "crates/crysirror-formats-arc/tests/images_a.rs",
         "external_validation": "See report for exact fixture/count and codec tolerance; no fixture binary is redistributed.",

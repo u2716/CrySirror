@@ -1,0 +1,16 @@
+[package]
+name = "crysirror-exhibit"
+description = "ExHibit RLD scenario adapter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+crysirror-core.workspace = true
+crysirror-resource.workspace = true
+crysirror-runtime.workspace = true
+crysirror-tasks.workspace = true
+serde.workspace = true
+serde_json.workspace = true

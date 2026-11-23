@@ -99,16 +99,19 @@ pub fn offscreen(
                 && frame_input.pointer_y < rt.project.canvas[1] as i32),
         };
         rt.host.publish_input_sources(crysirror_core::service::InputSourcesFrame{keyboard_pointer:frame_input,controller_backend:false,controllers:Vec::new()})?;
-        let step = match &mut core {
-            app::Core::Plain(rt) => {
-                // Developer diagnostic: the window close button, without a window.
-                if close_frame == Some(frame) && !rt.request_close() {
+        // Developer diagnostic: the window close button, without a window.
+        if close_frame == Some(frame) {
+            if let app::Core::Plain(rt) = &mut core {
+                if !rt.request_close() {
                     break;
                 }
-                rt.tick(dt, frame_input)
             }
+        }
+        let completion_deadline = std::time::Instant::now() + std::time::Duration::from_millis(16);
+        let step = crysirror_tasks::with_completion_deadline(completion_deadline, || match &mut core {
+            app::Core::Plain(rt) => rt.tick(dt, frame_input),
             app::Core::Scripted(engine) => engine.frame(dt, frame_input),
-        };
+        });
         if let Err(error) = step {
             // Preserve the real VM frontier once, before propagating its
             // failure. No image is presented as a completed capture here.

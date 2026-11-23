@@ -123,7 +123,7 @@ fn update(@builtin(workgroup_id) group:vec3<u32>,@builtin(local_invocation_index
                 var sun=0.0;
                 if nl>0.0 {
                     sun=nl;
-                    if params.sun_color.w>0.5 {sun*=visible(point+n*0.002,l,1e20);}
+                    if params.sun_color.w>0.0 {sun*=mix(1.0,visible(point+n*0.002,l,1e20),params.sun_color.w);}
                 }
                 let irradiance=params.sun_color.rgb*params.sun_dir.w*sun+volume_irradiance(point+n*0.05,n)
                     +bounce_local(point,n,u32(params.limits.z));

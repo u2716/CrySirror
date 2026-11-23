@@ -333,10 +333,94 @@ fn host_asset_budget_is_bounded_and_cannot_drop_below_live_residency() {
     let mut a = Assets::new(t.path()).unwrap();
     a.register(ClientId(1), "").unwrap();
     assert!(a.set_prepared_budget(1).is_err());
+    if cfg!(all(target_pointer_width = "64", not(target_family = "wasm"),
+        any(target_os = "windows", target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android"))) {
+        assert!(a.tasks_inspect()["budget_bytes"].is_null());
+    } else {
+        assert_eq!(a.tasks_inspect()["budget_bytes"], 256 * 1024 * 1024);
+    }
     a.set_prepared_budget(32 * 1024 * 1024).unwrap();
     let t = a.request(ClientId(1), "blob", AssetKind::Bytes).unwrap();
     assert_eq!(ready(&mut a, t).state, AssetState::Ready);
     assert!(a.set_prepared_budget(16 * 1024 * 1024).is_err());
     a.release_task(ClientId(1), t).unwrap();
     a.set_prepared_budget(16 * 1024 * 1024).unwrap();
+}
+
+#[test]
+fn image_sequence_reclaims_old_frames_under_pressure_and_preserves_owners() {
+    const FRAME_BYTES: usize = 1024 * 1024 * 4;
+    let root = tempfile::tempdir().unwrap();
+    let client = ClientId(1);
+    let mut assets = Assets::new(root.path()).unwrap();
+    assets.register(client, "").unwrap();
+    assets.set_prepared_budget(5 * FRAME_BYTES).unwrap();
+    for index in 0..8 {
+        let image = crysirror_image::ImageSurface {
+            width: 1024,
+            height: 1024,
+            rgba: [index, 0, 0, 255].repeat(1024 * 1024),
+        };
+        std::fs::write(
+            root.path().join(format!("{index}.png")),
+            crysirror_image::encode_png(&image).unwrap(),
+        )
+        .unwrap();
+    }
+
+    let explicit = assets.request(client, "0.png", AssetKind::Image).unwrap();
+    let lease = assets.lease(client, "1.png", AssetKind::Image).unwrap();
+    assert_eq!(
+        assets.wait_task(client, explicit).unwrap().state,
+        AssetState::Ready
+    );
+    assert_eq!(
+        assets.wait_task(client, lease.ticket()).unwrap().state,
+        AssetState::Ready
+    );
+    let held = assets.image_for(client, "2.png").unwrap().unwrap();
+    for index in [3, 4, 3, 5] {
+        let image = assets
+            .image_for(client, &format!("{index}.png"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(image.rgba[..4], [index, 0, 0, 255]);
+    }
+    let stats = assets.tasks_inspect();
+    let paths: Vec<_> = stats["assets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(paths, ["0.png", "1.png", "2.png", "3.png", "5.png"]);
+    assert_eq!(stats["resident_bytes"], 5 * FRAME_BYTES);
+
+    let recent = assets.image_for(client, "5.png").unwrap().unwrap();
+    let reloaded = assets.image_for(client, "4.png").unwrap().unwrap();
+    assert_eq!(reloaded.rgba[..4], [4, 0, 0, 255]);
+    let error = assets.image_for(client, "6.png").unwrap_err();
+    assert!(error.to_string().contains("prepared assets exceed"));
+    assert_eq!(
+        assets.wait_task(client, explicit).unwrap().state,
+        AssetState::Ready
+    );
+    assert_eq!(
+        assets.wait_task(client, lease.ticket()).unwrap().state,
+        AssetState::Ready
+    );
+    assert_eq!(held.rgba[..4], [2, 0, 0, 255]);
+    assert_eq!(recent.rgba[..4], [5, 0, 0, 255]);
+    drop(held);
+    assets.set_nonblocking(true);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let next = loop {
+        if let Some(image) = assets.image_for(client, "7.png").unwrap() {
+            break image;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::yield_now();
+    };
+    assert_eq!(next.rgba[..4], [7, 0, 0, 255]);
+    assert_eq!(assets.tasks_inspect()["resident_bytes"], 5 * FRAME_BYTES);
 }

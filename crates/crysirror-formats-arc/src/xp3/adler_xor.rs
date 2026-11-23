@@ -5,6 +5,8 @@
 //! statically inspected as PE data; no DLL loading or instruction emulation.
 //! This recognizes a bounded, known compiler shape and verifies every decoded
 //! entry against its archive checksum before publishing a random-access reader.
+mod madocrypt;
+pub(super) use madocrypt::open_auto;
 use super::{
     cxdec::{pe, Adler},
     *,
@@ -97,17 +99,9 @@ pub(super) fn open(mut base: ParsedArchive, ctx: &DecodeContext) -> Result<Box<d
         !recognized.is_empty(),
         "no supported rotating Adler XOR callback evidence in supplied modules"
     );
-    let mut protected = BTreeSet::new();
-    for (entry, plan) in base.entries.iter().zip(base.plans.iter_mut()) {
-        if let EntryPlan::Segments { encrypted, .. } = plan {
-            if *encrypted {
-                protected.insert(entry.id);
-            }
-            *encrypted = false;
-        }
-    }
+    let protected = take_protected(&mut base);
     let report = serde_json::json!({"period":31,"modules":recognized});
-    let archive = AdlerArchive { base, protected, report };
+    let archive = AdlerArchive { base, protected, report, mado_seed: None };
     // Prove the selected family restores actual protected data before the
     // archive is accepted. Each subsequent open independently checks adlr.
     let sample = archive
@@ -120,7 +114,19 @@ pub(super) fn open(mut base: ParsedArchive, ctx: &DecodeContext) -> Result<Box<d
     }
     Ok(Box::new(archive))
 }
+pub(super) fn take_protected(base: &mut ParsedArchive) -> BTreeSet<u32> {
+    let mut ids = BTreeSet::new();
+    for (entry, plan) in base.entries.iter().zip(&mut base.plans) {
+        if let EntryPlan::Segments { encrypted, .. } = plan {
+            if std::mem::take(encrypted) {
+                ids.insert(entry.id);
+            }
+        }
+    }
+    ids
+}
 struct AdlerArchive {
+    mado_seed: Option<u32>,
     base: ParsedArchive,
     protected: BTreeSet<u32>,
     /// `adler_xor` facts shared by every protected entry.
@@ -148,26 +154,29 @@ impl Archive for AdlerArchive {
             .get(id as usize)
             .context("rotating XOR entry id")?;
         let hash = self.base.xp3(id).context("XP3 adlr absent")?.adler32;
-        let reader = FilterReader {
-            source: raw,
-            key: key(hash),
-        };
-        let mut checksum = Adler::default();
-        let mut offset = 0u64;
-        let mut chunk = [0u8; 65536];
-        while offset < entry.size {
-            let n = (entry.size - offset).min(chunk.len() as u64) as usize;
-            crysirror_resource::read_exact_at(&reader, offset, &mut chunk[..n])?;
-            checksum.update(&chunk[..n]);
-            offset += n as u64;
+        let key = key(hash ^ self.mado_seed.unwrap_or(0));
+        let (original, decoded) = checksums(raw.as_ref(), entry.size, &key, ctx)?;
+        if self.mado_seed.is_some() && original == hash {
+            return Ok(raw);
         }
-        ensure!(
-            checksum.finish() == hash,
-            "rotating Adler XOR decoded entry checksum mismatch: {}",
-            entry.path
-        );
-        Ok(Arc::new(reader))
+        ensure!(decoded == hash, "rotating Adler XOR decoded entry checksum mismatch: {}", entry.path);
+        Ok(Arc::new(FilterReader { source: raw, key }))
     }
+}
+fn checksums(raw: &dyn AssetReader, size: u64, key: &[u8; 31], ctx: &DecodeContext) -> Result<(u32, u32)> {
+    let (mut original, mut decoded) = (Adler::default(), Adler::default());
+    let mut offset = 0;
+    let mut chunk = vec![0; 65536];
+    while offset < size {
+        ctx.check_cancelled()?;
+        let n = (size - offset).min(chunk.len() as u64) as usize;
+        crysirror_resource::read_exact_at(raw, offset, &mut chunk[..n])?;
+        original.update(&chunk[..n]);
+        apply(key, offset, &mut chunk[..n]);
+        decoded.update(&chunk[..n]);
+        offset += n as u64;
+    }
+    Ok((original.finish(), decoded.finish()))
 }
 struct FilterReader {
     source: Arc<dyn AssetReader>,

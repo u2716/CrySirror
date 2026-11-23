@@ -193,7 +193,7 @@ struct Segments {
     last: (u16, usize, usize),
 }
 
-extern "C" {
+unsafe extern "C" {
     /// main.c: the instruction cache, after code was written.
     fn rfvp_ps1_flush_icache();
 }
@@ -377,11 +377,11 @@ fn rt() -> &'static mut Runtime {
 }
 
 /// The C side's view of the runtime (aot.h).
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub static mut aot_g: *mut V = ptr::null_mut();
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub static mut aot_ret: V = 0;
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub static mut aot_yield: i32 = 0;
 
 /// Load SCRIPT.AOT's tables. `cache_bytes` is the space for compiled code.
@@ -592,7 +592,7 @@ pub fn from_variant(v: Variant) -> V {
 // -----------------------------------------------------------------------------------------------
 // Helpers of the compiled code (aot.h)
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn aot_call(f: *mut Frame, pack: u32, state: u32) -> *mut Frame {
     unsafe {
         (*f).state = state;
@@ -607,7 +607,7 @@ pub extern "C" fn aot_call(f: *mut Frame, pack: u32, state: u32) -> *mut Frame {
 const MAX_NESTED: u32 = 12;
 static mut NESTED: u32 = 0;
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn aot_invoke(c: *mut Frame) -> i32 {
     unsafe {
         if NESTED >= MAX_NESTED {
@@ -650,7 +650,7 @@ fn step(f: *mut Frame) -> i32 {
     r
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn aot_return(f: *mut Frame) -> i32 {
     unsafe {
         let tm = &mut *rt().tm;
@@ -667,7 +667,7 @@ pub extern "C" fn aot_return(f: *mut Frame) -> i32 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn aot_goto(f: *mut Frame, to: u32) -> i32 {
     unsafe {
         (*f).seg = to as u16;
@@ -679,7 +679,7 @@ pub extern "C" fn aot_goto(f: *mut Frame, to: u32) -> i32 {
 /// The most arguments a syscall takes.
 const MAX_SYSCALL_ARGS: usize = 24;
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn aot_syscall(id: u32, args: *const V) -> V {
     let (argc, handler) = rt().syscalls.get(id as usize).copied().unwrap_or((0, None));
     // On the stack, only as many as the syscall takes: no allocation per syscall.
@@ -708,7 +708,7 @@ pub extern "C" fn aot_syscall(id: u32, args: *const V) -> V {
     result
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn aot_table_get(table: V, key: V) -> V {
     if tag(table) != T_TABLE || tag(key) != T_INT {
         return 0;
@@ -719,7 +719,7 @@ pub extern "C" fn aot_table_get(table: V, key: V) -> V {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn aot_table_set(slot: *mut V, key: V, value: V) {
     unsafe {
         // As the interpreter: a non-int key clears the variable, and one that is not a table
@@ -756,7 +756,7 @@ const OP_LT: u32 = 12;
 const OP_LE: u32 = 13;
 
 /// Arithmetic as the interpreter does it (the engine's own operations, for all but ints).
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn aot_arith(op: u32, a: V, b: V) -> V {
     if tag(a) == T_INT && tag(b) == T_INT {
         let (x, y) = (val(a) as i32, val(b) as i32);
@@ -803,7 +803,7 @@ pub extern "C" fn aot_arith(op: u32, a: V, b: V) -> V {
 }
 
 /// Comparisons and the logical operations as the interpreter does them: 1 for True, 0 for Nil.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn aot_cmp(op: u32, a: V, b: V) -> i32 {
     match op {
         OP_AND => return (tag(a) != T_NIL && tag(b) != T_NIL) as i32,
@@ -840,7 +840,7 @@ pub extern "C" fn aot_cmp(op: u32, a: V, b: V) -> i32 {
     (!x.is_nil()) as i32
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn aot_neg(a: V) -> V {
     match tag(a) {
         T_INT => mk(T_INT, (val(a) as i32).wrapping_neg() as u32),

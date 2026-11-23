@@ -447,12 +447,251 @@ fn terrain_and_hdr_particles_render() {
 
 #[test]
 #[ignore = "requires a real wgpu adapter; execute explicitly"]
+fn masked_normal_shell_extrudes_and_discards_pixels() {
+    let gpu = Arc::new(pollster::block_on(Gpu::request(&wgpu::Instance::default(), None)).unwrap());
+    let mut renderer = Renderer::new(gpu, wgpu::TextureFormat::Rgba8UnormSrgb);
+    let cube = serde_json::json!({"kind":"cube"});
+    let front = serde_json::json!({"kind":"triangles","vertices":[[-1,-1,0],[1,-1,0],[0,1,0]],"indices":[0,1,2]});
+    let back = serde_json::json!({"kind":"triangles","vertices":[[-1,-1,0],[1,-1,0],[0,1,0]],"indices":[2,1,0]});
+    let mut counts = Vec::new();
+    let mut centers = Vec::new();
+    for (geometry, width, mask, dither) in [
+        (&cube, 0.1, 255, 1.0), (&cube, 1.0, 255, 1.0), (&cube, 1.0, 255, 0.5),
+        (&cube, 1.0, 0, 1.0), (&cube, 0.0, 255, 1.0),
+        (&front, 1.0, 255, 1.0), (&back, 0.1, 255, 1.0), (&back, 1.0, 255, 1.0),
+    ] {
+        let tmp = tempfile::tempdir().unwrap();
+        let assets = tmp.path().join("assets");
+        std::fs::create_dir(&assets).unwrap();
+        let texture_name = format!("mask-{mask}.png");
+        image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 255, 255, mask]))
+            .save(assets.join(&texture_name)).unwrap();
+        let mat = serde_json::json!({"unlit":true,"double_sided":true,"base_color_factor":[1,0,0,1],
+            "base_color_texture":texture_name,"effect":{"kind":"normal_shell","width":width,
+                "distance_scale":0.5,"depth_limit":0.35,"dither":dither,"cutoff":0.5}});
+        let project = serde_json::json!({"schema":2,"name":"shell","content_revision":"1",
+            "canvas":[96,96],"assets":"assets","clients":[{"name":"game","adapter":"crysirror-script-v1",
+            "game":"shell","systems":{"entities":[{"id":1,"name":"shell","geometry":geometry,"material":mat}]}}]});
+        let path = tmp.path().join("project.json");
+        std::fs::write(&path, serde_json::to_vec(&project).unwrap()).unwrap();
+        let mut rt = Runtime::load(&path, &tmp.path().join("state")).unwrap();
+        let setup = serde_json::from_value(serde_json::json!({"world":[
+            {"op":"set_camera","camera":{"eye":[2,1,3],"target":[0,0,0],"up":[0,1,0],"fov_y_degrees":40,"near":0.1,"far":100}},
+            {"op":"set_environment","environment":{"sun":null,"intensity":0,"show_sky":false,"bloom":0,"ambient_occlusion":0,"temporal_aa":false,"tonemap":"none"}}
+        ]})).unwrap();
+        rt.host.engine.submit(rt.client_id("game").unwrap(), &setup).unwrap();
+        rt.tick(0, InputFrame::default()).unwrap();
+        renderer.set_pbr_scene(rt.render_pbr().unwrap()).unwrap();
+        let img = renderer.capture(&rt.host.scene, &mut rt.assets, rt.project.canvas, rt.project.background).unwrap();
+        let mut count = 0usize;
+        let mut summed_x = 0u32;
+        for (x, _, p) in img.enumerate_pixels() {
+            if p[0] > 200 && p[1] < 100 && p[2] < 100 {
+                count += 1;
+                summed_x += x;
+            }
+        }
+        counts.push(count);
+        centers.push(summed_x as f32 / count.max(1) as f32);
+    }
+    let [small, large, stippled, masked, zero_width, front, near_back, far_back] = counts[..] else { unreachable!() };
+    assert!(small > 100 && large > 100, "{counts:?}");
+    assert!(stippled.abs_diff(large / 2) < large / 15, "{counts:?}");
+    assert_eq!((masked, zero_width, front), (0, 0, 0), "{counts:?}");
+    assert!(near_back > 100 && far_back > 100, "{counts:?}");
+    // The flat triangle moves along its object-space normal. The oblique
+    // camera sees a horizontal shift as width goes from 0.1 to 1.0.
+    assert!((centers[6] - centers[7]).abs() > 1.5, "{centers:?}");
+}
+
+#[test]
+#[ignore = "requires a real wgpu adapter; execute explicitly"]
+fn placed_face_lines_and_distance_dependent_cloth_edges_reach_pixels() {
+    let gpu = Arc::new(pollster::block_on(Gpu::request(&wgpu::Instance::default(), None)).unwrap());
+    let mut renderer = Renderer::new(gpu, wgpu::TextureFormat::Rgba8UnormSrgb);
+    let mut capture = |model: serde_json::Value, mask: [u8;4], camera_z: f32, cloth: bool, painted: bool| {
+        let tmp = tempfile::tempdir().unwrap();
+        let assets = tmp.path().join("assets");
+        std::fs::create_dir(&assets).unwrap();
+        let mask_name = format!("mask-{}-{}-{}-{}.png",mask[0],mask[1],mask[2],mask[3]);
+        image::RgbaImage::from_pixel(4,4,image::Rgba(mask)).save(assets.join(&mask_name)).unwrap();
+        image::RgbaImage::from_pixel(8,8,image::Rgba([0u8,0,0,255])).save(assets.join("ramp.png")).unwrap();
+        let mut mat = serde_json::json!({"base_color_factor":[1,1,1,1],"toon":{
+            "lookup_texture":"ramp.png","shade_from_base":true,"line_model":model,
+            "surface_line_texture":mask_name,"line_color":[1,0,0,1],"shadow_light":[1,1,1,1],
+            "shadow_tone_override":[0,0,1,1],"ambient_scale":0}});
+        if cloth {
+            // At the sampled UV only the adjacent texel is opaque. A near
+            // contour crosses it; at 11 world units the offsets collapse.
+            let mut base = image::RgbaImage::from_pixel(2048,1,image::Rgba([255,255,255,0u8]));
+            base.put_pixel(1024,0,image::Rgba([255;4]));
+            base.save(assets.join("edge.png")).unwrap();
+            mat["alpha_mode"] = serde_json::json!("mask");
+            mat["base_color_texture"] = serde_json::json!("edge.png");
+            mat["uv_scale"] = serde_json::json!([0,0]);
+            mat["uv_offset"] = serde_json::json!([if painted {1024.5/2048.} else {1023.5/2048.},0.5]);
+        }
+        let project = serde_json::json!({"schema":2,"name":"lines","content_revision":"1","canvas":[32,32],
+            "assets":"assets","clients":[{"name":"game","adapter":"crysirror-script-v1","game":"lines","systems":{"entities":[{
+            "id":1,"name":"part","geometry":{"kind":"triangles","vertices":[[-20,-20,0],[20,-20,0],[20,20,0],[-20,20,0]],
+            "indices":[0,1,2,0,2,3]},"material":mat}]}}]});
+        let path = tmp.path().join("project.json");
+        std::fs::write(&path,serde_json::to_vec(&project).unwrap()).unwrap();
+        let mut rt = Runtime::load(&path,&tmp.path().join("save")).unwrap();
+        let setup = serde_json::from_value(serde_json::json!({"world":[
+            {"op":"set_camera","camera":{"eye":[0,0,camera_z],"target":[0,0,0],"up":[0,1,0],
+                "fov_y_degrees":50,"near":0.1,"far":100}},
+            {"op":"set_environment","environment":{"toon_light":{"direction":[0,0,1],"color":[1,1,1],"intensity":1,"shadows":false},
+                "sun":null,"intensity":0,"show_sky":false,"bloom":0,"ambient_occlusion":0,"temporal_aa":false,"tonemap":"none"}}
+        ]})).unwrap();
+        rt.host.engine.submit(rt.client_id("game").unwrap(),&setup).unwrap();
+        rt.tick(0,InputFrame::default()).unwrap();
+        renderer.set_pbr_scene(rt.render_pbr().unwrap()).unwrap();
+        renderer.capture(&rt.host.scene,&mut rt.assets,rt.project.canvas,rt.project.background).unwrap().get_pixel(16,16).0
+    };
+    let face = serde_json::json!({"kind":"face","nose_color":[0,1,0,1]});
+    let bare = capture(face.clone(),[0,0,0,255],3.,false,false);
+    let nose = capture(face.clone(),[255,0,0,255],3.,false,false);
+    let lip = capture(face.clone(),[255,255,0,255],3.,false,false);
+    let spec = capture(face,[255,0,255,255],3.,false,false);
+    assert!(bare[2]>245 && bare[0]<5 && nose[1]>245 && nose[0]<5,"{bare:?} {nose:?}");
+    assert!(lip[0]>245 && lip[1]<5 && lip==spec,"{lip:?} {spec:?}");
+    let cloth = |w:f32, edge:f32| serde_json::json!({"kind":"cloth","width":w,"edge_alpha":edge,
+        "mip_bias":0,"alpha_dither":0,"opacity":1,"clip":0.01,"clip_force":0});
+    let near = capture(cloth(1.,1.),[255,0,255,255],3.,true,false);
+    let far = capture(cloth(1.,1.),[255,0,255,255],12.,true,false);
+    let off = capture(cloth(1.,0.),[255,0,255,255],3.,true,false);
+    let blocked = capture(cloth(1.,1.),[0,0,255,255],3.,true,false);
+    let painted = capture(cloth(0.,0.),[255,255,255,255],12.,true,true);
+    assert!(near[0]>245 && near[2]<5 && painted[0]>245,"{near:?} {painted:?}");
+    assert!(far==off && off==blocked && far[0]<100,"{far:?} {off:?} {blocked:?}");
+    let mut force = cloth(0.,0.);
+    force["opacity"] = 0.5.into();
+    force["clip_force"] = 1.into();
+    assert_eq!(capture(force.clone(),[0,255,255,255],3.,true,true),far);
+    assert_eq!(capture(force.clone(),[255,255,255,255],3.,true,true),painted);
+    assert_eq!(capture(force,[255,255,0,255],3.,true,true),far);
+}
+
+#[test]
+#[ignore = "requires a real wgpu adapter; execute explicitly"]
+fn directional_lightmap_uses_atlas_uv_and_the_fragment_normal() {
+    let gpu = Arc::new(pollster::block_on(Gpu::request(&wgpu::Instance::default(), None)).unwrap());
+    let mut renderer = Renderer::new(gpu, wgpu::TextureFormat::Rgba8UnormSrgb);
+    let mut samples = Vec::new();
+    for (offset, blue, norm) in [(0.25, 255, 255), (0.75, 255, 255), (0.75, 0, 255), (0.75, 255, 128)] {
+        let tmp = tempfile::tempdir().unwrap();
+        let assets = tmp.path().join("assets");
+        std::fs::create_dir(&assets).unwrap();
+        let mut light = image::RgbaImage::new(2, 1);
+        light.put_pixel(0, 0, image::Rgba([64, 0, 0, 255]));
+        light.put_pixel(1, 0, image::Rgba([0, 64, 0, 255]));
+        light.save(assets.join("radiance.png")).unwrap();
+        let dir = format!("dir-{blue}-{norm}.png");
+        image::RgbaImage::from_pixel(2, 1, image::Rgba([128,128,blue,norm])).save(assets.join(&dir)).unwrap();
+        let mat = serde_json::json!({"metallic_factor":0,"roughness_factor":1,
+            "occlusion_texture":"radiance.png","metallic_roughness_texture":dir,
+            "effect":{"kind":"directional_lightmap","scale":[0,0],"offset":[offset,0.5]}});
+        let project = serde_json::json!({"schema":2,"name":"lightmap","content_revision":"1","canvas":[32,32],
+            "assets":"assets","clients":[{"name":"game","adapter":"crysirror-script-v1","game":"test","systems":{
+            "entities":[{"id":1,"name":"surface","geometry":{"kind":"triangles","vertices":[[-2,-2,0],[2,-2,0],[2,2,0],[-2,2,0]],
+            "indices":[0,1,2,0,2,3]},"material":mat}]}}]});
+        let path = tmp.path().join("project.json");
+        std::fs::write(&path, serde_json::to_vec(&project).unwrap()).unwrap();
+        let mut rt = Runtime::load(&path, &tmp.path().join("state")).unwrap();
+        let setup = serde_json::from_value(serde_json::json!({"world":[
+            {"op":"set_camera","camera":{"eye":[0,0,5],"target":[0,0,0],"up":[0,1,0],"fov_y_degrees":50,"near":0.1,"far":100}},
+            {"op":"set_environment","environment":{"sun":null,"intensity":0,"show_sky":false,
+                "bloom":0,"ambient_occlusion":0,"temporal_aa":false,"tonemap":"none"}}
+        ]})).unwrap();
+        rt.host.engine.submit(rt.client_id("game").unwrap(), &setup).unwrap();
+        rt.tick(0, InputFrame::default()).unwrap();
+        renderer.set_pbr_scene(rt.render_pbr().unwrap()).unwrap();
+        let img = renderer.capture(&rt.host.scene, &mut rt.assets, rt.project.canvas, rt.project.background).unwrap();
+        samples.push(img.get_pixel(16, 16).0);
+    }
+    let [red, green, away, double] = samples[..] else { unreachable!() };
+    assert!(red[0] > 90 && red[1] < 5 && green[1] > 90 && green[0] < 5, "{samples:?}");
+    assert!(away[1] < 5 && double[1] > green[1] + 35, "{samples:?}");
+}
+
+#[test]
+#[ignore = "requires a real wgpu adapter; execute explicitly"]
+fn toon_shadow_tone_override_blends_after_lighting() {
+    let gpu = Arc::new(pollster::block_on(Gpu::request(&wgpu::Instance::default(), None)).unwrap());
+    let mut renderer = Renderer::new(gpu, wgpu::TextureFormat::Rgba8UnormSrgb);
+    let mut samples = Vec::new();
+    for (weight, gate, coverage) in [(0.0, 0, 0), (0.25, 0, 0), (1.0, 0, 0), (1.0, 255, 128), (1.0, 0, 255), (1.0, 255, 255)] {
+        let tmp = tempfile::tempdir().unwrap();
+        let assets = tmp.path().join("assets");
+        std::fs::create_dir(&assets).unwrap();
+        // Zero red across the ramp selects the fully shaded side.
+        image::RgbaImage::from_pixel(8, 8, image::Rgba([0, 0, 0, 255]))
+            .save(assets.join("ramp.png")).unwrap();
+        let line = format!("line-{gate}-{coverage}.png");
+        image::RgbaImage::from_pixel(8, 8, image::Rgba([gate,coverage,0,255]))
+            .save(assets.join(&line)).unwrap();
+        let material = serde_json::json!({"toon":{
+            "surface_line_texture":line,"line_color":[1,0,0,1],
+            "lookup_texture":"ramp.png","shade_from_base":true,
+            "shadow_light":[1,1,1,1],"ambient_scale":0,
+            "shadow_tone_override":[0,1,0,weight]
+        }});
+        let project = serde_json::json!({
+            "schema":2,"name":"toon-override","content_revision":"1","canvas":[32,32],
+            "assets":"assets","clients":[{"name":"game","adapter":"crysirror-script-v1",
+            "game":"toon","systems":{"entities":[{"id":1,"name":"face",
+            "geometry":{"kind":"triangles","vertices":[[-2,-2,0],[2,-2,0],[2,2,0],[-2,2,0]],
+                        "indices":[0,1,2,0,2,3]},"material":material}]}}]
+        });
+        let path = tmp.path().join("project.json");
+        std::fs::write(&path, serde_json::to_vec(&project).unwrap()).unwrap();
+        let mut rt = Runtime::load(&path, &tmp.path().join("state")).unwrap();
+        let setup = serde_json::from_value(serde_json::json!({"world":[
+            {"op":"set_camera","camera":{"eye":[0,0,5],"target":[0,0,0],"up":[0,1,0],
+                                        "fov_y_degrees":50,"near":0.1,"far":100}},
+            {"op":"set_environment","environment":{"toon_light":{"direction":[0,0,1],
+                "color":[1,1,1],"intensity":1,"shadows":false},"sun":null,"intensity":0,
+                "show_sky":false,"bloom":0,"ambient_occlusion":0,"temporal_aa":false,"tonemap":"none"}}
+        ]})).unwrap();
+        rt.host.engine.submit(rt.client_id("game").unwrap(), &setup).unwrap();
+        rt.tick(0, InputFrame::default()).unwrap();
+        renderer.set_pbr_scene(rt.render_pbr().unwrap()).unwrap();
+        let img = renderer.capture(&rt.host.scene, &mut rt.assets, rt.project.canvas, rt.project.background).unwrap();
+        samples.push(img.get_pixel(16, 16).0);
+    }
+    let [original, quarter, green, half_line, gated, full_line] = samples.as_slice() else { unreachable!() };
+    assert!(original[0] > 40 && original[2] > 40, "{samples:?}");
+    assert!(green[1] > 245 && green[0] < 5 && green[2] < 5, "{samples:?}");
+    let linear = |c: u8| {
+        let x = f32::from(c) / 255.;
+        if x <= 0.04045 { x / 12.92 } else { ((x + 0.055) / 1.055).powf(2.4) }
+    };
+    assert_eq!(gated, green);
+    assert!((linear(full_line[0]) - 0.95).abs() < 0.015 && full_line[1] < 5, "{samples:?}");
+    for c in 0..3 {
+        let expected_line = linear(green[c]) * (127. / 255.) + linear(full_line[c]) * (128. / 255.);
+        assert!((linear(half_line[c]) - expected_line).abs() < 0.015, "{samples:?}");
+        let expected = 0.75 * linear(original[c]) + 0.25 * linear(green[c]);
+        assert!((linear(quarter[c]) - expected).abs() < 0.015, "{samples:?}");
+    }
+}
+
+#[test]
+#[ignore = "requires a real wgpu adapter; execute explicitly"]
 fn engine_material_alpha_sort_depth_opacity_and_unlit_reach_pixels() {
     let gpu = Arc::new(pollster::block_on(Gpu::request(&wgpu::Instance::default(), None)).unwrap());
     let mut renderer = Renderer::new(gpu, wgpu::TextureFormat::Rgba8UnormSrgb);
     let quad = serde_json::json!({"kind":"triangles","vertices":[[-2,-2,0],[2,-2,0],[2,2,0],[-2,2,0]],"indices":[0,1,2,0,2,3]});
     for (name, mode, opacity, channel, front, expected) in [
         ("sorted", "blend", false, false, false, [0.5, 0.25, 0.25]),
+        ("depth writer before normal transparency", "blend", false, false, false, [0.5, 0.5, 0.]),
+        ("near queue first", "blend", false, false, false, [0.5, 0.5, 0.]),
+        ("far queue first", "blend", false, false, false, [0.5, 0.25, 0.25]),
+        ("early writer off", "blend", false, false, false, [0.25, 0.25, 0.5]),
+        ("late writer on", "blend", false, false, false, [0.5, 0.5, 0.]),
+        ("late writer off", "blend", false, false, false, [0.25, 0.25, 0.5]),
+        ("cull front", "blend", false, false, false, [0., 0.5, 0.5]),
         (
             "premultiplied",
             "premultiplied",
@@ -508,11 +747,30 @@ fn engine_material_alpha_sort_depth_opacity_and_unlit_reach_pixels() {
         image::RgbaImage::from_pixel(1, 1, image::Rgba([128, 128, 128, 255]))
             .save(tmp.path().join("assets/opacity.png"))
             .unwrap();
-        let near = serde_json::json!({"base_color_factor":[1,0,0,0.5],"alpha_mode":mode,"unlit":true,"opacity_texture":if opacity{Some("opacity.png")}else{None},"opacity_from_alpha":channel,"depth_fade":if name=="depth fade"{4.0}else{0.0}});
+        let mut near = serde_json::json!({"base_color_factor":[1,0,0,0.5],"alpha_mode":mode,"unlit":true,"opacity_texture":if opacity{Some("opacity.png")}else{None},"opacity_from_alpha":channel,"depth_fade":if name=="depth fade"{4.0}else{0.0}});
+        let mut far = serde_json::json!({"base_color_factor":[0,0,1,0.5],"alpha_mode":"blend","unlit":true});
+        match name {
+            "depth writer before normal transparency" => near["raster_queue"] = serde_json::json!({"order":2470,"depth_write":true}),
+            "early writer off" | "late writer on" | "late writer off" => {
+                let order = if name == "early writer off" {2465} else {3005};
+                near["raster_queue"] = serde_json::json!({"order":order,"depth_write":name == "late writer on"});
+                far["raster_queue"] = serde_json::json!({"order":order+1,"depth_write":true});
+            }
+            "cull front" => {
+                near["double_sided"] = true.into();
+                near["raster_queue"] = serde_json::json!({"order":2470,"depth_write":true,"cull_front":true});
+            }
+            "near queue first" | "far queue first" => {
+                let near_first = name == "near queue first";
+                near["raster_queue"] = serde_json::json!({"order":if near_first {2470} else {2471},"depth_write":true});
+                far["raster_queue"] = serde_json::json!({"order":if near_first {2471} else {2470},"depth_write":true});
+            }
+            _ => {}
+        }
         let p = serde_json::json!({"schema":2,"name":"material-pixels","content_revision":"1","canvas":[64,64],"assets":"assets","clients":[{"name":"game","adapter":"crysirror-script-v1","game":"materials","systems":{"entities":[
          {"id":1,"name":"background","geometry":quad,"transform":{"translation":[0,0,if front{2.}else{-1.}]},"material":{"base_color_factor":[0,1,0,1],"unlit":true}},
          {"id":2,"name":"near-red-inserted-first","geometry":quad,"transform":{"translation":[0,0,1]},"material":near},
-         {"id":3,"name":"far-blue-inserted-last","geometry":quad,"material":{"base_color_factor":[0,0,1,0.5],"alpha_mode":"blend","unlit":true}},
+         {"id":3,"name":"far-blue-inserted-last","geometry":quad,"material":far},
          {"id":4,"name":"invisible-mask-in-front","geometry":quad,"transform":{"translation":[0,0,3]},"material":{"base_color_factor":[1,1,1,0.1],"alpha_mode":"mask","alpha_cutoff":0.5,"unlit":true}}
         ]}}]});
         std::fs::write(
@@ -1375,6 +1633,155 @@ fn write_sphere_gltf(dir: &Path, rings: u32, segments: u32) -> usize {
         "nodes":[{"mesh":0}],"scenes":[{"nodes":[0]}],"scene":0});
     std::fs::write(dir.join("sphere.gltf"), serde_json::to_vec(&g).unwrap()).unwrap();
     idx.len() / 3
+}
+
+#[test]
+#[ignore = "requires a real wgpu adapter; execute explicitly"]
+fn cloth_shadow_uses_separate_cutoff_and_invalidates_distance_casters() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    let assets = dir.join("assets");
+    std::fs::create_dir(&assets).unwrap();
+    image::RgbaImage::from_pixel(8, 8, image::Rgba([0u8, 0, 0, 255])).save(assets.join("ramp.png")).unwrap();
+    image::RgbaImage::from_pixel(4, 4, image::Rgba([255u8, 0, 255, 255])).save(assets.join("mask.png")).unwrap();
+    let gpu = Arc::new(pollster::block_on(Gpu::request(&wgpu::Instance::default(), None)).unwrap());
+    let mut renderer = Renderer::new(gpu, wgpu::TextureFormat::Rgba8UnormSrgb);
+    let mut shots = Vec::new();
+    for (name, cutoff, virtual_pages) in [("clipped", 0.75, false), ("caster", 0.25, false), ("virtual", 0.25, true)] {
+        let cloth = serde_json::json!({"alpha_mode":"blend","raster_queue":{"order":2470,"depth_write":true},"alpha_cutoff":cutoff,
+            "double_sided":true,"toon":{"lookup_texture":"ramp.png","surface_line_texture":"mask.png",
+            "shade_from_base":true,"shadow_light":[1,1,1,1],"ambient_scale":0,
+            "shadow_tone_override":[1,0,0,1],"line_model":{"kind":"cloth","width":1,"edge_alpha":1,"opacity":0.5,
+            "alpha_dither":0,"mip_bias":0,"clip":0.01,"clip_force":0}}});
+        let rect = serde_json::json!({"kind":"triangles","vertices":[[-10,-6,-2],[10,-6,-2],[10,6,-2],[-10,6,-2]],"indices":[0,1,2,0,2,3]});
+        let project = serde_json::json!({"schema":2,"name":name,"content_revision":name,"canvas":[256,192],"assets":"assets",
+            "clients":[{"name":"game","adapter":"crysirror-script-v1","game":name,"systems":{"entities":[
+            {"id":1,"name":"wall","geometry":rect,"material":{"base_color_factor":[0,0.6,0,1],"metallic_factor":0,"roughness_factor":1}},
+            {"id":2,"name":"cloth","geometry":{"kind":"cube"},"transform":{"scale":[1.5,1.5,1.5]},"material":cloth}]}}]});
+        let path = dir.join(format!("{name}.json"));
+        std::fs::write(&path,serde_json::to_vec(&project).unwrap()).unwrap();
+        let mut rt = Runtime::load(&path,&dir.join(name)).unwrap();
+        let client = rt.client_id("game").unwrap();
+        let mut env = serde_json::json!({"sun":{"direction":[0.8,0,-0.6],"intensity":3,"shadows":true},"show_sky":false,
+            "intensity":0.15,"bloom":0,"ambient_occlusion":0,"temporal_aa":false,"tonemap":"none"});
+        if virtual_pages {
+            env["virtual_shadows"] = serde_json::json!({"texel_size":0.02,"levels":6});
+        }
+        rt.host.engine.submit(client,&serde_json::from_value(serde_json::json!({"world":[{"op":"set_environment","environment":env}]})).unwrap()).unwrap();
+        let mut shot = |renderer: &mut Renderer, eye_z: f32, change_material: bool| {
+            if change_material {
+                let mut changed = cloth.clone();
+                changed["alpha_cutoff"] = 0.75.into();
+                let command = serde_json::from_value(serde_json::json!({"world":[{"op":"set_material","id":2,"material":changed}]})).unwrap();
+                rt.host.engine.submit(client, &command).unwrap();
+            }
+            let commands = serde_json::from_value(serde_json::json!({"world":[{"op":"set_camera","camera":{
+                "eye":[0,0,eye_z],"target":[0,0,0],"up":[0,1,0],"fov_y_degrees":50,"near":0.05,"far":100}}]})).unwrap();
+            rt.host.engine.submit(client,&commands).unwrap();
+            rt.tick(0,InputFrame::default()).unwrap();
+            renderer.set_pbr_scene(rt.render_pbr().unwrap()).unwrap();
+            renderer.capture(&rt.host.scene,&mut rt.assets,rt.project.canvas,rt.project.background).unwrap()
+        };
+        let image = shot(&mut renderer,6.,false);
+        if virtual_pages {
+            shot(&mut renderer,6.,false);
+            let stable = renderer.pbr().unwrap().vsm_stats();
+            assert!(stable.resident > 0 && stable.rendered == 0, "{stable:?}");
+            shot(&mut renderer,6.25,false);
+            let moved = renderer.pbr().unwrap().vsm_stats();
+            assert!(moved.total_dirtied > stable.total_dirtied, "{stable:?} to {moved:?}");
+            shot(&mut renderer,12.,false);
+            let far = renderer.pbr().unwrap().vsm_stats();
+            shot(&mut renderer,12.25,false);
+            let further = renderer.pbr().unwrap().vsm_stats();
+            assert_eq!(far.total_dirtied,further.total_dirtied);
+            shot(&mut renderer,12.25,true);
+            assert!(renderer.pbr().unwrap().vsm_stats().total_dirtied > further.total_dirtied);
+        } else { shots.push(image); }
+    }
+    let [clipped, caster] = shots.as_slice() else { unreachable!() };
+    // Both materials remain visible at 50% opacity. Only the independent
+    // caster cutoff changes the unoccluded wall to the right of the cube.
+    assert!(caster.get_pixel(128,96)[0] > 128 && clipped.get_pixel(128,96)[0] > 128);
+    let mut shadow_pixels = 0;
+    for y in 30..162 {
+        for x in 164..248 {
+            if i32::from(clipped.get_pixel(x,y)[1]) - i32::from(caster.get_pixel(x,y)[1]) > 30 {
+                shadow_pixels += 1;
+            }
+        }
+    }
+    eprintln!("blended cloth shadow changed {shadow_pixels} receiver pixels");
+    assert!(shadow_pixels > 100);
+}
+
+#[test]
+#[ignore = "requires a real wgpu adapter; execute explicitly"]
+fn model_dither_changes_colour_depth_and_shadow_coverage() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    let assets = dir.join("assets");
+    std::fs::create_dir(&assets).unwrap();
+    write_sphere_gltf(&assets, 12, 24);
+    let project = serde_json::json!({"schema":2,"name":"dither","content_revision":"1","canvas":[256,192],"assets":"assets",
+        "clients":[{"name":"game","adapter":"crysirror-script-v1","game":"dither","systems":{"entities":[
+        {"id":1,"name":"wall","geometry":{"kind":"triangles","vertices":[[-10,-6,-2],[10,-6,-2],[10,6,-2],[-10,6,-2]],"indices":[0,1,2,0,2,3]},
+        "material":{"base_color_factor":[0,0.6,0,1],"metallic_factor":0,"roughness_factor":1}},
+        {"id":2,"name":"actor","geometry":{"kind":"scene","asset":"sphere.gltf"},
+        "material":{"unlit":true,"base_color_factor":[1,0,0,1]}}]}}]});
+    let path = dir.join("project.json");
+    std::fs::write(&path, serde_json::to_vec(&project).unwrap()).unwrap();
+    let mut rt = Runtime::load(&path, &dir.join("state")).unwrap();
+    let setup = serde_json::from_value(serde_json::json!({"world":[
+        {"op":"set_camera","camera":{"eye":[0,0,6],"target":[0,0,0],"up":[0,1,0],"fov_y_degrees":50,"near":0.05,"far":40}},
+        {"op":"set_environment","environment":{"sun":{"direction":[0.8,0,-0.6],"intensity":3,"shadows":true},
+        "show_sky":false,"intensity":0.15,"bloom":0,"ambient_occlusion":0,"temporal_aa":false,"tonemap":"none"}}
+    ]})).unwrap();
+    let client = rt.client_id("game").unwrap();
+    rt.host.engine.submit(client, &setup).unwrap();
+    let gpu = Arc::new(pollster::block_on(Gpu::request(&wgpu::Instance::default(), None)).unwrap());
+    let mut renderer = Renderer::new(gpu, wgpu::TextureFormat::Rgba8UnormSrgb);
+    let mut shots = Vec::new();
+    for (frame, dither) in [1., 0.5, 0.].into_iter().enumerate() {
+        let batch = serde_json::from_value(serde_json::json!({"world":[{"op":"set_animation","id":2,"animation":{"dither":dither}}]})).unwrap();
+        rt.host.engine.submit(client, &batch).unwrap();
+        rt.tick(frame as u64 * 16, InputFrame::default()).unwrap();
+        renderer.set_pbr_scene(rt.render_pbr().unwrap()).unwrap();
+        shots.push(renderer.capture(&rt.host.scene, &mut rt.assets, rt.project.canvas, rt.project.background).unwrap());
+    }
+    let [solid, half, gone] = shots.as_slice() else { unreachable!() };
+    let bayer = [1,9,3,11,13,5,15,7,4,12,2,10,16,8,14,6];
+    let mut covered = 0;
+    for y in 83..109 {
+        for x in 115..141 {
+            assert!(solid.get_pixel(x,y)[0] > 245 && gone.get_pixel(x,y)[1] > 100);
+            let pixel = half.get_pixel(x,y);
+            if bayer[((191-y)%4*4 + x%4) as usize] <= 8 {
+                assert!(pixel[0] > 245 && pixel[1] < 10, "actor at ({x},{y}): {pixel:?}");
+                covered += 1;
+            } else {
+                // The lit green wall includes a white dielectric specular term.
+                let reference = gone.get_pixel(x,y);
+                assert!(pixel[1] > 100 && pixel[0].abs_diff(reference[0]) < 3 && pixel[1].abs_diff(reference[1]) < 3,
+                    "wall at ({x},{y}): {pixel:?}, uncovered {reference:?}");
+            }
+        }
+    }
+    assert_eq!(covered, 338);
+    // Behind the actor, place a lit wall. Its cast shadow lies to the
+    // right of the silhouette. PCF averages the half-covered shadow texels.
+    let mut count = 0;
+    let mut energy = [0u64; 3];
+    for y in 30..162 {
+        for x in 164..248 {
+            let [a, b, c] = [solid, half, gone].map(|im| i32::from(im.get_pixel(x,y)[1]));
+            if c - a > 30 {
+                count += 1;
+                for (dst, value) in energy.iter_mut().zip([a,b,c]) { *dst += value as u64; }
+            }
+        }
+    }
+    assert!(count > 100 && energy[0] < energy[1] && energy[1] < energy[2], "{count} shadow pixels, {energy:?}");
 }
 
 #[test]

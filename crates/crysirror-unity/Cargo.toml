@@ -1,0 +1,29 @@
+[package]
+name = "crysirror-unity"
+version = "0.1.0"
+edition = "2024"
+license = "MPL-2.0"
+publish = false
+description = "Bounded readers for Unity serialized files (format 9 and 22 with type trees) and UnityFS bundles as engine data"
+autoexamples = false
+autobenches = false
+
+[lib]
+doctest = false
+
+[dependencies]
+anyhow.workspace = true
+crysirror-core.workspace = true
+crysirror-image.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+crysirror-asset.workspace = true
+crysirror-scene.workspace = true
+crysirror-vfx.workspace = true
+glam.workspace = true
+lz4_flex = { version = "=0.11.6", default-features = false, features = ["safe-decode"] }
+lzma-rs = "0.3"
+crysirror-dotnet.workspace = true
+
+[dev-dependencies]
+crysirror-dotnet.workspace = true

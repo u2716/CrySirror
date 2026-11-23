@@ -58,6 +58,12 @@ members = [
     "crates/crysirror-avg32",
     "crates/crysirror-tjs2",
     "crates/crysirror-kag",
+    "crates/crysirror-cm3d2",
+    "crates/crysirror-naughty-dog",
+    "crates/crysirror-exhibit",
+    "crates/crysirror-amanatsu",
+    "crates/crysirror-unity",
+    "crates/crysirror-dotnet",
     "crates/crysirror-rfvp-vm",
     "crates/crysirror-rfvp-native",
     "crates/crysirror-rfvp-integrated",
@@ -71,10 +77,12 @@ members = [
     "crates/crysirror-softpal-kira",
     "crates/crysirror-circus",
     "crates/crysirror-catsystem2",
+    "crates/crysirror-cmvs",
     "crates/crysirror-system4",
     "crates/crysirror-system-nnn",
     "crates/crysirror-majiro",
     "crates/crysirror-qlie",
+    "crates/crysirror-minori",
     "crates/crysirror-sugarpot",
     "crates/crysirror-nsystem",
     "crates/crysirror-n2system",
@@ -92,7 +100,7 @@ default-members = ["crates/crysirror-desktop"]
 
 [workspace.package]
 version = "0.2.0"
-edition = "2021"
+edition = "2024"
 license = "MPL-2.0"
 license-file = "LICENSE"
 # Storage leases require Rust 1.89; the workspace is tested on 1.98.1.
@@ -101,6 +109,7 @@ rust-version = "1.95"
 [workspace.dependencies]
 crysirror-willplus = { path = "crates/crysirror-willplus" }
 crysirror-lua = { path = "crates/crysirror-lua" }
+crysirror-minori = { path = "crates/crysirror-minori" }
 crysirror-sugarpot = { path = "crates/crysirror-sugarpot" }
 crysirror-nsystem = { path = "crates/crysirror-nsystem" }
 crysirror-n2system = { path = "crates/crysirror-n2system" }
@@ -132,6 +141,7 @@ crysirror-scene = { path = "crates/crysirror-scene" }
 crysirror-console = { path = "crates/crysirror-console" }
 crysirror-capfs = { path = "crates/crysirror-capfs" }
 crysirror-launch = { path = "crates/crysirror-launch" }
+crysirror-cmvs = { path = "crates/crysirror-cmvs" }
 crysirror-wgpu-deko3d = { path = "crates/crysirror-wgpu-deko3d" }
 crysirror-wgpu-gxm = { path = "crates/crysirror-wgpu-gxm" }
 crysirror-vita-io = { path = "crates/crysirror-vita-io" }
@@ -158,6 +168,11 @@ crysirror-avg32 = { path = "crates/crysirror-avg32" }
 crysirror-krkr = { path = "crates/crysirror-krkr" }
 crysirror-tjs2 = { path = "crates/crysirror-tjs2" }
 crysirror-kag = { path = "crates/crysirror-kag" }
+crysirror-cm3d2 = { path = "crates/crysirror-cm3d2" }
+crysirror-exhibit = { path = "crates/crysirror-exhibit" }
+crysirror-amanatsu = { path = "crates/crysirror-amanatsu" }
+crysirror-unity = { path = "crates/crysirror-unity" }
+crysirror-dotnet = { path = "crates/crysirror-dotnet" }
 crysirror-rfvp-vm = { path = "crates/crysirror-rfvp-vm", default-features = false, features = ["no_std"] }
 crysirror-author = { path = "crates/crysirror-author" }
 serde = { version = "1.0", features = ["derive", "rc"] }

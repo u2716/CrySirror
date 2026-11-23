@@ -15,7 +15,7 @@ pub struct Cursor {
     pub hide: bool,
 }
 
-extern "C" {
+unsafe extern "C" {
     /// Call with an initialized vita2d context and a live SoftPAL scene-mode
     /// host, on its owner thread. A false return is an output failure.
     pub fn sena_vita_scene_render(host: *mut c_void, cursor: *const Cursor) -> bool;

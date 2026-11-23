@@ -1,0 +1,27 @@
+# ExHibit technical debt
+
+## SATD-exhibit-rld
+
+The [ABI inventory](NATIVE_ABI.md) records original dispatch separately from implemented operand forms and static script usage. The v1 interpreter has 58 sample opcode IDs with no handler and additional unsupported forms in its handled IDs. The original primary native-call dispatcher has 23 IDs. In the 2011 v3 sample, 97 distinct opcode IDs occur. Its action dispatcher has different handlers and returns. Later v3 packages still lack ordinary script initialization and compatible dispatch.
+
+To close, recover the remaining native ABI by profile, implement default initialization, resource definitions, block entry, title and text interaction, effects, audio, script transfer/return behavior, original saves and persisted system registers. Check feature-equivalent paths in real games, including title input, dialogue, skip/auto, timed movie removal, save/reload and intermediate CG pixels. Unrecognized instructions, operand layouts and resource formats must surface at their point of use.
+
+| Date | Change | Remaining evidence |
+| --- | --- | --- |
+| 2026-11-23 | Added config detection, scoped async RLD loading, three v1 command forms and shared GYU resource support. Inspected four installations. | Final link, real startup frames, and all remaining native behaviors above. |
+| 2026-11-23 | Added v1 register, block jump/call/return, movie and CG-crop paths. Moved register semantics, condition decoding and movie channel state from the main dispatcher into dedicated modules. | v1 block-entry persistence, full user input, title, other native calls and the static-only forms in the ABI inventory. |
+| 2026-11-23 | Added the 2011 v3 initializer and per-profile dispatch. Added numeric arithmetic and five action handlers. Independently walked 379 decoded scenarios. | First v3 block command and RNF initialization, remaining action methods, both later-volume initializers and final linked execution. |
+| 2026-11-23 | Implemented v1 block state, register initialization, environment definitions, audio commands and the read-only title slot query. Added v3 branch, environment and assignment forms. Fixed the neutral-language 2011 initialization resource. | Linked playback stops in v1 enterClip (title.rld+0x197) and v3 block checkpoint (start.rld+0x114). Original controller callbacks, definition prelude, audio variants, full saves and later initialization remain outstanding. |
+| 2026-11-23 | Implemented the four interpolation modes for unblurred v1 CG clip animation and the timed title-logo command. Release replay advances to title.rld+0x202 and records both the intermediate CG UVs and live logo layer. | Native billboard 0x5e, select items, the remaining clip flags and image sampling parity are open. |
+| 2026-11-23 | Bound the v1 path billboards for effects 255 and 519, and prepared the extended kind-1 select item by copying its idle atlas cell into its parent. Two consecutive copies retain parent alpha and prior controls in a release pixel test. | Other billboard types, keyed items, focus/hover/click, control disable counts, and the title fade/move channels remain open. |
+| 2026-11-23 | Verified direct colour-index copies between differently paletted 8-bit select bitmaps. The shared GYU worker expands the atlas indices with the parent palette. | Final linked title reaches native 29 at title.rld+0xfff. Disable-count transitions, smaller palettes, colour keys, other control types and event callbacks remain open. |
+| 2026-11-23 | Implemented v1 native 29 for attached visible image buttons, fixed-list billboard move/fade channels, same-slot or complementary input-block counts and completed-clip release at its remembered destination. The standard player moves the actual 454 × 100 menu image to (338,460) and reveals the four title layers. | Select-event execution (0x5c), hover, pointer and keyboard input, character attachment, active-clip replacement, alternative movement programs and overlapping lanes. See the dated release evidence. |
+
+## SATD-exhibit-resources
+
+The shared [voice bank](../crysirror-resource/src/exhibit_voice.rs) indexes a single companion volume. The [loose voice decoder](../crysirror-resource/src/exhibit_pcm.rs) produces stereo WAV from admitted PCM and IMA pages. GYU has its own [decoder debt](../crysirror-image/SATD.md#satd-image-exhibit-gyu). Complete DLT delta-frame versions 0x0101, 0x0102 and 0x0103 (17, 10 and 12 installed files respectively), RNF configuration actions, native voice lookup/playback, lip synchronization and resource ownership on script/scene changes. Check loose voice page mode 3 and additional tail variants against original output before enabling them. Inventory remaining sample resource kinds and native load paths. Close with decoded pixel and audio comparisons, invalid-resource recovery, scoped playback and per-profile player evidence.
+
+| Date | Change | Remaining evidence |
+| --- | --- | --- |
+| 2026-11-23 | Added an AiFS sparse index and slice reader. Derived the v1 loose page codec from the original playback implementation. Checked all sample v1 voice page boundaries and v3 nonempty volume ranges. | Rust test execution, comparison with native PCM and end-to-end dialogue playback. DLT, RNF and other profiles above. |
+| 2026-11-23 | Routed the v1 loose voice selector through the shared scoped decoder and resident-audio jobs. | Native PCM comparison, in-dialogue output, lip timing, DLT/RNF and v3 voice commands remain open. |

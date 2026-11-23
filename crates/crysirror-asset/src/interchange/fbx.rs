@@ -1150,16 +1150,19 @@ pub fn convert(
                 node,
                 times: secs.clone(),
                 values: glb::Channel::Translation(tr),
+                tangents: None,
             });
             tracks.push(glb::Track {
                 node,
                 times: secs.clone(),
                 values: glb::Channel::Rotation(rot),
+                tangents: None,
             });
             tracks.push(glb::Track {
                 node,
                 times: secs,
                 values: glb::Channel::Scale(sc),
+                tangents: None,
             });
         }
         if !tracks.is_empty() {

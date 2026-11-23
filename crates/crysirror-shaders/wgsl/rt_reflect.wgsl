@@ -86,7 +86,7 @@ fn shade(hit:RayIntersection,origin:vec3<f32>,direction:vec3<f32>,reuse:bool)->v
     var sun=0.0;
     if nl>0.0 {
         sun=nl;
-        if params.sun_color.w>0.5 {sun*=visible(point+n*0.002,l,1e20);}
+        if params.sun_color.w>0.0 {sun*=mix(1.0,visible(point+n*0.002,l,1e20),params.sun_color.w);}
     }
     let irradiance=params.sun_color.rgb*params.sun_dir.w*sun+sh_irradiance(n)*params.env.x
         +bounce_local(point,n,u32(params.reflection.w));

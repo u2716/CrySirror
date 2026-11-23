@@ -768,6 +768,31 @@ fn npk2_aes_cbc_client_key_and_segment_fixture() {
 }
 
 #[test]
+fn cpz3_reads_flat_members_and_checks_ciphertext() {
+    let id = "purple-software/cpz3";
+    let mut cx = DecodeContext::new(ClientId(77));
+    let keys = MemoryKeyProvider::default();
+    keys.insert(cx.client, "fixture-table", (0..64).collect()).unwrap();
+    cx.keys = Arc::new(keys);
+    cx.parameters.insert(id.into(), serde_json::json!({"key_id":"fixture-table"}));
+    // Independent fixture with a two-byte index tail and a three-byte member tail.
+    let mut bytes = vec![
+        67, 80, 90, 51, 54, 79, 156, 94, 9, 237, 42, 243, 33, 66, 35, 15,
+        178, 70, 102, 30, 92, 81, 246, 86, 88, 117, 201, 90, 84, 9, 194, 94,
+        80, 13, 206, 66, 92, 218, 126, 209, 164, 139, 25, 42, 214, 235, 6, 72,
+        135, 22, 125, 143, 79, 191, 142, 54, 202,
+    ];
+    assert_eq!(extract(&cx, id, bytes.clone()), [("a.ps2".into(), b"payload".to_vec())]);
+    let mut formats = FormatRegistry::default();
+    formats.register(crysirror_formats_arc::legacy_archive(id).unwrap()).unwrap();
+    *bytes.last_mut().unwrap() ^= 1;
+    let (_, archive) = formats.open(memory(bytes.clone()), Some(id), &cx).unwrap();
+    assert!(archive.open(archive.entries()[0].id, &cx).is_err());
+    bytes[20] ^= 1;
+    assert!(formats.open(memory(bytes), Some(id), &cx).is_err());
+}
+
+#[test]
 fn cpz5_client_plugin_fixture() {
     let mut cx = DecodeContext::new(ClientId(77));
     let keys = MemoryKeyProvider::default();

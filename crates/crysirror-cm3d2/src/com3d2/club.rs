@@ -1,0 +1,154 @@
+// SPDX-License-Identifier: MPL-2.0
+//! The night club entrance embedded in the retail SceneTitle.
+use super::*;
+use crate::unity_scene::{ObjectKey, UnityData, UnityFiles};
+use crysirror_asset::pbr::{AlphaMode, PbrMaterial};
+use crysirror_unity::{
+    class_id as c,
+    classes::{Material, Mesh},
+    gltf::GlbBuilder,
+    reader::Reader,
+};
+use std::collections::HashMap;
+
+fn material(
+    unity: &mut UnityData,
+    op: &mut Opener,
+    key: &ObjectKey,
+    glb: &mut GlbBuilder,
+) -> Result<usize> {
+    let (_, bytes) = unity.bytes(op, key)?;
+    let m = Material::read_56(&bytes)?;
+    let shader = unity
+        .resolve(op, &key.file, m.shader)?
+        .context("club material shader")?;
+    let (_, sb) = unity.bytes(op, &shader)?;
+    let shader = Reader::new(&sb).string()?;
+    let mut out = PbrMaterial::default();
+    if let Some(env) = m.texture("_MainTex") {
+        let tk = unity
+            .resolve(op, &key.file, env.texture)?
+            .context("club base texture")?;
+        out.base_color_texture = Some(glb.image(&format!("{}#{}", tk.file, tk.path_id), || {
+            let (_, bytes) = unity.bytes(op, &tk)?;
+            let img = crysirror_unity::texture::decode_56(&bytes, |p| {
+                ensure!(
+                    !p.contains(['/', '\\']) && p.ends_with(".resS"),
+                    "invalid sibling texture stream"
+                );
+                op.open(p)
+            })?;
+            Ok((crysirror_image::encode_png(&img)?, "image/png"))
+        })?);
+        out.uv_scale = env.scale;
+        out.uv_offset = [env.offset[0], 1. - env.scale[1] - env.offset[1]];
+    }
+    out.base_color_factor = m.color("_Color").unwrap_or([1.; 4]);
+    if shader.contains("Cutout") {
+        out.alpha_mode = AlphaMode::Mask;
+        out.alpha_cutoff = m.float("_Cutoff").unwrap_or(0.5);
+    } else if shader.ends_with("_Trans") {
+        out.alpha_mode = AlphaMode::Blend;
+    }
+    Ok(glb.material(&m.name, out))
+}
+
+pub(super) fn model(
+    unity: &mut UnityData,
+    op: &mut Opener,
+    file: &str,
+) -> Result<(Vec<u8>, usize)> {
+    let sf = unity.file(op, file)?;
+    let mut root = None;
+    for o in sf.objects.iter().filter(|o| o.class_id == c::GAME_OBJECT) {
+        let b = sf.bytes(o)?;
+        let mut r = Reader::new(&b);
+        let n = r.count(12)?;
+        if n == 0 {
+            continue;
+        }
+        let tr = r.pptr64()?;
+        r.take((n - 1) * 12 + 4)?;
+        if r.string()? == "EmpireClub_Rotary_Night" {
+            root = Some(tr.path_id);
+            break;
+        }
+    }
+    let mut stack = vec![(root.context("title club root")?, None)];
+    let mut glb = GlbBuilder::new("CrySirror COM3D2");
+    let mut materials = HashMap::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut count = 0;
+    while let Some((transform, parent)) = stack.pop() {
+        ensure!(seen.insert(transform), "cycle in title hierarchy");
+        let b = sf.bytes_of(transform)?;
+        let mut r = Reader::new(&b);
+        let go = r.pptr64()?.path_id;
+        let rot = r.f32s()?;
+        let pos = r.f32s()?;
+        let scale = r.f32s()?;
+        let b = sf.bytes_of(go)?;
+        let mut g = Reader::new(&b);
+        let mut filter = None;
+        let mut renderer = None;
+        for _ in 0..g.count(12)? {
+            let k = g.pptr64()?.path_id;
+            let o = sf.object(k).context("title component")?;
+            match o.class_id {
+                c::MESH_FILTER => filter = Some(o),
+                c::MESH_RENDERER => renderer = Some(o),
+                _ => {}
+            }
+        }
+        g.i32()?;
+        let name = g.string()?;
+        g.u16()?;
+        if !g.bool()? {
+            continue;
+        }
+        let index = glb.node(&name, parent, pos, rot, scale)?;
+        for _ in 0..r.count(12)? {
+            stack.push((r.pptr64()?.path_id, Some(index)));
+        }
+        if let (Some(f), Some(re)) = (filter, renderer) {
+            let data = sf.bytes(re)?;
+            let mut r = Reader::new(&data);
+            r.seek(12)?;
+            if !r.bool()? {
+                continue;
+            }
+            r.seek(56)?;
+            let mut slots = vec![];
+            for _ in 0..r.count(12)? {
+                let key = unity
+                    .resolve(op, file, r.pptr64()?)?
+                    .context("club material")?;
+                let id = match materials.get(&key) {
+                    Some(&id) => id,
+                    None => {
+                        let id = material(unity, op, &key, &mut glb)?;
+                        materials.insert(key, id);
+                        id
+                    }
+                };
+                slots.push(id);
+            }
+            let data = sf.bytes(f)?;
+            let mut r = Reader::new(&data);
+            r.seek(12)?;
+            let k = unity.resolve(op, file, r.pptr64()?)?.context("club mesh")?;
+            let (_, m) = unity.bytes(op, &k)?;
+            let mesh = Mesh::read_56(&m).with_context(|| format!("club mesh {name}"))?;
+            ensure!(
+                mesh.indices
+                    .iter()
+                    .all(|&i| usize::from(i) < mesh.positions.len()),
+                "club mesh {name} index exceeds vertex count"
+            );
+            glb.mesh(index, &mesh, &slots)?;
+            count += 1;
+        }
+    }
+    ensure!(count > 0, "empty title club");
+    Ok((glb.finish()?, count))
+}

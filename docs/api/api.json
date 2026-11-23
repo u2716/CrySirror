@@ -17444,6 +17444,12 @@
         },
         {
           "default": null,
+          "doc": "Optional legacy quantized fader. Ordinary playback uses a float gain.",
+          "name": "pcm16_gain",
+          "rust_type": "Option<AudioPcm16Gain>"
+        },
+        {
+          "default": null,
           "doc": "Mixer voice gain, default 1.",
           "name": "gain",
           "rust_type": "f32"
@@ -17565,6 +17571,94 @@
       ],
       "name": "AudioParameters",
       "used_by": "Rust HostServices/ChannelAudio playback parameters"
+    },
+    {
+      "doc": "Optional PCM16 fader. Products wrap before division and the final channel gain is capped at unity.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "Coefficient scale and sample rounding rule.",
+          "name": "scale",
+          "rust_type": "Pcm16GainScale"
+        },
+        {
+          "default": null,
+          "doc": "Secondary gain word.",
+          "name": "multiplier",
+          "rust_type": "u32"
+        },
+        {
+          "default": null,
+          "doc": "Left and right attenuation words.",
+          "name": "stereo",
+          "rust_type": "[u32; 2]"
+        }
+      ],
+      "name": "AudioPcm16Gain",
+      "used_by": "Rust AudioParameters.pcm16_gain fixed-point voice fader"
+    },
+    {
+      "doc": "Integer arithmetic used by the PCM16 fader.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "Unity is 256; attenuate signed samples by arithmetic right shift.",
+          "name": "Q8",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "Unity is 100; divide signed samples toward zero.",
+          "name": "Percent",
+          "rust_type": ""
+        }
+      ],
+      "name": "Pcm16GainScale",
+      "used_by": "Rust AudioPcm16Gain.scale coefficient units and signed-sample rounding"
+    },
+    {
+      "doc": "Update either coefficient without replacing the source or resetting a fade.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "Replace only the secondary gain.",
+          "name": "Multiplier",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "Replace both stereo words together.",
+          "name": "Stereo",
+          "rust_type": ""
+        }
+      ],
+      "name": "AudioPcm16GainUpdate",
+      "used_by": "Rust HostServices.update_audio_pcm16_gain scoped live control"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "Pending",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "Ready",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "Failed",
+          "rust_type": ""
+        }
+      ],
+      "name": "ResidentAudioState",
+      "used_by": "Rust HostServices.begin_resident_audio; worker-prepared reusable PCM"
     },
     {
       "doc": "",
@@ -17718,13 +17812,13 @@
         },
         {
           "default": null,
-          "doc": "Output frames while input transport is running, including decoder/seek/ preparation holds. Excludes fully paused/delayed input and effect tails. Pause fades count until frozen; seek, loop and playback rate do not reset it.",
+          "doc": "Output frames while input transport is running, including decoder/seek/ preparation holds. Excludes fully paused/delayed input and effect tails. Pause fades count until frozen; seek, loop and playback rate do not reset it. Explicit retained-source activation starts a new playback interval.",
           "name": "transport_frames",
           "rust_type": "u64"
         },
         {
           "default": null,
-          "doc": "A stop fade retains completion even after source EOF.",
+          "doc": "A stop fade or scheduled retirement is pending on the allocated voice.",
           "name": "stopping",
           "rust_type": "bool"
         },
@@ -21074,7 +21168,7 @@
       "used_by": "Resources.defineProfile rules and native format pipelines"
     },
     {
-      "doc": "`bytewise`: 8-flag control byte (LSB first, 1 = literal), 12-bit position and 4-bit length+3 in two bytes over a 4 KiB ring. `bitwise`: MSB-first bit stream, flag bit 1 = literal, configurable position/length widths. Truncated input stops decoding and the remainder stays zero, which is the behavior legacy decoders rely on for archives with padded size fields.",
+      "doc": "`bytewise`: 8-flag control byte (LSB first, 1 = literal) and two-byte references. The 12/4 layout zero-fills short output for legacy padded archives. The 11/5 and 10/6 layouts require exact input and output lengths. `bitwise`: MSB-first bitstream with configurable position and length widths.",
       "fields": [
         {
           "default": null,
@@ -21109,25 +21203,25 @@
         },
         {
           "default": 12,
-          "doc": "Dictionary position width; bytewise requires 12.",
+          "doc": "Dictionary position width. Bytewise supports 12, 11 and 10.",
           "name": "position_bits",
           "rust_type": "u32"
         },
         {
           "default": 4,
-          "doc": "Match length width; bytewise requires 4.",
+          "doc": "Match length width. Bytewise uses the remaining 4, 5 or 6 bits.",
           "name": "size_bits",
           "rust_type": "u32"
         },
         {
           "default": 3,
-          "doc": "Minimum match length; bytewise requires 3.",
+          "doc": "Minimum match length. Bytewise uses 3 for 12/4 and 2 for 11/5 or 10/6.",
           "name": "min_match",
           "rust_type": "usize"
         },
         {
           "default": false,
-          "doc": "Bytewise only: the 4-bit length field is stored inverted (GLib).",
+          "doc": "Bytewise 12/4 only: the 4-bit length field is stored inverted (GLib).",
           "name": "invert_length",
           "rust_type": "bool"
         }
@@ -21314,6 +21408,12 @@
           "default": null,
           "doc": "MaskScalar256's RGB interpolation that keeps the destination alpha (krkr `TVPAlphaBlend_HDA`: sopa = s.a, or s.a*opacity>>8 below 255).",
           "name": "mask_hold_alpha_scalar256",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "Interpolate all four stored channels by source alpha /256.",
+          "name": "mask_rgba_scalar256",
           "rust_type": ""
         },
         {
@@ -21908,6 +22008,24 @@
           "rust_type": "Option<Sun>"
         },
         {
+          "default": null,
+          "doc": "Key light of toon materials (direction, colour, intensity; shadow fields unused), for scenes that light characters apart from the world (Unity per-layer character lights). `null` lights them with the sun; cast shadows always come from the sun.",
+          "name": "toon_light",
+          "rust_type": "Option<Sun>"
+        },
+        {
+          "default": null,
+          "doc": "`toon_light.direction` is in camera space (x right, y up, z toward the viewer): a key light attached to the camera, e.g. a Unity light parented to it. The renderer applies the camera rotation each frame.",
+          "name": "toon_light_camera",
+          "rust_type": "bool"
+        },
+        {
+          "default": null,
+          "doc": "Uniform ambient radiance (linear RGB) replacing the environment's diffuse spherical harmonics, e.g. a flat `RenderSettings.ambientLight`. Scaled by `intensity` like the environment it replaces.",
+          "name": "ambient",
+          "rust_type": "Option<[f32; 3]>"
+        },
+        {
           "default": 0.04,
           "doc": "Bloom mix strength (0 disables).",
           "name": "bloom",
@@ -21966,6 +22084,12 @@
           "doc": "Virtual shadow maps for the sun, replacing cascades (ADR 0027).",
           "name": "virtual_shadows",
           "rust_type": "Option<VirtualShadows>"
+        },
+        {
+          "default": null,
+          "doc": "Colour adjustments before tonemapping; `null` is neutral.",
+          "name": "grading",
+          "rust_type": "Option<ColorGrading>"
         }
       ],
       "name": "Environment",
@@ -22005,6 +22129,12 @@
           "doc": "Cast shadows (cascades or virtual shadow maps).",
           "name": "shadows",
           "rust_type": "bool"
+        },
+        {
+          "default": 1.0,
+          "doc": "Fraction of the light a cast shadow removes (Unity `Light.shadowStrength`): visibility becomes `mix(1, shadow, strength)`.",
+          "name": "shadow_strength",
+          "rust_type": "f32"
         },
         {
           "default": 0.0,
@@ -22515,6 +22645,12 @@
           "rust_type": "AlphaMode"
         },
         {
+          "default": null,
+          "doc": "Explicit raster queue and forward depth state. Omission keeps the alpha mode's default passes.",
+          "name": "raster_queue",
+          "rust_type": "Option<RasterQueue>"
+        },
+        {
           "default": 0.5,
           "doc": "Alpha threshold for `mask`.",
           "name": "alpha_cutoff",
@@ -22609,10 +22745,460 @@
           "doc": "Built-in shader effect or custom WGSL surface hook (ADR 0016).",
           "name": "effect",
           "rust_type": "Option<crate::effect::ShaderEffect>"
+        },
+        {
+          "default": null,
+          "doc": "Cel shading model instead of PBR lighting.",
+          "name": "toon",
+          "rust_type": "Option<ToonShading<T>>"
         }
       ],
       "name": "Material",
       "used_by": "`EntitySpec.material`, `Entity.setMaterial`"
+    },
+    {
+      "doc": "Cel (\"toon\") shading, evaluated on display-referred (gamma) values like the forward toon shaders of Unity-era games:  - `c = base · base_color` (+ rim `pow(1 − n·v + rim_shift, rim_power) · rim_color`); - `u = n·l · 0.4951 + 0.5`; `a = shadow.a · (1 − rate(u))`; - `m = mix(c, shadow.rgb, a)` (+ highlight `hi.rgb · hi.a · max(n·h, 0)^highlight_power · highlight_rate`), blended toward `shadow_color` by the cast-shadow term (with `cast_shadow_ramp`, the ramp moves to its shadow end `ramp(0)` instead); - colour = `m · ramp(u) · sun + max(n·h, 0)^48 · shininess + c · ambient · ambient_scale`, with `sun` limited per channel to `light_limit` when it is positive.  `lookup_texture` (linear, 256×3) holds the diffuse ramp in row 0, the shadow-layer rate in row 1 (red) and, with `color_table`, a colour table in row 2: base, shadow, ramp and highlight colours are replaced by `table(red · 0.9951)`. `shadow_texture` and `highlight_texture` are sampled raw (no sRGB decode). Toon materials bind these three textures in place of the metallic-roughness, occlusion and specular slots, which must be empty, and take no shader effect.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "lookup_texture",
+          "rust_type": "Option<T>"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "shadow_texture",
+          "rust_type": "Option<T>"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "highlight_texture",
+          "rust_type": "Option<T>"
+        },
+        {
+          "default": null,
+          "doc": "Second base texture the colour moves toward by the node's `AnimationState::base_blend` weight (sampled like the base texture).",
+          "name": "blend_texture",
+          "rust_type": "Option<T>"
+        },
+        {
+          "default": null,
+          "doc": "Liquid layer (with `liquid_regions`): blob masks sampled at `uv · liquid_tiling.xy + liquid_tiling.zw` — red the level-2 blobs `A`, green the level-1 blobs `B` (linear).",
+          "name": "liquid_blobs",
+          "rust_type": "Option<T>"
+        },
+        {
+          "default": null,
+          "doc": "Liquid layer region masks (RGBA, linear, uv0): region `c` at level `l` (`AnimationState::liquid_levels`, 0–2) covers `min(max(sat(l − 1)·A, l·B), region_c)`; the summed coverage (saturated) moves the base toward `liquid_color` (linear).",
+          "name": "liquid_regions",
+          "rust_type": "Option<T>"
+        },
+        {
+          "default": [
+            1.0,
+            1.0,
+            0.0,
+            0.0
+          ],
+          "doc": "",
+          "name": "liquid_tiling",
+          "rust_type": "[f32; 4]"
+        },
+        {
+          "default": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "doc": "",
+          "name": "liquid_color",
+          "rust_type": "[f32; 3]"
+        },
+        {
+          "default": false,
+          "doc": "",
+          "name": "color_table",
+          "rust_type": "bool"
+        },
+        {
+          "default": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "doc": "",
+          "name": "rim_color",
+          "rust_type": "[f32; 3]"
+        },
+        {
+          "default": 3.0,
+          "doc": "",
+          "name": "rim_power",
+          "rust_type": "f32"
+        },
+        {
+          "default": 0.0,
+          "doc": "",
+          "name": "rim_shift",
+          "rust_type": "f32"
+        },
+        {
+          "default": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "doc": "Display-referred colour under cast shadows.",
+          "name": "shadow_color",
+          "rust_type": "[f32; 3]"
+        },
+        {
+          "default": false,
+          "doc": "Cast shadows shade with the ramp's shadow tone (`ramp(0)`, relative to the surface colour) instead of the absolute `shadow_color`, and the outline is shaded like the surface (`outline · (ramp · sun + ambient · ambient_scale)`) instead of `ramp · outline · sun · 2 + ambient · 2`.",
+          "name": "cast_shadow_ramp",
+          "rust_type": "bool"
+        },
+        {
+          "default": 1.0,
+          "doc": "Scale of the environment ambient term.",
+          "name": "ambient_scale",
+          "rust_type": "f32"
+        },
+        {
+          "default": 0.0,
+          "doc": "Per-channel upper bound of the display-referred key light colour (× intensity) the ramp is multiplied by; 0 leaves it unbounded.",
+          "name": "light_limit",
+          "rust_type": "f32"
+        },
+        {
+          "default": false,
+          "doc": "Row 0's red channel is the lit amount and the shadow tone comes from the base texture colour in linear space: its hue, saturation `√S · min(10√V, 1)` and value `0.5√V + 0.5` (HSV), i.e. the shaded colour is `base · mix(shade(base), 1, lit)` (linear).",
+          "name": "shade_from_base",
+          "rust_type": "bool"
+        },
+        {
+          "default": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "doc": "With `shade_from_base`: the shadow tone moves toward this linear colour (rgb) at grazing angles, `min((1 − n'·v)^1.8, 1) · (0.7 − 0.2 · (clamp(lum(sun), 1, 3) − 1)) · a` with `n'` the normal bent 0.25 down.",
+          "name": "shadow_rim",
+          "rust_type": "[f32; 4]"
+        },
+        {
+          "default": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "doc": "With `shade_from_base` and `a > 0`: the ILLGAMES AL skin light model. The shadow tone becomes `lum + k·(f·M − lum)` with `M` the mix of the ambient tone (`HSV(SH · 0.7 + 0.3)`, saturation × 1.5) toward the base shade by `w = (0.7 − 0.2·(clamp(lum(L), 1, 3) − 1)) · 0.375 · (1 + sat(n·l))`, `f`/`k` from the key light's per-channel `clamp(log10 L, 0, 3) + sat(L)` sum `s` (`f = 1 − (min(s, 4) − 1)/6`, `k = 1.1 + 0.9·sat((s − 1)/3)`); the result is lit by `mix(rgb, L', max(shadow, 0.5)·sat((n·l + 0.8)·0.625))`, `rgb` (linear) the light on the unlit side (toward the SH ambient as `avg(L)` exceeds 1), `L' = max(min(L, 1), 0.8·min(L, 1) + 0.2)`.",
+          "name": "shadow_light",
+          "rust_type": "[f32; 4]"
+        },
+        {
+          "default": "base_hsv",
+          "doc": "The base shade `M` mixes toward under `shadow_light` (the shadow rim tint still applies to `base_hsv`).",
+          "name": "shade_kind",
+          "rust_type": "ToonShadeKind"
+        },
+        {
+          "default": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "doc": "Linear shade colour of `ToonShadeKind::Fixed`.",
+          "name": "shade_color",
+          "rust_type": "[f32; 3]"
+        },
+        {
+          "default": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "doc": "Linear override RGB and blend weight for the completed shadow tone, after ambient/key grading and before the light ramp. Zero weight keeps the grade.",
+          "name": "shadow_tone_override",
+          "rust_type": "[f32; 4]"
+        },
+        {
+          "default": null,
+          "doc": "Linear RGBA mask interpreted according to `line_model`. The default uses R as a gate and G as coverage over the lit surface.",
+          "name": "surface_line_texture",
+          "rust_type": "Option<T>"
+        },
+        {
+          "default": {
+            "kind": "gated"
+          },
+          "doc": "Selects the mask channels and whether the line affects alpha coverage.",
+          "name": "line_model",
+          "rust_type": "ToonLineModel"
+        },
+        {
+          "default": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "doc": "",
+          "name": "line_color",
+          "rust_type": "[f32; 4]"
+        },
+        {
+          "default": 0.0,
+          "doc": "",
+          "name": "shininess",
+          "rust_type": "f32"
+        },
+        {
+          "default": 0.0,
+          "doc": "",
+          "name": "highlight_rate",
+          "rust_type": "f32"
+        },
+        {
+          "default": 1.0,
+          "doc": "",
+          "name": "highlight_power",
+          "rust_type": "f32"
+        },
+        {
+          "default": 0.0,
+          "doc": "Inverted-hull outline: clip-space width (0 disables) and colour, lit by the ramp at `n·l`.",
+          "name": "outline_width",
+          "rust_type": "f32"
+        },
+        {
+          "default": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "doc": "",
+          "name": "outline_color",
+          "rust_type": "[f32; 4]"
+        }
+      ],
+      "name": "ToonShading",
+      "used_by": "Material.toon"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "Ordered coverage of every mesh on this model instance (4 × 4 Bayer). Absent or 1 draws the complete model, 0 removes its coverage in colour, depth and shadow passes. Intermediate values reveal integral sixteenths.",
+          "name": "dither",
+          "rust_type": "Option<f32>"
+        },
+        {
+          "default": [],
+          "doc": "",
+          "name": "layers",
+          "rust_type": "Vec<AnimationLayer>"
+        },
+        {
+          "default": null,
+          "doc": "State machine instance; when set, layers are derived from it.",
+          "name": "machine",
+          "rust_type": "Option<crate::animgraph::MachineInstance>"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "montage",
+          "rust_type": "Option<crate::animgraph::MontageInstance>"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "events",
+          "rust_type": "Vec<crate::animgraph::AnimEvent>"
+        },
+        {
+          "default": null,
+          "doc": "Morph target (blend shape) weights by target name, applied to every mesh of the model that has a target of that name.",
+          "name": "morphs",
+          "rust_type": "std::collections::BTreeMap<String, f32>"
+        },
+        {
+          "default": null,
+          "doc": "Nodes of the model whose subtrees are not drawn (clothing states, removable parts); their poses still evaluate.",
+          "name": "hidden",
+          "rust_type": "Vec<String>"
+        },
+        {
+          "default": null,
+          "doc": "UV0 offsets of the meshes of named nodes, added before the material's UV transform (texture-driven eyes, scrolling decals).",
+          "name": "uv_offsets",
+          "rust_type": "std::collections::BTreeMap<String, [f32; 2]>"
+        },
+        {
+          "default": null,
+          "doc": "Weight (0..1) toward the toon material's `blend_texture` of the meshes of named nodes (expression textures such as a flushed face).",
+          "name": "base_blend",
+          "rust_type": "std::collections::BTreeMap<String, f32>"
+        },
+        {
+          "default": null,
+          "doc": "Liquid levels (0–2) of the four regions of the toon material's liquid layer, for the meshes of named nodes.",
+          "name": "liquid_levels",
+          "rust_type": "std::collections::BTreeMap<String, [f32; 4]>"
+        },
+        {
+          "default": null,
+          "doc": "Entity of the same client whose evaluated local translation and rotation are copied onto this entity's same-named nodes after its own clips (parts sharing a character skeleton). Scale stays the follower's.",
+          "name": "follow",
+          "rust_type": "Option<u32>"
+        },
+        {
+          "default": null,
+          "doc": "Leader node this entity's root nodes ride on, keeping their rest offset: roots take `leader(node) · leader_rest(node)⁻¹` (a part parented to a bone of the followed skeleton). Needs `follow`.",
+          "name": "attach",
+          "rust_type": "Option<String>"
+        },
+        {
+          "default": null,
+          "doc": "Procedural local poses by node name, applied last (look-at, bone sliders, physics results supplied by the owner).",
+          "name": "nodes",
+          "rust_type": "std::collections::BTreeMap<String, NodePose>"
+        }
+      ],
+      "name": "AnimationState",
+      "used_by": "Entity.play animation state"
+    },
+    {
+      "doc": "Variants are tagged by `\"kind\"`.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "fog",
+          "rust_type": "density: f32, noise_scale: f32, speed: [f32; 2], edge_fade: f32"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "fresnel",
+          "rust_type": "power: f32, intensity: f32"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "dissolve",
+          "rust_type": "threshold: f32, edge_width: f32, edge_color: [f32; 3]"
+        },
+        {
+          "default": null,
+          "doc": "Unlit screen-space block noise (a censor plane): the fragment's pixel position (y up) × 0.01 (+10 on x) × `scale`, shifted by `floor(time · rate) · 3` and floored to blocks, picks `mix(color_a, color_b, simplex(block) · 0.5 + 0.5)`, then `mix(·, 0.789, white)` (linear colours).",
+          "name": "block_noise",
+          "rust_type": "scale: f32, rate: f32, color_a: [f32; 3], color_b: [f32; 3], white: f32"
+        },
+        {
+          "default": null,
+          "doc": "Back-face shell over a dedicated mesh. Base texture alpha is the extrusion/coverage mask. The ILLGAMES shell's depth-limited displacement is applied in object space after skinning. The base colour tints the shell.",
+          "name": "normal_shell",
+          "rust_type": "width: f32, distance_scale: f32, depth_limit: f32, dither: f32, cutoff: f32"
+        },
+        {
+          "default": null,
+          "doc": "Directional baked diffuse radiance. The occlusion and metallic-roughness slots carry linear RGB radiance and encoded direction/normalization respectively. UV0 is mapped into the atlas independently of base UV.",
+          "name": "directional_lightmap",
+          "rust_type": "scale: [f32; 2], offset: [f32; 2]"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "custom",
+          "rust_type": "asset: String, parameters: [[f32; 4]; 4]"
+        }
+      ],
+      "name": "ShaderEffect",
+      "used_by": "Material.effect"
+    },
+    {
+      "doc": "Authored draw order and Forward depth state. Queues through 2500 use the geometry stage and depth/normal prepass. Higher values draw in order in the transparent stage. Both submit to raster shadow maps.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "order",
+          "rust_type": "u16"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "depth_write",
+          "rust_type": "bool"
+        },
+        {
+          "default": null,
+          "doc": "Cull front-facing fragments, including in raster shadow draws.",
+          "name": "cull_front",
+          "rust_type": "bool"
+        }
+      ],
+      "name": "RasterQueue",
+      "used_by": "Material.raster_queue"
+    },
+    {
+      "doc": "Surface-line composition from raw mask channels. Variants are tagged by `\"kind\"`.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "R gates, G covers; colour range capped to 0.95.",
+          "name": "gated",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "R tints the lit surface with nose_color, max(G,B) covers the face line, and A attenuates its view-dependent shadow tint.",
+          "name": "face",
+          "rust_type": "nose_color: [f32; 4]"
+        },
+        {
+          "default": null,
+          "doc": "R modulates edge width, G is the painted detail line. The base alpha and its eight neighbours determine distance-dependent coverage.",
+          "name": "cloth",
+          "rust_type": "width: f32, edge_alpha: f32, mip_bias: f32, alpha_dither: f32, opacity: f32, clip: f32, clip_force: f32"
+        }
+      ],
+      "name": "ToonLineModel",
+      "used_by": "ToonShading.line_model"
+    },
+    {
+      "doc": "Base shade of the `ToonShading::shadow_light` model.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "HSV of the linear base: hue kept, saturation `√S · min(10√V, 1)`, value `0.5√V + 0.5`.",
+          "name": "base_hsv",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "`mix((0.4508, 0.6061, 1), base, max(√S · min(10V, 1), 1 − V))`: pale colours shade toward blue, saturated ones keep their colour.",
+          "name": "cloth",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "`shade_color`.",
+          "name": "fixed",
+          "rust_type": ""
+        }
+      ],
+      "name": "ToonShadeKind",
+      "used_by": "ToonShading.shade_kind"
     },
     {
       "doc": "",
@@ -25819,6 +26405,142 @@
       "used_by": "`Paint.glyph_run.glyphs`"
     },
     {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "Colour only the glyph face. Its outline and shadow retain their own colours.",
+          "name": "gradient",
+          "rust_type": "Option<GlyphGradient>"
+        },
+        {
+          "default": null,
+          "doc": "Keep CJK glyphs upright when the containing line rotates clockwise by 90 degrees. Brackets/dashes retain that outer rotation; flow is unchanged.",
+          "name": "upright_in_clockwise_line",
+          "rust_type": "bool"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "underline",
+          "rust_type": "bool"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "strikeout",
+          "rust_type": "bool"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "bold",
+          "rust_type": "bool"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "raster",
+          "rust_type": "crysirror_core::image_processing::GlyphCoverageQuality"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "outline",
+          "rust_type": "Option<GlyphOutline>"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "shadow",
+          "rust_type": "Option<GlyphShadow>"
+        }
+      ],
+      "name": "PositionedGlyphStyle",
+      "used_by": "`PositionedGlyph.style`"
+    },
+    {
+      "doc": "A two-colour fill sampled in the original square glyph cell, before reveal scaling.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "Direction in cell coordinates.",
+          "name": "axis",
+          "rust_type": "GlyphGradientAxis"
+        },
+        {
+          "default": null,
+          "doc": "RGB endpoints in stored byte space.",
+          "name": "colors",
+          "rust_type": "[[u8; 3]; 2]"
+        },
+        {
+          "default": null,
+          "doc": "Authored cell side length in pixels.",
+          "name": "cell_size",
+          "rust_type": "u16"
+        }
+      ],
+      "name": "GlyphGradient",
+      "used_by": "`PositionedGlyphStyle.gradient`"
+    },
+    {
+      "doc": "",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "vertical",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "horizontal",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "diagonal",
+          "rust_type": ""
+        }
+      ],
+      "name": "GlyphGradientAxis",
+      "used_by": "`GlyphGradient.axis`"
+    },
+    {
+      "doc": "Device-free coverage quality for retained outline glyphs. Variants are tagged by `\"kind\"`.",
+      "fields": [
+        {
+          "default": null,
+          "doc": "",
+          "name": "grayscale",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "binary",
+          "rust_type": "threshold: u8"
+        },
+        {
+          "default": null,
+          "doc": "",
+          "name": "supersample",
+          "rust_type": "factor: u8"
+        },
+        {
+          "default": null,
+          "doc": "Sample the outline at four times the target resolution and map the rounded coverage count (0 through 16) through the supplied alpha table.",
+          "name": "supersample_alpha4",
+          "rust_type": "table: [u8; 17]"
+        }
+      ],
+      "name": "GlyphCoverageQuality",
+      "used_by": "`PositionedGlyphStyle.raster`"
+    },
+    {
       "doc": "Unit of an explicitly positioned run. Each item contains one Unicode scalar. A caller may separately map native cells or shaped clusters onto positioned-glyph boundaries through GlyphReveal::prefix_steps.",
       "fields": [
         {
@@ -26872,7 +27594,7 @@
         },
         {
           "default": null,
-          "doc": "Duration in milliseconds.",
+          "doc": "Duration in milliseconds. A hard byte rule with a stationary threshold accepts u64::MAX to hold a caller-updated mask until EndTransition.",
           "name": "duration_ms",
           "rust_type": "u64"
         },
@@ -26900,6 +27622,18 @@
           "doc": "Grayscale mask image: bright pixels reveal first; `fade` 0..=8 is the Siglus soft-edge step (0 = hard edge).",
           "name": "mask",
           "rust_type": "asset: String, fade: u8, vague: Option<u16>"
+        },
+        {
+          "default": null,
+          "doc": "An integer-clock reveal over an 8-bit grayscale rule. In hard mode a pixel is replaced when its rule is at or below the current phase. Soft mode uses (rule + phase - 256), clamped to a byte, as a /256 blend weight over stored color bytes.",
+          "name": "byte_rule",
+          "rust_type": "asset: String, invert: bool, soft: bool, numerator: u32, denominator: u32, step_ms: u32"
+        },
+        {
+          "default": null,
+          "doc": "Stretch scene pixels into a top-left rectangle at discrete clock steps.",
+          "name": "pixel_stretch",
+          "rust_type": "canvas: [u32; 2], axes: [bool; 2], shrink_outgoing: bool, numerator: u32, denominator: u32, step_ms: u32"
         },
         {
           "default": null,
@@ -29750,7 +30484,7 @@
       "used_by": "UiEvent.widget client/local identity"
     }
   ],
-  "fingerprint": "8693c021aef05c1f",
+  "fingerprint": "c95d822ee88e0793",
   "generated_by": "crysirror-engine api_doc (tests/api_docs.rs)",
   "globals": [
     {

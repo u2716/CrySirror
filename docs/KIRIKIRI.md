@@ -11,6 +11,31 @@ original layout. CrySirror reads them in place and starts the original TJS/KAG
 scripts. Supported resource protection includes HXV4 and supported cxdec-family
 filters; additional game-specific filters may require their accompanying files.
 
+## XP3 resource filters
+
+MadoCrypt uses protected TLG or KBAD100 resources in the archive or in a
+sibling `fgimage.xp3`, including `arc/fgimage.xp3`. CrySirror requires two
+matching image headers and whole-entry checksums, then checks encrypted bytes
+from the target archive with the same seed. Mounted resources keep their
+indexed filenames. This path runs entirely in the player.
+
+For a Nana `dls:` archive, installed-game detection can use the game's
+i386 executable and TPM modules. It recognizes references to a contiguous
+six-word name state in initialized PE data, including supported embedded
+modules. The complete inflated directory must match the archive's name
+tokens and Adler-32 values. The existing CXDEC module reader supplies the
+Cabbage content parameters and control table. Every protected resource is
+checksum-verified before it is returned. This layout can be read directly
+from the original files. Retail Loca-Love startup remains unverified.
+
+For other layouts with independently recovered parameters, the
+[xp3-brute PR #3 profile format](https://github.com/xmoezzz/xp3-brute/pull/3)
+is also supported. An ordinary XP3 with a `dls:` descriptor can read
+`nana-profile.json` beside the archive or in the parent of its `arc/` folder.
+Its `content.control_block_file` names a 4096-byte table relative to the JSON.
+An explicit `kirikiri/xp3.nana_profile` selects a different JSON filename
+relative to the archive.
+
 ## Game features
 
 - TJS scripts and KAG3 scenarios, labels, macros, calls, choices and message waits.

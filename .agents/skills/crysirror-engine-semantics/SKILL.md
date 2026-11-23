@@ -13,19 +13,20 @@ Continue its mode and matching findings. Use
 Matching official material is preferred; without it, original-program reverse
 evidence governs. Unofficial implementations, including our own, remain fallible.
 
-Always maintain native opcode/syscall contracts first, document the reviewed
-slice, then decide how existing capabilities can implement it. Do not derive
-native semantics from a convenient CrySirror API or a desired screenshot.
-Maintain the overall known catalogue from the start and refine incrementally;
-unknown totals stay unknown. This order does not require decoding an entire
-engine before implementing the next reviewed operation.
+Start by choosing and recording the supported ABI profiles. Reverse and
+document the full native dispatch surface for each profile before game
+behavior acceptance. Use documented native behavior to choose or extend
+CrySirror capabilities. Reverse and implement reviewed families in batches
+with synthetic tests when useful.
 
 ## 1. Identify native ABI/profile boundaries
 
-Record engine revision, script/resource versions, platform/edition and source
-commit or original binary digest. Branding, filenames or a higher version do
-not establish ABI compatibility. Native ABI, CrySirror API and project/save
-schema versions are distinct identities.
+Record stable profile IDs, architecture, engine revision, script/resource
+versions, and the pinned source or original-binary evidence. Record the
+evidence used for runtime selection separately from provenance. Use structural
+ABI checks for compatible releases and require evidence for any exact-binary
+constraint. Native ABI, CrySirror API and project/save schema versions are
+distinct identities.
 
 | Compare across profiles | Record |
 | --- | --- |
@@ -55,9 +56,20 @@ Follow constructors/destructors and indirect calls that affect it. Preserve
 original explicit no-ops with evidence. Empty implementations, error callbacks,
 allowlists and operand-only decoders are not complete native operations.
 
-Count opcodes, syscall families and subselectors separately with their actual
-denominator/profile. Preserve unknown cases and completion-dependent PCs.
-Registration or a working title does not establish semantic completeness.
+Use the full native dispatcher and registration tables as the implementation
+denominator. Include operations unused by any sample and record their valid
+operand forms, subselectors and native failure/default branches. Count
+aliases, confirmed no-ops, reserved selectors and independently executable
+operations according to the native dispatch evidence. Use script scans and
+replays to measure exercise coverage separately.
+
+Connect a syscall to the active dispatcher only after implementing its full
+contract for that ABI. Keep unfinished work isolated, keep the syscall visibly
+unsupported, and record the gap in the inventory and through the
+[SATD skill](../crysirror-satd/SKILL.md). Do not publish a partial syscall
+handler or classify it as `Partial`. A native no-op or rejection is complete
+only when the original behavior is established and reproduced.
+
 For `integrated` runtimes, inspect and retain native dispatch catalogues inside
 their complete maintained modules; do not replace the runtime or change modes.
 

@@ -115,12 +115,12 @@ impl DebugHud {
         }
 
         for gid in graph_ids {
-            let Some((gen, view, size)) = prim_renderer.debug_graph_native(gid) else {
+            let Some((generation, view, size)) = prim_renderer.debug_graph_native(gid) else {
                 continue;
             };
 
             let needs_register = match self.prim_tile_textures.get(&gid) {
-                Some((old_gen, _, _)) => *old_gen != gen,
+                Some((old_gen, _, _)) => *old_gen != generation,
                 None => true,
             };
 
@@ -138,7 +138,7 @@ impl DebugHud {
                 self.renderer
                     .register_native_texture(device, view, wgpu::FilterMode::Nearest);
 
-            self.prim_tile_textures.insert(gid, (gen, tex_id, size));
+            self.prim_tile_textures.insert(gid, (generation, tex_id, size));
         }
     }
 
@@ -293,8 +293,8 @@ impl DebugHud {
                             .default_open(false)
                             .show(ui, |ui| {
                                 ui.style_mut().override_text_style = Some(TextStyle::Monospace);
-                                for (gid, d, gen, (r, g, b)) in deltas.iter().take(20) {
-                                    ui.label(format!("g{:04}: +{:6} (gen={}) rgb=({}, {}, {})", gid, d, gen, r, g, b));
+                                for (gid, d, generation, (r, g, b)) in deltas.iter().take(20) {
+                                    ui.label(format!("g{:04}: +{:6} (gen={}) rgb=({}, {}, {})", gid, d, generation, r, g, b));
                                 }
                             });
                     }
@@ -307,7 +307,7 @@ impl DebugHud {
                                     let gen_delta = delta_map.get(&t.graph_id).copied().unwrap_or(0);
                                     let entry = self.prim_tile_textures.get(&t.graph_id);
                                     let (tex_id, tex_size, hud_gen) = match entry {
-                                        Some((gen, id, sz)) => (Some(*id), Some(*sz), *gen),
+                                        Some((generation, id, sz)) => (Some(*id), Some(*sz), *generation),
                                         None => (None, None, 0),
                                     };
 

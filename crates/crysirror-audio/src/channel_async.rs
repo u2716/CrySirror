@@ -63,12 +63,23 @@ impl ChannelJobs {
         self.intent.retain(|(client, _), _| *client != owner);
     }
 }
-struct Charge {
+pub(super) struct Charge {
     budget: Arc<AtomicUsize>,
     bytes: AtomicUsize,
 }
 impl Charge {
-    fn shrink_to(&self,bytes:usize)->Result<()> {
+    pub(super) fn reserve(budget: Arc<AtomicUsize>, bytes: usize) -> Result<Self> {
+        ensure!(
+            budget
+                .fetch_update(Ordering::Relaxed, Ordering::Acquire, |n| n
+                    .checked_add(bytes)
+                    .filter(|n| *n <= 512 * 1024 * 1024))
+                .is_ok(),
+            "channel audio reservation exceeded"
+        );
+        Ok(Self { budget, bytes: AtomicUsize::new(bytes) })
+    }
+    pub(super) fn shrink_to(&self,bytes:usize)->Result<()> {
         let previous=self.bytes.load(Ordering::Relaxed);
         ensure!(bytes<=previous,"audio preparation exceeded its reservation");
         self.bytes.store(bytes,Ordering::Relaxed);
@@ -154,6 +165,19 @@ impl ChannelAudio {
         request: AudioRequest,
         storage: Arc<dyn ClientStorage>,
     ) -> Result<u64> {
+        self.begin_preparation_with_meter(client, request, storage, None)
+    }
+
+    pub fn begin_preparation_with_meter(
+        &mut self,
+        client: u32,
+        request: AudioRequest,
+        storage: Arc<dyn ClientStorage>,
+        meter: Option<crysirror_core::service::AudioSourceMeterSpec>,
+    ) -> Result<u64> {
+        let meter = meter
+            .map(|spec| crate::mixer::source_meter::SourceMeter::new(spec, self.mixer.sample_rate()))
+            .transpose()?;
         self.poll_releases()?;
         let channel = channel(&request)?;
         self.admit_channel_operation(client)?;
@@ -217,16 +241,7 @@ impl ChannelAudio {
         } else {
             None
         };
-        let budget = self.jobs.budget.clone();
-        ensure!(
-            budget
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n
-                    .checked_add(bytes)
-                    .filter(|n| *n <= 512 * 1024 * 1024))
-                .is_ok(),
-            "channel audio reservation exceeded"
-        );
-        let charge = Arc::new(Charge { budget, bytes:AtomicUsize::new(bytes) });
+        let charge = Arc::new(Charge::reserve(self.jobs.budget.clone(), bytes)?);
         let realtime = self.jobs.nonblocking;
         let pool = self.jobs.pool.clone();
         let workers = pool.clone();
@@ -279,6 +294,7 @@ impl ChannelAudio {
             };
             cancel.check()?;
             let mut prepared = prepare(tail, intro, p)?;
+            prepared.source_meter = meter;
             if resident {
                 let frames=prepared.source.frame_count().context("resident PCM extent unavailable")?;
                 let retained=usize::try_from(frames)?.checked_mul(8).and_then(|bytes|bytes.checked_add(4096)).context("resident reservation overflow")?;

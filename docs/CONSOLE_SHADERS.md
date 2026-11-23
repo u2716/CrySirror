@@ -211,6 +211,10 @@ The native catalog also contains 29 reduced raster/effect programs and two BVH
 ray stages. `native::psv_program` resolves a compiled program by name;
 `native::psv_quad_filter_program` and `native::psv_wipe_program` select
 filter/transition variants without allocating.
+The GXM library joins the quad v2 module to its dedicated continuous-mask
+and canvas-stencil variants for undistorted GPU blends. The filtered and
+premultiplied fragments each have all five sampling variants. Draws without
+those mask flags use the existing distortion and sampling catalogue.
 The [ABI reference](../crates/crysirror-shaders/native/psv/README.md) describes
 uniforms, batch boundaries, texture roles, lifetime and pass requirements.
 

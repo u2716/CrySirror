@@ -96,8 +96,37 @@ struct Entry {
     job: Option<Task<Prepared>>,
     value: Option<Prepared>,
 }
+impl Entry {
+    fn reclaimable(&self) -> bool {
+        self.automatic
+            && self.pins.load(Ordering::Acquire) == 0
+            && match &self.value {
+                Some(Prepared::Bytes(v)) => Arc::strong_count(v) == 1,
+                Some(Prepared::Image(v)) => Arc::strong_count(v) == 1,
+                Some(Prepared::Model(v, _)) => Arc::strong_count(v) == 1,
+                Some(Prepared::Scene(v, _)) => Arc::strong_count(v) == 1,
+                Some(Prepared::Level(v, m, _)) => {
+                    Arc::strong_count(v) == 1 && Arc::strong_count(m) == 1
+                }
+                None => true,
+            }
+    }
+}
+// Host policy for the aggregate prepared payload. Format-specific decode
+// limits and residency accounting apply independently.
+const DEFAULT_PREPARED_BUDGET: Option<usize> = if cfg!(all(
+    target_pointer_width = "64",
+    not(target_family = "wasm"),
+    any(target_os = "windows", target_os = "macos", target_os = "linux",
+        target_os = "ios", target_os = "android")
+)) {
+    None
+} else {
+    Some(256 * 1024 * 1024)
+};
+
 pub(super) struct AsyncAssets {
-    budget: usize,
+    budget: Option<usize>,
     store: u64,
     next: u64,
     io: TaskPool,
@@ -115,7 +144,7 @@ impl AsyncAssets {
             .saturating_sub(2)
             .clamp(2, 4);
         Ok(Self {
-            budget: 256 * 1024 * 1024,
+            budget: DEFAULT_PREPARED_BUDGET,
             store: NEXT_STORE.fetch_add(1, Ordering::Relaxed),
             next: 1,
             io: TaskPool::new("assets", 2, 64)?,
@@ -136,22 +165,44 @@ impl AsyncAssets {
         ensure!(entry.status.ticket == t, "foreign asset ticket");
         Ok(entry)
     }
-    fn finish(&mut self, id: u64, result: Result<Prepared>) {
-        let e = self.entries.get_mut(&id).unwrap();
+    fn make_room(&mut self, bytes: usize, protected: Option<u64>) -> bool {
+        let Some(budget) = self.budget else {
+            return self.resident.checked_add(bytes).is_some();
+        };
+        let Some(limit) = budget.checked_sub(bytes) else { return false };
+        if self.resident <= limit {
+            return true;
+        }
+        // Under pressure the five-second idle grace gives way to admission.
+        // Preserve explicit tickets, live consumers and the caller's lookup.
+        let mut unused: Vec<_> = self.entries.iter()
+            .filter(|(id, e)| Some(**id) != protected && e.status.bytes > 0 && e.reclaimable())
+            .map(|(&id, e)| (e.touched, id, e.status.bytes))
+            .collect();
+        if unused.iter().map(|&(_, _, size)| size).sum::<usize>() < self.resident - limit {
+            return false;
+        }
+        unused.sort_unstable();
+        for (_, id, _) in unused {
+            let e = self.entries.remove(&id).unwrap();
+            self.keys.remove(&(ClientId(e.status.ticket.client), e.status.kind, e.status.path));
+            self.resident -= e.status.bytes;
+            if self.resident <= limit { break; }
+        }
+        true
+    }
+    fn finish(&mut self, id: u64, result: Result<Prepared>, protected: Option<u64>) {
         match result {
             Ok(value) => {
                 let bytes = value.bytes();
-                if bytes > self.budget
-                    || self
-                        .resident
-                        .checked_add(bytes)
-                        .is_none_or(|n| n > self.budget)
-                {
+                let fits = self.make_room(bytes, protected);
+                let e = self.entries.get_mut(&id).unwrap();
+                if !fits {
                     e.status.state = AssetState::Failed;
-                    e.status.error = Some(format!(
-                        "prepared assets exceed {} MiB budget",
-                        self.budget / (1024 * 1024)
-                    ));
+                    e.status.error = Some(match self.budget {
+                        Some(limit) => format!("prepared assets exceed {} MiB budget", limit / (1024 * 1024)),
+                        None => "prepared asset byte accounting overflow".to_owned(),
+                    });
                 } else {
                     self.resident += bytes;
                     e.status.bytes = bytes;
@@ -160,20 +211,23 @@ impl AsyncAssets {
                 }
             }
             Err(error) => {
+                let e = self.entries.get_mut(&id).unwrap();
                 e.status.state = AssetState::Failed;
                 e.status.error = Some(format!("{error:#}"));
             }
         }
     }
-    fn poll(&mut self) {
-        let ids: Vec<_> = self.entries.keys().copied().collect();
+    fn poll(&mut self, protected: Option<u64>) {
+        let ids: Vec<_> = self.entries.iter()
+            .filter_map(|(&id, e)| e.job.is_some().then_some(id))
+            .collect();
         for id in ids {
             let entry = self.entries.get_mut(&id).unwrap();
             let Some(job) = &mut entry.job else { continue };
             let result = job.try_take();
             if !matches!(result, Ok(None)) {
                 entry.job = None;
-                self.finish(id, result.and_then(|v| v.context("asset result absent")));
+                self.finish(id, result.and_then(|v| v.context("asset result absent")), protected);
             }
         }
     }
@@ -289,7 +343,7 @@ impl Assets {
                 && bytes >= self.asynchronous.resident,
             "invalid prepared asset budget or below live residency"
         );
-        self.asynchronous.budget = bytes;
+        self.asynchronous.budget = Some(bytes);
         Ok(())
     }
     pub fn store_id(&self) -> u64 {
@@ -490,7 +544,7 @@ impl Assets {
         }
     }
     pub fn poll_tasks(&mut self) {
-        self.asynchronous.poll()
+        self.asynchronous.poll(None)
     }
     /// Explicit offline readiness fence. Interactive hosts use task_status.
     pub fn wait_task(&mut self, client: ClientId, ticket: AssetTicket) -> Result<AssetStatus> {
@@ -504,12 +558,13 @@ impl Assets {
             .take()
         {
             let result = job.wait();
-            self.asynchronous.finish(ticket.id, result);
+            self.asynchronous.finish(ticket.id, result, None);
         }
         self.task_status(client, ticket)
     }
     pub fn task_status(&mut self, client: ClientId, ticket: AssetTicket) -> Result<AssetStatus> {
-        self.poll_tasks();
+        self.asynchronous.entry(client, ticket)?;
+        self.asynchronous.poll(Some(ticket.id));
         Ok(self.asynchronous.entry(client, ticket)?.status.clone())
     }
     pub fn ticket(&self, client: ClientId, id: u64) -> Result<AssetTicket> {
@@ -536,6 +591,27 @@ impl Assets {
         e.status.state = AssetState::Cancelled;
         Ok(())
     }
+    /// Drop every unpinned prepared entry of `path` (any kind) for the
+    /// client: a released generated model must also leave the prepared
+    /// budget, or repeated scene changes accumulate until loads fail.
+    pub fn release_prepared_path(&mut self, client: ClientId, path: &str) {
+        let ids: Vec<u64> = self
+            .asynchronous
+            .entries
+            .iter()
+            .filter(|(_, e)| e.status.ticket.client == client.0 && e.status.path == path && e.pins.load(Ordering::Acquire) == 0)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in ids {
+            if let Some(mut e) = self.asynchronous.entries.remove(&id) {
+                if let Some(job) = e.job.take() {
+                    job.cancel();
+                }
+                self.asynchronous.resident -= e.status.bytes;
+                self.asynchronous.keys.remove(&(client, e.status.kind, e.status.path));
+            }
+        }
+    }
     pub fn release_task(&mut self, client: ClientId, ticket: AssetTicket) -> Result<()> {
         self.asynchronous.entry(client, ticket)?;
         ensure!(
@@ -553,8 +629,8 @@ impl Assets {
         Ok(())
     }
     fn resolve(&mut self, client: ClientId, ticket: AssetTicket) -> Result<Option<&Prepared>> {
-        self.poll_tasks();
         self.asynchronous.entry(client, ticket)?;
+        self.asynchronous.poll(Some(ticket.id));
         if !self.asynchronous.nonblocking {
             if let Some(job) = self
                 .asynchronous
@@ -565,7 +641,7 @@ impl Assets {
                 .take()
             {
                 let result = job.wait();
-                self.asynchronous.finish(ticket.id, result);
+                self.asynchronous.finish(ticket.id, result, None);
             }
         }
         let entry = self.asynchronous.entry(client, ticket)?;
@@ -648,19 +724,7 @@ impl Assets {
             .entries
             .iter()
             .filter(|(_, e)| {
-                let shared = match &e.value {
-                    Some(Prepared::Bytes(v)) => Arc::strong_count(v) > 1,
-                    Some(Prepared::Image(v)) => Arc::strong_count(v) > 1,
-                    Some(Prepared::Model(v, _)) => Arc::strong_count(v) > 1,
-                    Some(Prepared::Scene(v, _)) => Arc::strong_count(v) > 1,
-                    Some(Prepared::Level(v, m, _)) => {
-                        Arc::strong_count(v) > 1 || Arc::strong_count(m) > 1
-                    }
-                    None => false,
-                };
-                e.automatic
-                    && e.pins.load(Ordering::Acquire) == 0
-                    && !shared
+                e.reclaimable()
                     && (e.leased
                         || (e.status.state != AssetState::Loading
                             && e.touched.elapsed().as_secs() >= 5))
