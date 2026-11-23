@@ -495,7 +495,7 @@ fn load_pbr_with(
                     "engine material image index outside model"
                 );
             }
-            for i in [extra.base_color_texture, extra.emissive_texture, extra.specular_texture]
+            for i in [extra.base_color_texture, extra.emissive_texture, extra.specular_texture, extra.toon.as_ref().and_then(|t| t.blend_texture)]
                 .into_iter()
                 .flatten()
             {

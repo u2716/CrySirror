@@ -376,7 +376,7 @@ pub struct Game {
     /// start and end.
     h_mouth: Option<(String, (f32, f32), u64, u64)>,
     /// Expression presets by personality.
-    expressions: std::collections::HashMap<i64, std::collections::HashMap<i64, [Option<f32>; 6]>>,
+    expressions: std::collections::HashMap<i64, std::collections::HashMap<i64, [Option<f32>; 7]>>,
     /// The toon ambient characters receive on this map (sky radiance or
     /// the light setting's ambient, luminance).
     sky_ambient: f32,
@@ -1499,6 +1499,7 @@ impl Game {
                 e.eyebrow_open = v[3].unwrap_or(e.eyebrow_open);
                 e.eyes_open = v[4].unwrap_or(e.eyes_open);
                 e.mouth_open = v[5].unwrap_or(e.mouth_open);
+                e.hohoaka = v[6].unwrap_or(0.).clamp(0., 1.);
             }
             None => {
                 e.eyebrow = f.brow.max(0) as usize;
@@ -1523,6 +1524,7 @@ impl Game {
         e.mouth = f.mouth.max(0) as usize;
         e.eyes_open = f.open_eye.clamp(0., 1.);
         e.mouth_open = f.open_mouth.0.clamp(0., 1.);
+        e.hohoaka = f.cheek.clamp(0., 1.);
         if f.blink {
             self.no_blink.remove(card);
         } else {
@@ -3078,8 +3080,10 @@ impl Game {
         let morphs = face.weights(&e);
         let hidden = self.cloth.get(card).map(ClothRun::hidden).unwrap_or_default();
         let uv = self.eye_offsets.get(card).map(|o| crate::face::eye_uv_offsets(o)).unwrap_or_default();
+        // The face mesh moves toward its flushed base (`_HohoakaIntensity`).
+        let blend = json!({crate::chara::FACE_MESH: e.hohoaka});
         for &id in ids {
-            self.world.push(json!({"op": "set_animation", "id": id, "animation": {"layers": layers, "morphs": morphs, "hidden": hidden, "uv_offsets": uv}}));
+            self.world.push(json!({"op": "set_animation", "id": id, "animation": {"layers": layers, "morphs": morphs, "hidden": hidden, "uv_offsets": uv, "base_blend": blend}}));
         }
     }
 
@@ -3151,7 +3155,7 @@ impl Game {
     }
 
     /// `CharaExpression` for the talking heroine.
-    fn talk_face(&mut self, values: [Option<f32>; 6]) {
+    fn talk_face(&mut self, values: [Option<f32>; 7]) {
         let Some(card) = self.talk.as_ref().and_then(|_| self.talk_card.clone()) else { return };
         let Some(state) = self.faces.get_mut(&card) else { return };
         let e = &mut state.3;
@@ -3172,6 +3176,9 @@ impl Game {
         }
         if let Some(v) = values[5] {
             e.mouth_open = v;
+        }
+        if let Some(v) = values[6] {
+            e.hohoaka = v.clamp(0., 1.);
         }
         self.apply_face(&card);
     }
@@ -4031,7 +4038,7 @@ impl AmanatsuVm {
                         m.3 = now;
                     }
                 }
-                crate::talk::Step::Face(values) => game.talk_face(values),
+                crate::talk::Step::Face(v) => game.talk_face([v[0], v[1], v[2], v[3], v[4], v[5], None]),
                 crate::talk::Step::Chara(effect) => {
                     if let Err(e) = game.adv_chara(host, client, effect) {
                         game.log.push(format!("ADV: {e:#}"));
@@ -4044,7 +4051,10 @@ impl AmanatsuVm {
                         let list = crate::face::expression_list(&mut game.unity, personality).unwrap_or_default();
                         game.expressions.insert(personality, list);
                     }
-                    if let Some(values) = game.expressions.get(&personality).and_then(|l| l.get(&id)).copied() {
+                    if let Some(mut values) = game.expressions.get(&personality).and_then(|l| l.get(&id)).copied() {
+                        // `Expression.Change`: the flush rate applies unless
+                        // skipped (unset → 0).
+                        values[6] = Some(values[6].unwrap_or(0.));
                         game.talk_face(values);
                     }
                 }

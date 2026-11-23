@@ -225,6 +225,10 @@ pub struct AnimationState {
     /// UV transform (texture-driven eyes, scrolling decals).
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub uv_offsets: std::collections::BTreeMap<String, [f32; 2]>,
+    /// Weight (0..1) toward the toon material's `blend_texture` of the
+    /// meshes of named nodes (expression textures such as a flushed face).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub base_blend: std::collections::BTreeMap<String, f32>,
     /// Entity of the same client whose evaluated local translation and
     /// rotation are copied onto this entity's same-named nodes after its own
     /// clips (parts sharing a character skeleton). Scale stays the follower's.
@@ -297,7 +301,9 @@ impl AnimationState {
         );
         ensure!(
             self.uv_offsets.len() <= MAX_NODE_POSES
-                && self.uv_offsets.iter().all(|(n, o)| !n.is_empty() && n.len() <= 256 && o.iter().all(|v| v.is_finite() && v.abs() <= 1000.)),
+                && self.uv_offsets.iter().all(|(n, o)| !n.is_empty() && n.len() <= 256 && o.iter().all(|v| v.is_finite() && v.abs() <= 1000.))
+                && self.base_blend.len() <= MAX_NODE_POSES
+                && self.base_blend.iter().all(|(n, w)| !n.is_empty() && n.len() <= 256 && w.is_finite() && (0.0..=1.).contains(w)),
             "invalid UV offsets"
         );
         for (name, w) in &self.morphs {

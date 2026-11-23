@@ -570,6 +570,7 @@ pub fn toon_parameters(
         lookup_texture: None,
         shadow_texture: None,
         highlight_texture: None,
+        blend_texture: None,
         color_table: false,
         rim_color: if toony { rgb("_RimColor", [0., 0., 1.]) } else { [0.; 3] },
         rim_power: f("_RimPower", 3.).clamp(0., 64.),

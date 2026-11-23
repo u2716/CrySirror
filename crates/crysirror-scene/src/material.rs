@@ -92,6 +92,9 @@ pub struct ToonShading<T = String> {
     pub lookup_texture: Option<T>,
     pub shadow_texture: Option<T>,
     pub highlight_texture: Option<T>,
+    /// Second base texture the colour moves toward by the node's
+    /// `AnimationState::base_blend` weight (sampled like the base texture).
+    pub blend_texture: Option<T>,
     pub color_table: bool,
     pub rim_color: [f32; 3],
     pub rim_power: f32,
@@ -149,6 +152,7 @@ impl<T> Default for ToonShading<T> {
             lookup_texture: None,
             shadow_texture: None,
             highlight_texture: None,
+            blend_texture: None,
             color_table: false,
             rim_color: [0.; 3],
             rim_power: 3.,
@@ -171,8 +175,8 @@ impl<T> Default for ToonShading<T> {
     }
 }
 impl<T> ToonShading<T> {
-    pub fn textures(&self) -> [Option<&T>; 3] {
-        [self.lookup_texture.as_ref(), self.shadow_texture.as_ref(), self.highlight_texture.as_ref()]
+    pub fn textures(&self) -> [Option<&T>; 4] {
+        [self.lookup_texture.as_ref(), self.shadow_texture.as_ref(), self.highlight_texture.as_ref(), self.blend_texture.as_ref()]
     }
     pub fn validate(&self) -> Result<()> {
         let range = |x: f32, a: f32, b: f32| x.is_finite() && (a..=b).contains(&x);

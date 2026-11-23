@@ -334,6 +334,9 @@ pub struct MaterialOverride {
     /// Toon shadow layer (`ToonShading::shadow_texture`: top-down RGBA8,
     /// display-referred colour and amount, sampled raw) with a cache key.
     pub toon_shadow: Option<(String, ImageSurface)>,
+    /// Toon blend texture (`ToonShading::blend_texture`: top-down RGBA8,
+    /// sRGB like the base) with its image key.
+    pub toon_blend: Option<(String, ImageSurface)>,
 }
 
 #[derive(Clone, Debug)]
@@ -967,9 +970,17 @@ fn material(assets: &mut dyn SceneAssets, chunk: &mut Chunk, report: &mut GlbRep
                 }
                 None => None,
             };
+            let blend = match &o.toon_blend {
+                Some((key, img)) => {
+                    let png = crysirror_image::encode_png(&downsample(img.clone(), chunk.max_texture.min(1024)))?;
+                    Some(chunk.glb.image(key, || Ok((png, "image/png")))?)
+                }
+                None => None,
+            };
             engine.toon = Some(crysirror_scene::material::ToonShading {
                 lookup_texture: Some(lookup),
                 shadow_texture: shadow,
+                blend_texture: blend,
                 cast_shadow_ramp: true,
                 ambient_scale: o.toon_ambient.unwrap_or(1.).clamp(0., 16.),
                 light_limit: o.toon_light_limit.unwrap_or(0.).clamp(0., 16.),

@@ -2469,3 +2469,22 @@ fn bundle_lights() {
         }
     }
 }
+
+/// Nodes of a bundle's prefabs (`AMANATSU_BUNDLE`) whose local scale is not
+/// one, with the world scale of each.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn bundle_scales() {
+    let mut u = unity();
+    let bundle = std::env::var("AMANATSU_BUNDLE").unwrap();
+    for key in u.bundle_files().into_iter().filter(|k| k.starts_with(&format!("bundle:{bundle}#")) && !k.ends_with(".resS")) {
+        let Ok(scene) = u.scene(&key) else { continue };
+        for (i, n) in scene.nodes.iter().enumerate() {
+            let renderer = n.components.iter().any(|c| c.class_id == 137);
+            if n.xform.scale != [1., 1., 1.] || (renderer && n.parent.is_none()) {
+                let m = crysirror_unity::world6::world_matrix(&scene, i);
+                println!("{} local {:?} world {:?} renderer {renderer}", scene.path(i), n.xform.scale, m.to_scale_rotation_translation().0.to_array());
+            }
+        }
+    }
+}

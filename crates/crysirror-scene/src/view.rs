@@ -608,6 +608,8 @@ pub enum PbrDrawable {
         hidden: Vec<String>,
         /// UV0 offsets of named nodes' meshes.
         uv_offsets: Vec<(String, [f32; 2])>,
+        /// Toon blend-texture weights of named nodes' meshes.
+        base_blend: Vec<(String, f32)>,
         /// Instance key whose local pose is copied onto same-named nodes.
         follow: Option<u64>,
         /// Leader node the root nodes ride on (`AnimationState::attach`).
@@ -867,6 +869,7 @@ impl World {
                             .collect(),
                         hidden: spec.animation.iter().flat_map(|a| a.hidden.iter().cloned()).collect(),
                         uv_offsets: spec.animation.iter().flat_map(|a| a.uv_offsets.iter().map(|(n, o)| (n.clone(), *o))).collect(),
+                        base_blend: spec.animation.iter().flat_map(|a| a.base_blend.iter().map(|(n, w)| (n.clone(), *w))).collect(),
                         follow: spec
                             .animation
                             .as_ref()

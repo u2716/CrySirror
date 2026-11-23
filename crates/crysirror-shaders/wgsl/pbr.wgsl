@@ -589,7 +589,11 @@ fn fs_main(i: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec
     let occ_sample = textureSample(t_occlusion, s_material, uv);
     let occ_tex = occ_sample.r;
     // Toon: raw base, shadow (slot 3) and highlight (slot 6) samples.
-    let toon_base = textureSample(t_base, s_material, uv);
+    var toon_base = textureSample(t_base, s_material, uv);
+    let toon_blend = textureSample(t_emissive, s_material, uv);
+    if material.alpha.z > 1.5 && material.params.w > 0.5 {
+        toon_base = mix(toon_base, toon_blend, clamp(object.uv.z, 0.0, 1.0));
+    }
     let toon_hi = textureSample(t_specular, s_material, uv);
     if material.alpha.x == 1.0 && base.a < material.alpha.y {
         discard;

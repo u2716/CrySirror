@@ -523,7 +523,8 @@ struct ObjectUniform {
     normal: [[f32; 4]; 4],
     prev_model: [[f32; 4]; 4],
     skin: [u32; 4],
-    /// xy: UV0 offset (`AnimationState::uv_offsets`).
+    /// xy: UV0 offset (`AnimationState::uv_offsets`), z: toon blend-texture
+    /// weight (`AnimationState::base_blend`).
     uv: [f32; 4],
 }
 
@@ -1445,7 +1446,7 @@ impl PbrRenderer {
         let object_bgl = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("pbr object"),
             entries: &[
-                uniform_entry(0, wgpu::ShaderStages::VERTEX, true),
+                uniform_entry(0, wgpu::ShaderStages::VERTEX_FRAGMENT, true),
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::VERTEX,
@@ -2361,7 +2362,9 @@ impl PbrRenderer {
                 // key light limit.
                 m.toon.as_ref().map_or(m.roughness_factor, |t| t.light_limit),
                 m.normal_scale,
-                m.occlusion_strength,
+                // Toon materials take no occlusion; the slot flags a blend
+                // texture (bound in the emissive slot).
+                m.toon.as_ref().map_or(m.occlusion_strength, |t| if t.blend_texture.is_some() { 1. } else { 0. }),
             ],
             alpha: [
                 m.alpha_mode.code(),
@@ -2602,7 +2605,11 @@ impl PbrRenderer {
         // Toon materials bind lookup/shadow/highlight in slots 1, 3 and 6, raw.
         let mut slots = m.textures();
         if let Some(t) = &m.toon {
-            [slots[1], slots[3], slots[6]] = t.textures();
+            let [lookup, shadow, highlight, blend] = t.textures();
+            [slots[1], slots[3], slots[6]] = [lookup, shadow, highlight];
+            if blend.is_some() {
+                slots[4] = blend;
+            }
         }
         let srgb_slot = |i: usize| matches!(i, 0 | 4) || (i == 6 && m.toon.is_none());
         for (i, path) in slots.into_iter().enumerate() {
@@ -2732,7 +2739,8 @@ impl PbrRenderer {
                             pick(m.toon.as_ref().map_or(m.metallic_roughness_texture, |t| t.lookup_texture), 1),
                             pick(m.normal_texture, 2),
                             pick(m.toon.as_ref().map_or(m.occlusion_texture, |t| t.shadow_texture), 1),
-                            pick(m.emissive_texture, 0),
+                            // Toon: the blend texture when present.
+                            pick(m.toon.as_ref().and_then(|t| t.blend_texture).or(m.emissive_texture), 0),
                             pick(m.opacity_texture, 1),
                             pick(m.toon.as_ref().map_or(m.specular_texture, |t| t.highlight_texture), 0),
                         ],
@@ -3382,6 +3390,7 @@ impl PbrRenderer {
                     morphs,
                     hidden,
                     uv_offsets,
+                    base_blend,
                     ..
                 } => {
                     let key = format!("{client}@{}:{asset}", assets.revision(ClientId(*client)));
@@ -3439,7 +3448,8 @@ impl PbrRenderer {
                             next_prev_palettes.insert(sub, pal);
                         }
                         let obj = objects.len() as u32;
-                        let uv = uv_offsets.iter().find(|(n, _)| *n == node.name).map_or([0.; 4], |(_, o)| [o[0], o[1], 0., 0.]);
+                        let blend = base_blend.iter().find(|(n, _)| *n == node.name).map_or(0., |(_, w)| *w);
+                        let uv = uv_offsets.iter().find(|(n, _)| *n == node.name).map_or([0., 0., blend, 0.], |(_, o)| [o[0], o[1], blend, 0.]);
                         objects.push(ObjectUniform {
                             model: wm,
                             normal: world.inverse().transpose().to_cols_array_2d(),

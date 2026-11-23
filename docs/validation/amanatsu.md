@@ -288,3 +288,10 @@
 - Implementation: `card::Card::graphic`, `Human::{ramp, shadow_depth, line_width}`; the AL material hook uses the card ramp and depth, `skin_ramp_curve` for every AL material with `_Shadow_power`, and shared `ToonShading::{shade_kind, shade_color}` (`ToonShadeKind::{BaseHsv, Cloth, Fixed}`) with `shadow_light` for skin, clothes and hair (no ambient term, no base compensation).
 - Behaviour: pool close-up (`w1`, frame 1930), HScene (`hp0`, 3000) and night HScene (`n11c`, 6400): no missing ramp; at night the shirt shades (186, 188, 181) with folds under the bluish camera light instead of a flat (233, 233, 230).
 - Not established: `_Line_width` on the outline width, the cloth mask mix toward (0.905, 0.85, 0.668), the saturated-colour shadow lift, accessories' programs, `_UseShadowColor` replacing the whole tone.
+
+## 2026-11-23 — Expression flush
+
+- Native evidence: the `AL/skin_head` forward program mixes the base toward `_hohoakacolor.rgb · clamp(√lum(base), 0.1, 1)` by `_expressionmap.r · _HohoakaIntensity · _hohoakacolor.a` (linear, `_expressionmap_ST` on uv0) before the cheek makeup. `HumanFace.ChangeHohoAkaRate` sets `_HohoakaIntensity`; `Manager.Game.Expression.Change` applies the expression's `HohoAkaRate` (table column 10, after eye look) unless skipped, and the H breath `FaceParam.Cheek` (offset 28) carries the HScene rate.
+- Implementation: shared `ToonShading::blend_texture` (bound in the emissive slot, sRGB) and `AnimationState::base_blend` (per-node weight in the object uniform, now visible to the fragment stage); amanatsu `chara::flush_layer` bakes the full-rate flushed face (`chara::tests::flush_layer_mix`), `face::Expression::hohoaka` from the expression table, ADV expressions and breath faces, sent as `base_blend` on `cf_O_face`.
+- Behaviour: HScene (`h_lv1`, `hp0`, frame 3000) and night HScene (`n11c`, frame 6400): cheeks and nose flush with the breath face's rate; the earlier captures show the plain face.
+- Not established: tears (`TearsLV`), the expression highlight switch, blend transitions of the rate.

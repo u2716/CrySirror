@@ -40,6 +40,9 @@ pub mod key {
     pub const ACCESSORY_PARENT: i32 = 54;
 }
 
+/// The face mesh node (`AL/skin_head`), target of the flush blend.
+pub const FACE_MESH: &str = "cf_O_face";
+
 /// Hair part lists in `HairData.parts` order.
 pub const HAIR_LISTS: [&str; 4] = ["bo_hair_b", "bo_hair_f", "bo_hair_s", "bo_hair_o"];
 /// Clothes part lists in `ClothesData.parts` order.
@@ -350,9 +353,8 @@ impl Place {
 /// `AL/skin_head` forward program mixes them (`HumanFace.ChangeSettingCheek*`
 /// write the card values to the material unchanged). SATD-amanatsu-port:
 /// the nose gloss (A) and line (B), eye shadow (eyelid layer), face detail
-/// and paint, moles and the expression blush map (`_expressionmap`,
-/// `_HohoakaIntensity`) are not drawn; highlights are added to the base
-/// texture instead of lit.
+/// and paint and moles are not drawn; highlights are added to the base
+/// texture instead of lit. The expression flush is `flush_layer`.
 fn face_makeup(lists: &Lists, face: &Value, makeup: Option<&Value>) -> Vec<MakeupLayer> {
     let mut out = Vec::new();
     let tex = |list: &str, id: i64, key: i32| lists.row(list, id).and_then(|r| r.asset(key::MAIN_AB, key));
@@ -1292,6 +1294,13 @@ impl SceneAssets for CharaAssets<'_> {
                     o.toon_shadow = Some((format!("{key}:md"), layer));
                 }
             }
+            // `_expressionmap` × `_HohoakaIntensity`: the flushed face the
+            // face mesh blends toward by the expression's rate.
+            if let (Some(t), Some(c), Some((key, img))) = (m.textures.get("_expressionmap").filter(|t| t.texture.path_id != 0 && shader.starts_with("AL/skin_head")), m.colors.get("_hohoakacolor").copied(), o.base_texture.clone()) {
+                let (f, id) = self.unity.target(&mf, t.texture)?;
+                let map = self.mask(&f, id)?;
+                o.toon_blend = Some((format!("{key}:flush"), flush_layer(&img, &map, [t.scale[0], t.scale[1], t.offset[0], t.offset[1]], c)));
+            }
             // The face's md layers (two Texture2D masks).
             if let (Some(md), Some((key, img))) = (m.textures.get("_Detail_mask_01").filter(|t| t.texture.path_id != 0 && shader.starts_with("AL/skin_head")), o.base_texture.clone()) {
                 let (f, id) = self.unity.target(&mf, md.texture)?;
@@ -1513,6 +1522,36 @@ pub fn ramp_curve(lamp: Option<&ImageSurface>) -> [f32; 256] {
     })
 }
 
+/// The face's flushed base (`AL/skin_head` before its makeup): the base
+/// moves toward `_hohoakacolor · clamp(√lum(base), 0.1, 1)` by
+/// `_expressionmap.r · _hohoakacolor.a` (linear; `st` the map's scale and
+/// offset on uv0). The runtime rate blends base → this layer.
+pub fn flush_layer(base: &ImageSurface, map: &ImageSurface, st: [f32; 4], color: [f32; 4]) -> ImageSurface {
+    let mut out = base.clone();
+    let c = linear_color(color);
+    let (w, h) = (base.width as usize, base.height as usize);
+    for y in 0..h {
+        for x in 0..w {
+            let u = (x as f32 + 0.5) / w as f32 * st[0] + st[2];
+            let v = (1. - (y as f32 + 0.5) / h as f32) * st[1] + st[3];
+            let mx = ((u.rem_euclid(1.) * map.width as f32) as usize).min(map.width as usize - 1);
+            let my = (((1. - v.rem_euclid(1.)) * map.height as f32) as usize).min(map.height as usize - 1);
+            let k = f32::from(map.rgba[(my * map.width as usize + mx) * 4]) / 255. * c[3];
+            if k <= 0. {
+                continue;
+            }
+            let i = (y * w + x) * 4;
+            let lin = [0, 1, 2].map(|j| srgb_decode(f32::from(base.rgba[i + j]) / 255.));
+            let l = (lin[0] * 0.212673 + lin[1] * 0.715152 + lin[2] * 0.072175).sqrt().clamp(0.1, 1.);
+            for j in 0..3 {
+                let t = lin[j] + (c[j] * l - lin[j]) * k.min(1.);
+                out.rgba[i + j] = (srgb_encode(t) * 255.).round().clamp(0., 255.) as u8;
+            }
+        }
+    }
+    out
+}
+
 /// Shadow amount of the AL skin programs at 256 steps of the engine's half
 /// Lambert coordinate `u = n·l · 0.4951 + 0.5`: `_Lamp` blue at
 /// `sat((n·l + 0.6) / 1.6)`, the lit part gated by `sat((n·l − 0.05) · 5)`.
@@ -1696,6 +1735,19 @@ pub fn toon_ramp(curve: &[f32; 256], shadow: [f32; 3]) -> ImageSurface {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flush_layer_mix() {
+        // A grey base under a full mask with an opaque red flush colour
+        // becomes red × √lum; an empty mask leaves it.
+        let base = ImageSurface { width: 2, height: 1, rgba: vec![188, 188, 188, 255, 188, 188, 188, 255] };
+        let map = ImageSurface { width: 2, height: 1, rgba: vec![255, 0, 0, 255, 0, 0, 0, 255] };
+        let out = flush_layer(&base, &map, [1., 1., 0., 0.], [1., 0., 0., 1.]);
+        let l = srgb_decode(188. / 255.).sqrt();
+        assert_eq!(out.rgba[0], (srgb_encode(l) * 255.).round() as u8);
+        assert_eq!(&out.rgba[1..3], &[0, 0]);
+        assert_eq!(&out.rgba[4..8], &[188, 188, 188, 255]);
+    }
 
     #[test]
     fn skin_lamp_curve() {

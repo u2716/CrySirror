@@ -10,8 +10,7 @@
 //! Eye look (`EyeLookCalc` → `CmpEyeLookMaterial`) moves the iris
 //! texture of `cf_O_hitomi_L`/`_R` toward a target.
 //!
-//! SATD-amanatsu-port: cheeks
-//! (`HohoAka`), tears, highlights, lip sync and pattern blend transitions
+//! SATD-amanatsu-port: tears, highlights, lip sync and pattern blend transitions
 //! are not applied; the eyes/mouth openness is the `OpenMax` value.
 use crate::unity::Unity;
 use anyhow::Result;
@@ -40,11 +39,13 @@ pub struct Expression {
     pub eyebrow_open: f32,
     pub eyes_open: f32,
     pub mouth_open: f32,
+    /// `HumanFace.ChangeHohoAkaRate`: the flush (`_HohoakaIntensity`).
+    pub hohoaka: f32,
 }
 
 impl Default for Expression {
     fn default() -> Self {
-        Self { eyebrow: 0, eyes: 0, mouth: 0, eyebrow_open: 1., eyes_open: 1., mouth_open: 0. }
+        Self { eyebrow: 0, eyes: 0, mouth: 0, eyebrow_open: 1., eyes_open: 1., mouth_open: 0., hohoaka: 0. }
     }
 }
 
@@ -151,7 +152,7 @@ pub fn command_camera(scene: &Scene6, id: i64, height: f32) -> Option<(glam::Vec
 /// `Manager.Game.LoadExpressionData` (`com/lis/exp` `cNN` `ExcelData`):
 /// preset id → eyebrow, eyes, mouth, eyebrow open, eyes open, mouth open
 /// min (the rows' columns 2–6 and 8).
-pub fn expression_list(unity: &mut Unity, personality: i64) -> Result<std::collections::HashMap<i64, [Option<f32>; 6]>> {
+pub fn expression_list(unity: &mut Unity, personality: i64) -> Result<std::collections::HashMap<i64, [Option<f32>; 7]>> {
     let mut out = std::collections::HashMap::new();
     let Some((key, id)) = unity.bundle_asset("lib/com/lis/exp/000_00.unity3d", &format!("c{personality:02}"), 114)? else { return Ok(out) };
     let f = unity.decode(&key, id)?;
@@ -160,7 +161,9 @@ pub fn expression_list(unity: &mut Unity, personality: i64) -> Result<std::colle
         let cells: Vec<String> = r.array("List").unwrap_or(&[]).iter().map(|v| if let Value::String(s) = v { s.clone() } else { String::new() }).collect();
         let Some(pid) = cells.first().and_then(|c| c.trim().parse::<i64>().ok()) else { continue };
         let v = |i: usize| cells.get(i).and_then(|c| c.trim().parse::<f32>().ok());
-        out.insert(pid, [v(2), v(3), v(4), v(5), v(6), v(8)]);
+        // Columns from 2: eyebrow, eyes, mouth, eyebrow open, eyes open,
+        // mouth open max/min, eye look, flush rate (`HohoAkaRate`), …
+        out.insert(pid, [v(2), v(3), v(4), v(5), v(6), v(8), v(10)]);
     }
     Ok(out)
 }
