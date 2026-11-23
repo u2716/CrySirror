@@ -21,6 +21,7 @@ The command reads the level declaration, mounts the eight archives in place, dec
 | `VRAM_DESC` | Reads the RSX format, size, level count, face count and data offset relative to the package's VRAM base (file length minus header data size). Level 0 of DXT1/DXT3/DXT5 decodes through the shared block decoder; swizzled A8R8G8B8 is de-Mortonized. |
 | Background mesh indices | `geometry::decode_indices` expands the compressed fragment triangle stream (explicit references, 2-bit strip codes, emission flags). Every fragment of `menu-temple` decodes with all counts and references consistent and no degenerate triangles. |
 | Background mesh positions | `mesh::prototype_meshes` relocates the package and dequantizes fragment positions (bounds mapping; offset fragments on the mesh grid with two placement bits). `examples/background_census` decodes every installed package. |
+| Mesh materials and UVs | Mesh groups bind fragment ranges to materials; pass-0 samplers name textures by `VRAM_DESC` ID. Texture coordinates are 1/256 of the texture. `level_resources LEVEL OUT.glb` writes a textured inspection GLB outside the repository. |
 | XVAG codec 6 | `crysirror_audio::xvag` decodes PS-ADPCM streams (music, ambience, speech) with frame-interleaved channels to WAVE. |
 | Loose boot DDS | Uses the existing CrySirror image decoder. The local sample includes original 1280 × 720 DXT1 controller and gallery assets. |
 

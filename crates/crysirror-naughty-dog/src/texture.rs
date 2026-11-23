@@ -25,6 +25,8 @@ pub enum Format {
 #[derive(Clone, Debug, PartialEq)]
 pub struct VramDesc {
     pub name: String,
+    /// Texture ID that material samplers refer to (descriptor word 3).
+    pub id: u32,
     pub format: Format,
     pub width: u32,
     pub height: u32,
@@ -61,7 +63,7 @@ impl VramDesc {
         );
         let end = b[0x34..avail].iter().position(|c| *c == 0).context("unterminated ND texture name")?;
         let name = std::str::from_utf8(&b[0x34..0x34 + end])?.to_owned();
-        let d = Self { name, format, width, height, levels, faces, offset: word(&b, 4).into(), size: word(&b, 8).into() };
+        let d = Self { name, id: word(&b, 0xc), format, width, height, levels, faces, offset: word(&b, 4).into(), size: word(&b, 8).into() };
         ensure!(d.total_bytes() <= d.size, "ND texture size");
         Ok(d)
     }

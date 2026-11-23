@@ -46,8 +46,8 @@ fn main() -> Result<()> {
         match result {
             Ok(m) => {
                 meshes += m.len();
-                fragments += m.iter().map(Vec::len).sum::<usize>();
-                triangles += m.iter().flatten().map(|f| f.triangles.len()).sum::<usize>();
+                fragments += m.iter().map(|m| m.fragments.len()).sum::<usize>();
+                triangles += m.iter().flat_map(|m| &m.fragments).map(|f| f.triangles.len()).sum::<usize>();
             }
             Err(e) => failures.entry(format!("{e:#}")).or_default().push(name.clone()),
         }
