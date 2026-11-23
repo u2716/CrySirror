@@ -407,7 +407,9 @@ pub struct Game {
     /// Steps to wait after a map load before spawning heroines.
     heroine_wait: u8,
     /// Heroines to spawn on the map (card, transform, position, sun).
-    pending_heroines: Vec<(String, serde_json::Value, [f32; 3], f32)>,
+    pending_heroines: Vec<(String, serde_json::Value, [f32; 3], f32, Vec<i32>)>,
+    /// `al_next_action` (loaded on first use).
+    next_actions: Option<std::collections::HashMap<i32, Vec<(i32, f32)>>>,
     /// The card of the heroine in the current conversation.
     talk_card: Option<String>,
     /// The H place kind (`HPoint._placeType`) of the H scene.
@@ -664,8 +666,8 @@ impl Game {
         }
         self.spawn_particles(host, client, &world.particles);
         // Registered heroines at the map's standing action points
-        // (SATD-amanatsu-port: `ActionPoint` choice, their `_animIDList`
-        // motions and NavMesh wandering are not ported).
+        // with an activity of the point (`point_activity`;
+        // SATD-amanatsu-port: `ActionPoint` choice and NavMesh wandering).
         self.place_heroines(false);
         // The H place: `H/H00`, or `NightEventH00` for a night event H
         // (`MovePointInfo.GetNightEventHPoint`).
@@ -726,7 +728,8 @@ impl Game {
             let sun = world.chara_key();
             // One heroine per step after the map: a step's generated
             // uploads are bounded.
-            self.pending_heroines.push((card.clone(), t, crysirror_unity::gltf::mirror_point(*pos), sun));
+            let anims = world.point_anims.get(&point.0).cloned().unwrap_or_default();
+            self.pending_heroines.push((card.clone(), t, crysirror_unity::gltf::mirror_point(*pos), sun, anims));
             self.standing.insert(card.clone(), (*pos, *rot, 0.5));
             self.chara_roots.insert(card.clone(), (*pos, *rot));
         }
@@ -1109,6 +1112,50 @@ impl Game {
             }
         }
         best.map(|b| b.1)
+    }
+
+    /// `ActionPoint.GetAnimationID(-1, timezone)` at placement: the
+    /// point's `_animIDList` entries weighted by the `al_next_action` row
+    /// −1, the first entry when none is weighted; the id's state in the
+    /// heroine's motion list (`anim_f_{personality}`).
+    /// SATD-amanatsu-port: the time-zone variant of the chosen id, the
+    /// follow-up actions over time and NavMesh movement between points.
+    fn point_activity(&mut self, personality: i64, anims: &[i32]) -> Option<(i32, String)> {
+        if anims.is_empty() {
+            return None;
+        }
+        if self.next_actions.is_none() {
+            match crate::tables::next_actions(&mut self.unity) {
+                Ok(t) => self.next_actions = Some(t),
+                Err(e) => {
+                    self.log.push(format!("al_next_action: {e:#}"));
+                    self.next_actions = Some(Default::default());
+                }
+            }
+        }
+        let weights: Vec<(i32, f32)> = self.next_actions.as_ref().and_then(|t| t.get(&-1)).map(|row| row.iter().filter(|(id, w)| *w > 0. && anims.contains(id)).copied().collect()).unwrap_or_default();
+        let id = if weights.is_empty() {
+            anims[0]
+        } else {
+            let total: f32 = weights.iter().map(|w| w.1).sum();
+            let mut x = self.random(10_000) as f32 / 10_000. * total;
+            weights.iter().find(|(_, w)| {
+                x -= w;
+                x < 0.
+            }).map_or(weights[weights.len() - 1].0, |w| w.0)
+        };
+        let list = format!("anim_f_{personality:03}");
+        match crate::tables::motion_state(&mut self.unity, &list, id) {
+            Ok(Some(state)) => Some((id, state)),
+            Ok(None) => {
+                self.log.push(format!("ActionPoint activity {id}: not in {list}"));
+                None
+            }
+            Err(e) => {
+                self.log.push(format!("ActionPoint activity {id}: {e:#}"));
+                None
+            }
+        }
     }
 
     fn random(&mut self, n: usize) -> usize {
@@ -3692,6 +3739,7 @@ impl AmanatsuVm {
             h_place: 0,
             talk_card: None,
             pending_heroines: Vec::new(),
+            next_actions: None,
             heroine_wait: 0,
             standing: std::collections::HashMap::new(),
             command_view_return: None,
@@ -3903,10 +3951,19 @@ impl AmanatsuVm {
         if game.heroine_wait > 0 {
             game.heroine_wait -= 1;
         } else if game.pending_map.is_none() && !game.pending_heroines.is_empty() {
-            let (card, t, pos, sun) = game.pending_heroines.remove(0);
-            match game.spawn_character(host, client, &card, Some(t), sun) {
+            let (card, t, pos, sun, anims) = game.pending_heroines.remove(0);
+            let (personality, name) = game.unity.read_all(&card).ok().and_then(|b| crate::card::Card::parse(&b).ok()).and_then(|c| c.parameter()).map_or((0, String::new()), |p| (p.0, p.1));
+            let state = game.point_activity(personality, &anims);
+            let spawned = match &state {
+                Some((id, state)) => {
+                    let (bundle, controller) = crate::chara::motion_controller(true);
+                    game.log.push(format!("ActionPoint activity {card}: {id} {state}"));
+                    game.spawn_character_motion(host, client, &card, Some(t), sun, Some((&bundle, controller, state))).map(|_| ())
+                }
+                None => game.spawn_character(host, client, &card, Some(t), sun),
+            };
+            match spawned {
                 Ok(()) => {
-                    let (personality, name) = game.unity.read_all(&card).ok().and_then(|b| crate::card::Card::parse(&b).ok()).and_then(|c| c.parameter()).map_or((0, String::new()), |p| (p.0, p.1));
                     game.spots.push((card, pos, personality, name));
                 }
                 Err(e) => game.log.push(format!("heroine {card}: {e:#}")),

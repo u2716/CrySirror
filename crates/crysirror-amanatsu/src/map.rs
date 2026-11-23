@@ -248,6 +248,9 @@ pub struct MapWorld {
     /// `AL.ActionPoint`s of the move-point prefab: (name, Unity world
     /// position, world rotation).
     pub points: Vec<(String, [f32; 3], [f32; 4])>,
+    /// `ActionPoint._animIDList` by point name (the activities a heroine
+    /// may take there; first 0 normal standing, 1 chair).
+    pub point_anims: HashMap<String, Vec<i32>>,
     /// `ActionPoint`s of kind 1 (`GetShortMoviePoint`): short movie id,
     /// position, rotation.
     pub short_movies: Vec<(i32, [f32; 3], [f32; 4])>,
@@ -457,6 +460,7 @@ pub fn load_with_budget(unity: &mut Unity, info: &MapInfo, time_zone: i32, textu
     let mut action_points = Vec::new();
     let mut short_movies = Vec::new();
     let mut items = Vec::new();
+    let mut point_anims = HashMap::new();
     match crate::level::Level::prefab(unity, &format!("lib/{}", info.point.0), &info.point.1) {
         Ok(points) => {
             for (i, n) in points.scene.nodes.iter().enumerate() {
@@ -467,6 +471,10 @@ pub fn load_with_budget(unity: &mut Unity, info: &MapInfo, time_zone: i32, textu
                 if n.components.iter().any(|c| c.script == "AL.ActionPoint") {
                     let (_, rot, pos) = world6::world_matrix(&points.scene, i).to_scale_rotation_translation();
                     action_points.push((n.name.clone(), pos.to_array(), rot.to_array()));
+                    if let Some(list) = n.components.iter().find(|c| c.script == "AL.ActionPoint").and_then(|c| c.fields.array("_animIDList")) {
+                        let ids: Vec<i32> = list.iter().filter_map(|v| if let Value::Int(i) = v { Some(*i as i32) } else { None }).collect();
+                        point_anims.insert(n.name.clone(), ids);
+                    }
                     if let Some(c) = n.components.iter().find(|c| c.script == "AL.ActionPoint").filter(|c| c.fields.int("_kind") == Some(1)) {
                         short_movies.push((c.fields.int("_shortMoiveID").unwrap_or(0) as i32, pos.to_array(), rot.to_array()));
                     }
@@ -496,7 +504,7 @@ pub fn load_with_budget(unity: &mut Unity, info: &MapInfo, time_zone: i32, textu
         }
     };
     log.push(format!("camera light: {:?}", camera_light.as_ref().map(|l| (l.direction, l.color, l.intensity))));
-    Ok(MapWorld { info: info.clone(), chunks, report, sun, chara_light, camera_light, lights, sky, settings, post, fog, cameras, points: action_points, short_movies, items, particles, log })
+    Ok(MapWorld { info: info.clone(), chunks, report, sun, chara_light, camera_light, lights, sky, settings, post, fog, cameras, points: action_points, point_anims, short_movies, items, particles, log })
 }
 
 impl MapWorld {

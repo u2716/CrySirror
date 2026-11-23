@@ -309,3 +309,10 @@
 - Implementation: `Human::accessory_slots` (list key 39 names), `ClothRun::acs_slots` hiding `acs{slot}#root` per slot, adapter `h_accessory_slots`/`h_accessory_toggle` (rows cloned from the template as `AcsSlot {slot}`); shared `ugui::selectable_transition` resolves the target graphic in the selectable's own subtree first (cloned rows share component ids).
 - Behaviour (`h_lv1`, clothes-menu track with `Acs` at (1825, 32)): rows `貝のネックレス`, `髪留め`, `スロット03`–`スロット20`; clicking the first row logs `HScene accessory slot 0: hidden`, switches its sprite and removes the necklace from the character.
 - Not established: the disabled look of empty rows (their toggles show the normal sprite), the `ALL` toggle's interplay with per-slot states, scrolling the list.
+
+## 2026-11-23 — ActionPoint activities
+
+- Native evidence: `AL.ActionPoint` keeps `_animIDList` (`IsNormal`: first 0, `IsChair`: first 1); `GetAnimationID(now, timezone)` weights the list's ids by the `ContentProvider._tableNext` row of the current animation (`al_next_action[000_00]`: `id/weight` cells, row −1 before any action), picks one with `ProbabilityCalclator.DetermineFromDict` and maps it to its time-zone variant (a four-column table, not yet located).
+- Implementation: `map::MapWorld::point_anims`, `tables::next_actions`, adapter `point_activity` spawning the placed heroine in the chosen id's state of `anim_f_{personality}`.
+- Behaviour (`with` save, `w1`, frame 1520): the heroine at the pool's point plays activity 58 (`al_f_act_00_15`, a stretch) instead of the standing idle; the talk close-up (frame 1930) is unchanged.
+- Not established: the time-zone variant table, follow-up actions (`GetAnimationID(now, …)` after a loop), the point choice and NavMesh movement.

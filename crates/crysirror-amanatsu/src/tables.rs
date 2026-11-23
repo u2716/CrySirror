@@ -101,6 +101,23 @@ pub fn short_movie_maps(unity: &mut crate::unity::Unity) -> Result<std::collecti
     Ok(t.rows.iter().filter_map(|r| Some((r.get(i)?.parse().ok()?, r.get(m)?.parse().ok()?))).collect())
 }
 
+/// `ContentProvider._tableNext` (`am/lis` `al_next_action`,
+/// `ALNextActionContent`): current animation id (−1 at placement) → the
+/// next animation ids with their weights (`id/weight` cells).
+pub fn next_actions(unity: &mut crate::unity::Unity) -> Result<std::collections::HashMap<i32, Vec<(i32, f32)>>> {
+    let (key, id) = unity.bundle_asset("lib/am/lis/000_00.unity3d", "al_next_action[000_00]", 49)?.context("al_next_action")?;
+    let t = Table::parse(&unity.text_asset(&key, id)?)?;
+    Ok(t
+        .rows
+        .iter()
+        .filter_map(|r| {
+            let now = r.first()?.trim().parse().ok()?;
+            let next = r[1..].iter().filter_map(|c| c.split_once('/')).filter_map(|(a, w)| Some((a.trim().parse().ok()?, w.trim().parse().ok()?))).collect();
+            Some((now, next))
+        })
+        .collect())
+}
+
 /// `ADV.Commands.Chara.Motion`: a motion id of the `ani/lis/m` lists
 /// (`anim_f_{personality:03}` for heroines, `anim_m` for the player;
 /// every bundle's `{list}[…]` table) → the state name of the character's
