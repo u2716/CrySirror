@@ -57,7 +57,7 @@ the `SaveLoadUI` list (つづきから loads the newest save; MapSelectUI
 Save/Load), manual saves, the original's auto-save rotation limit,
 `SaveTimeText` in local time (UTC is written), `PlayerData` from the
 player card editor (the default male card is saved), save versions (0.0.0)
-and import of saves in the installation's `UserData/save`, the `ConfigWindow` parts listed in `config.rs`, the `ExitDialog` animations and button layout
+and import of saves in the installation's `UserData/save`, the `ConfigWindow` parts listed in `config.rs`, the `ExitDialog` animations
 confirmation (quit is immediate), the TOS check/viewer, the language dialog,
 Selectable hover/press transitions (`ColorTint`, Animator triggers), the
 ILLGAMES `PlayAnimationUI` tweens (LitMotion easing) and the uploader/

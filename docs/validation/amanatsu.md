@@ -316,3 +316,9 @@
 - Implementation: `map::MapWorld::point_anims`, `tables::next_actions`, adapter `point_activity` spawning the placed heroine in the chosen id's state of `anim_f_{personality}`.
 - Behaviour (`with` save, `w1`, frame 1520): the heroine at the pool's point plays activity 58 (`al_f_act_00_15`, a stretch) instead of the standing idle; the talk close-up (frame 1930) is unchanged.
 - Not established: the time-zone variant table, follow-up actions (`GetAnimationID(now, …)` after a loop), the point choice and NavMesh movement.
+
+## 2026-11-23 — Layout groups and fitted children
+
+- Native evidence: `HorizontalOrVerticalLayoutGroup.GetChildSizes` reads an uncontrolled child's rect size; the child's own `ContentSizeFitter` sets that size in the same rebuild (steady state). `ExitDialog`: `Buttons` (`HorizontalLayoutGroup`, spacing 100, lower centre, no child control) holds `btnEnter`/`btnCancel` with width 0, a preferred-width fitter and `LayoutElement.minWidth` 160; `MsgLayout/NormalTextArea` (`VerticalLayoutGroup`, padding 5/5, no child control) holds a text with preferred fitters.
+- Implementation: shared `ugui::own_size` (fitted size of an uncontrolled child) in both `arrange` and `sizes`.
+- Behaviour: the title's exit dialog shows はい/いいえ 160 wide, 100 apart and centred (they overlapped), and the message bar fits its text; the title, pool HUD, command close-up and HScene clothes menu render as before.

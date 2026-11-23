@@ -422,6 +422,18 @@ fn layout_children(scene: &Scene6, states: &HashMap<usize, NodeState>, n: usize)
 }
 
 /// `LayoutUtility` min/preferred/flexible size of a node along `axis`.
+/// The size a layout group reads from a child it does not control: the
+/// child's rect size, which its own `ContentSizeFitter` (1 min, 2
+/// preferred) sets (Unity's rebuild reaches this steady state).
+fn own_size(scene: &Scene6, states: &HashMap<usize, NodeState>, c: usize, axis: usize, svc: &Services) -> f32 {
+    let fit = script(scene, c, "ContentSizeFitter").map_or(0, |f| f.int(if axis == 0 { "m_HorizontalFit" } else { "m_VerticalFit" }).unwrap_or(0));
+    if fit != 0 {
+        let (min, pref, _) = sizes(scene, states, c, axis, svc);
+        return if fit == 1 { min } else { pref };
+    }
+    states.get(&c).and_then(|s| s.size_delta).map(|d| d[axis]).or_else(|| scene.nodes[c].xform.rect.map(|r| r.size_delta[axis])).unwrap_or(0.)
+}
+
 fn sizes(scene: &Scene6, states: &HashMap<usize, NodeState>, n: usize, axis: usize, svc: &Services) -> (f32, f32, f32) {
     let (mut min, mut pref, mut flex) = (0f32, 0f32, 0f32);
     let group = [(0usize, "HorizontalLayoutGroup"), (1, "VerticalLayoutGroup")].into_iter().find_map(|(a, name)| script(scene, n, name).map(|g| (a, g)));
@@ -435,7 +447,7 @@ fn sizes(scene: &Scene6, states: &HashMap<usize, NodeState>, n: usize, axis: usi
             let (cmin, cpref, cflex) = if control {
                 sizes(scene, states, c, axis, svc)
             } else {
-                let d = states.get(&c).and_then(|s| s.size_delta).map(|d| d[axis]).or_else(|| scene.nodes[c].xform.rect.map(|r| r.size_delta[axis])).unwrap_or(0.);
+                let d = own_size(scene, states, c, axis, svc);
                 (d, d, 0.)
             };
             if along == axis {
@@ -545,7 +557,7 @@ fn arrange(scene: &Scene6, states: &HashMap<usize, NodeState>, n: usize, g: &Fie
                     let (a, b, f) = sizes(scene, states, c, axis, svc);
                     (a, b, if expand { f.max(1.) } else { f })
                 } else {
-                    let d = states.get(&c).and_then(|s| s.size_delta).map(|d| d[axis]).or_else(|| scene.nodes[c].xform.rect.map(|r| r.size_delta[axis])).unwrap_or(0.);
+                    let d = own_size(scene, states, c, axis, svc);
                     (d, d, if expand { 1. } else { 0. })
                 }
             })

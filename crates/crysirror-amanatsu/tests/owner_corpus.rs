@@ -1000,6 +1000,15 @@ fn prefab_tree() {
         }
         let scripts: Vec<&str> = n.components.iter().filter(|c| !c.script.is_empty()).map(|c| c.script.as_str()).collect();
         println!("{}{} {}", if n.active { "" } else { "(inactive) " }, scene.path(i), scripts.join(","));
+        // `AMANATSU_FIELDS`: the fields of components whose script contains it.
+        if let Ok(want) = std::env::var("AMANATSU_FIELDS") {
+            if let Some(r) = n.xform.rect {
+                println!("    rect {r:?}");
+            }
+            for c in n.components.iter().filter(|c| want.split(',').any(|w| c.script.contains(w))) {
+                println!("    [{}] {:?}", c.script, c.fields.0.iter().filter(|(k, _)| !matches!(k.as_str(), "m_GameObject" | "m_Script" | "m_Name" | "m_EditorHideFlags")).map(|(k, v)| format!("{k}={v:?}")).collect::<Vec<_>>());
+            }
+        }
     }
 }
 
