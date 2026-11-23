@@ -53,6 +53,7 @@ pub fn adapter_registry() -> Result<AdapterRegistry> {
     crysirror_cm3d2::register(&mut registry)?;
     crysirror_exhibit::register(&mut registry)?;
     crysirror_amanatsu::register(&mut registry)?;
+    crysirror_naughty_dog::register(&mut registry)?;
     Ok(registry)
 }
 pub fn load_project(path: &Path) -> Result<Project> {
@@ -92,6 +93,9 @@ pub fn load_project(path: &Path) -> Result<Project> {
     }
     for c in project.clients.iter().filter(|c| c.adapter == "amanatsu") {
         serde_json::from_value::<crysirror_amanatsu::Config>(c.config.clone())?.validate()?;
+    }
+    for c in project.clients.iter().filter(|c| c.adapter == crysirror_naughty_dog::ENGINE_ID) {
+        serde_json::from_value::<crysirror_naughty_dog::Config>(c.config.clone())?.validate()?;
     }
     for c in project.clients.iter().filter(|c| c.adapter == "avg32") {
         serde_json::from_value::<crysirror_avg32::Config>(c.config.clone())?.validate()?;

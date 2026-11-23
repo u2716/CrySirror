@@ -2551,6 +2551,7 @@ dependencies = [
  "crysirror-malie",
  "crysirror-minori",
  "crysirror-n2system",
+ "crysirror-naughty-dog",
  "crysirror-network",
  "crysirror-nscripter",
  "crysirror-nsystem",
@@ -2706,6 +2707,9 @@ dependencies = [
  "crysirror-formats-arc",
  "crysirror-image",
  "crysirror-resource",
+ "crysirror-runtime",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
