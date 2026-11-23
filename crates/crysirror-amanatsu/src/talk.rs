@@ -110,13 +110,14 @@ pub fn command_family(button: &str) -> Option<&'static str> {
 
 /// What the session needs from the host this frame.
 pub enum Step {
+    Fault(String),
     None,
-    Voice(String, String),
+    Voice(i32, String, String),
     /// `CharaExpression` values (see `adv::Effect::Face`).
     Face([Option<f32>; 6]),
     /// An expression preset id.
     Expression(i64),
-    StopVoice,
+    StopVoice(i32),
     /// ADV character/event commands (`adv::Effect::EventCg` … `ClothState`).
     Chara(adv::Effect),
     End,
@@ -124,11 +125,21 @@ pub enum Step {
 
 pub struct Talk {
     pub program: Program,
+    /// Talk's primary cast. The card is read when CharaChange requests SetADV.
+    pub heroine_card: Option<String>,
+    bound_actors: HashMap<i32, adv::actor::Bindings>,
     index: HashMap<String, (String, i64)>,
     /// Scenarios still to play after the current one.
     queue: Vec<String>,
     pub wait: Wait,
     wait_until: u64,
+    fade_nodes: [Option<usize>; 2],
+    auto_wait_ms: u64,
+    auto_enabled: bool,
+    pub(crate) waiting_voice_playing: bool,
+    pub(crate) scene_fading: bool,
+    complete_since: Option<u64>,
+    pub(crate) move_origins: HashMap<u64, ([f32; 3], [f32; 4])>,
     name_node: Option<usize>,
     message_node: Option<usize>,
     window: Option<usize>,
@@ -159,13 +170,25 @@ impl Talk {
         let first = queue.pop().context("talk scenario")?;
         let mut program = Program::new(&first, load_scenario(unity, &index, &first)?, seed);
         program.names.insert("H".into(), heroine_name.to_owned());
+        program.vars.insert("NowID".into(), adv::Var::Int(0));
         let find = |path: &str| level.find(path);
         let mut t = Self {
             program,
+            heroine_card: None,
+            bound_actors: HashMap::new(),
             index,
             queue,
             wait: Wait::End,
             wait_until: 0,
+            fade_nodes: [find("ADVCore/Canvas_Main/FadeBack"), find("ADVCore/Canvas_Main/FadeFront")],
+            auto_wait_ms: (level.scene.nodes.iter().flat_map(|node| &node.components)
+                .find(|c| c.script == "ILLGAMES.ADV.MainScenario")
+                .and_then(|c| c.fields.float("_autoWaitTime")).context("MainScenario._autoWaitTime")? * 1000.) as u64,
+            auto_enabled: false,
+            waiting_voice_playing: false,
+            scene_fading: false,
+            complete_since: None,
+            move_origins: HashMap::new(),
             name_node: find("ADVCore/Canvas_Main/MsgWindowCanvas/t_tw_move/Window/Name"),
             message_node: find("ADVCore/Canvas_Main/MsgWindowCanvas/t_tw_move/Window/Message"),
             window: find("ADVCore/Canvas_Main/MsgWindowCanvas"),
@@ -267,31 +290,91 @@ impl Talk {
         }
     }
 
+    fn voice_actor(&self, operand: &str) -> Result<i32> {
+        match operand {
+            "NowID" => Ok(0),
+            value => value.trim().parse().with_context(|| format!("ADV voice actor {value:?}")),
+        }
+    }
+
+    fn apply_effects(&mut self, level: &mut Level, effects: Vec<adv::Effect>, steps: &mut Vec<Step>) {
+        for e in effects {
+            match e {
+                adv::Effect::Voice { actor, bundle, asset } => match self.voice_actor(&actor) {
+                    Ok(no) => steps.push(Step::Voice(no, bundle, asset)),
+                    Err(e) => steps.push(Step::Fault(e.to_string())),
+                },
+                adv::Effect::VoiceStop(actor) => match self.voice_actor(&actor) {
+                    Ok(no) => steps.push(Step::StopVoice(no)),
+                    Err(e) => steps.push(Step::Fault(e.to_string())),
+                },
+                adv::Effect::Unported(name, args) => self.log.push(format!("SATD-amanatsu-port: ADV {name} {args:?}")),
+                adv::Effect::Face { values, .. } => steps.push(Step::Face(values)),
+                adv::Effect::Expression { id, .. } => steps.push(Step::Expression(id)),
+                adv::Effect::ClearText => {
+                    self.reveal = None;
+                    self.complete_since = None;
+                    for node in [self.name_node, self.message_node].into_iter().flatten() {
+                        level.states.entry(node).or_default().text = Some(String::new());
+                    }
+                }
+                adv::Effect::CanvasAlpha { front, alpha } => {
+                    if let Some(node) = self.fade_nodes[front as usize] {
+                        level.set_active(node, alpha > 0.);
+                        level.states.entry(node).or_default().group_alpha = Some(alpha);
+                    }
+                }
+                adv::Effect::CanvasColor { front, color } => {
+                    if let Some(node) = self.fade_nodes[front as usize] {
+                        level.states.entry(node).or_default().color = color;
+                    }
+                }
+                e => steps.push(Step::Chara(e)),
+            }
+        }
+    }
+
     /// Advance until the next wait; returns host requests.
     pub fn advance(&mut self, unity: &mut Unity, level: &mut Level, now: u64) -> Vec<Step> {
         let mut steps = Vec::new();
+        let mut samples = Vec::new();
+        self.program.poll(now, &mut samples);
+        self.apply_effects(level, samples, &mut steps);
         loop {
             let mut effects = Vec::new();
             let w = self.program.run(&mut effects);
-            for e in effects {
-                match e {
-                    adv::Effect::Voice { bundle, asset, .. } => steps.push(Step::Voice(bundle, asset)),
-                    adv::Effect::VoiceStop(_) => steps.push(Step::StopVoice),
-                    adv::Effect::Unported(name, args) => self.log.push(format!("SATD-amanatsu-port: ADV {name} {args:?}")),
-                    adv::Effect::Face { values, .. } => steps.push(Step::Face(values)),
-                    adv::Effect::Expression { id, .. } => steps.push(Step::Expression(id)),
-                    adv::Effect::Fade { .. } => {}
-                    e => steps.push(Step::Chara(e)),
-                }
-            }
+            self.apply_effects(level, effects, &mut steps);
             match &w {
-                Wait::Text { speaker, text } => self.show_text(level, speaker, text),
+                Wait::Text { speaker, text } => {
+                    self.show_text(level, speaker, text);
+                    self.complete_since = self.reveal.is_none().then_some(now);
+                }
                 Wait::Choice(items) => {
                     let items = items.clone();
                     self.show_choices(level, &items);
                 }
                 Wait::Time(s) => self.wait_until = now + (s * 1000.) as u64,
-                Wait::Voice => self.wait_until = now + 300,
+                Wait::SceneFade | Wait::Voice(_) => {}
+                Wait::BindActor(no) => {
+                    let result = (|| -> Result<()> {
+                        if !self.bound_actors.contains_key(no) {
+                            let card = match *no {
+                                -1 => crate::adapter::MALE_CARD,
+                                0 => self.heroine_card.as_deref().context("ADV heroine card is unbound")?,
+                                _ => anyhow::bail!("no registered ADV actor {no}"),
+                            };
+                            self.bound_actors.insert(*no, adv::actor::Bindings::load(unity, *no, card)?);
+                        }
+                        self.bound_actors[no].apply(&mut self.program);
+                        Ok(())
+                    })();
+                    if let Err(error) = result {
+                        steps.push(Step::Fault(format!("ADV CharaChange {no}: {error:#}")));
+                        self.wait = Wait::End;
+                        return steps;
+                    }
+                    continue;
+                }
                 Wait::Open(_, name) => {
                     match load_scenario(unity, &self.index, name) {
                         Ok(list) => {
@@ -301,6 +384,8 @@ impl Talk {
                         Err(e) => self.log.push(format!("ADV Open {name}: {e:#}")),
                     }
                 }
+                Wait::Tasks { .. } => {}
+                Wait::Fault(error) => steps.push(Step::Fault(error.clone())),
                 Wait::End => {
                     if let Some(next) = self.queue.pop() {
                         match load_scenario(unity, &self.index, &next) {
@@ -321,16 +406,33 @@ impl Talk {
 
     /// A frame: timed waits resume by themselves.
     pub fn tick(&mut self, unity: &mut Unity, level: &mut Level, now: u64) -> Vec<Step> {
-        self.update_reveal(level, now);
-        match self.wait {
-            Wait::Time(_) | Wait::Voice if now >= self.wait_until => self.advance(unity, level, now),
-            _ => Vec::new(),
-        }
+        let mut effects = Vec::new();
+        self.program.poll(now, &mut effects);
+        let mut steps = Vec::new();
+        self.apply_effects(level, effects, &mut steps);
+        let complete = self.update_reveal(level, now);
+        let flags = self.program.regulate;
+        if flags & 8 != 0 { self.auto_enabled = false; }
+        if flags & 16 != 0 { self.auto_enabled = true; }
+        let resume = match self.wait {
+            Wait::Time(_) => now >= self.wait_until,
+            Wait::Voice(_) => !self.waiting_voice_playing,
+            Wait::SceneFade => !self.scene_fading,
+            Wait::Tasks { background } => !self.program.has_work(background),
+            Wait::Text { .. } if complete => {
+                let since = *self.complete_since.get_or_insert(now);
+                self.auto_enabled && flags & 1 == 0 && now.saturating_sub(since) >= self.auto_wait_ms
+            }
+            _ => false,
+        };
+        if resume { steps.extend(self.advance(unity, level, now)); }
+        steps
     }
 
     /// A click: the message advances; a choice button picks its tag.
     pub fn click(&mut self, unity: &mut Unity, level: &mut Level, node: Option<usize>, now: u64) -> Vec<Step> {
         match &self.wait {
+            Wait::Text { .. } if self.program.regulate & 2 != 0 => Vec::new(),
             // A click during the reveal shows the whole message.
             Wait::Text { text, .. } if self.reveal.is_some() => {
                 let text = text.clone();
@@ -340,7 +442,7 @@ impl Talk {
                 }
                 Vec::new()
             }
-            Wait::Text { .. } => self.advance(unity, level, now),
+            Wait::Text { .. } if self.program.regulate & 1 == 0 => self.advance(unity, level, now),
             Wait::Choice(_) => {
                 let Some(n) = node else { return Vec::new() };
                 let mut cur = Some(n);

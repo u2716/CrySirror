@@ -15,6 +15,7 @@ doctest = false
 runtime = ["dep:crysirror-runtime"]
 
 [dependencies]
+lru = "0.18"
 crysirror-asset.workspace = true
 crysirror-audio.workspace = true
 anyhow.workspace = true

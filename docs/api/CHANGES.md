@@ -1,5 +1,42 @@
 # API change log
 
+## `c95d822ee88e0793` (2026-11-23) — authored material raster queues
+
+Optional `Material.raster_queue` specifies the draw order, Forward depth-write setting and front-face culling. Geometry and late transparent queues can both use straight-alpha colour and raster shadow casting. Existing materials retain their alpha mode's scheduling when the field is omitted. The previous fingerprint was `7f97588e7266cc17`.
+
+## `7f97588e7266cc17` (2026-11-23) — placed face lines and cloth coverage
+
+`ToonShading.line_model` selects the interpretation of a surface line texture. Existing material files default to `gated`. The `face` variant adds a nose tint and a view-dependent line on two coverage channels. The `cloth` variant adds distance-dependent alpha expansion, material cutout and screen dither. The previous fingerprint was `079f68e6848a1b48`.
+
+## `079f68e6848a1b48` (2026-11-23) — model instance dither
+
+`AnimationState.dither` accepts coverage from 0 to 1 for the rasterized model. Omitting it preserves full coverage and existing project data. The previous fingerprint was `d38cf2cc97b5f3af`.
+
+## `d38cf2cc97b5f3af` (2026-11-23) — toon surface lines and directional lightmaps
+
+`ToonShading.shadow_tone_override` adds a weighted linear shadow colour after lighting. The optional `surface_line_texture` and `line_color` apply a masked tint to the lit surface. Their defaults preserve existing materials without migration. The generated reference now includes `ToonShading`, `ToonShadeKind` and `ShaderEffect`.
+
+`ShaderEffect.normal_shell` displaces a front-culled shell after skinning and uses its texture mask and screen dither for coverage. `directional_lightmap` samples paired linear baked textures on independently transformed UV0. Its two texture slots hold radiance and world direction/normalization. Rust callers with exhaustive `ShaderEffect` matches need the new variants. The previous fingerprint was `b37c677029d16b90`.
+
+## `b37c677029d16b90` (2026-11-23) — stored RGBA mask interpolation
+
+`Bitmap.blit` and `Bitmap.stretch` accept `mask_rgba_scalar256`. The mode
+uses the source alpha as a /256 interpolation weight for all four stored
+channels. Existing serialized modes and defaults retain their meanings.
+Rust consumers matching every `PixelMath` variant need a new arm.
+Regeneration also picked up the workspace's optional `Environment.toon_light`.
+The previous fingerprint was `e849c4b9bdfabb09`.
+
+## `e849c4b9bdfabb09` (2026-11-21) — integer-clock pixel stretch
+
+`TransitionEffect.pixel_stretch` scales the incoming raster from its top-left corner on selected axes using logical pixel coordinates. It can also shrink the outgoing raster into the opposite corner. The previous fingerprint was `8a73f065cc0a1a90`.
+
+## `8a73f065cc0a1a90` (2026-11-21) — byte-clock rule transitions
+
+`TransitionEffect.byte_rule` provides integral rule thresholds and byte-weighted blending. Callers specify the mask, polarity and discrete phase clock. Existing transition specifications need no migration.
+
+The previous signature fingerprint was `53a766c230fb9b32`.
+
 ## `53a766c230fb9b32` (2026-11-21) — environment colour grading
 
 `Environment.grading` (`ColorGrading`: `color_filter`, `contrast` around middle grey, `saturation`) adjusts colour before tonemapping; absent or neutral values leave output unchanged. Rust callers that construct every `Environment` field must supply `grading` (`None`). Models may also carry spring-bone chains (`crysirror_springs` glTF document extras), which the renderer simulates after animation; no reflected signature covers them.

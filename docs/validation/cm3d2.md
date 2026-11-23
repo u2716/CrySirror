@@ -79,3 +79,95 @@
 - Offscreen render of `body001`/`face003`/`hair_f001` with `maid_stand01.anm`
   retargeted to the body and the parts following its skeleton (project under
   the session scratchpad, not distributed).
+
+## 2026-11-23 — desktop Escape and the CM3D2 1.00 title
+
+The installed 64-bit game supplied the Unity scenes, button colliders, managed
+scripts and KISS archives. TitleCtrl registers the title click callbacks,
+TitleMouseOver moves the selection cursor and UICamera.ProcessTouch checks
+the pressed collider and drag distance before sending OnClick. In mouse mode
+the original UICamera clears its current selection on Escape. ConfigMgr closes
+the settings panel through OK, and SaveAndLoadMgr closes the load panel through
+Cancel.
+
+- The release owner-corpus test runs from a fresh temporary writable directory.
+  It boots through both startup clicks, hovers Config, holds without opening,
+  drags out and back to cancel, then releases a fresh press to open settings.
+  Clicking where Start lies beneath the settings background leaves the title
+  intact. Escape leaves settings open. OK closes it. Continue opens the load
+  panel, whose Cancel restores the title.
+- Reproduce the installed-data test with
+  `CM3D2_ROOT="$HOME/Downloads/game-cm3d2" cargo test --locked --release -p crysirror-cm3d2 --features runtime --test owner_corpus title_settings_and_load_cancel -- --ignored`.
+- The desktop input regression exercises physical Escape press, repeat, release
+  and a second press, for ordinary and Siglus shortcut policies. Other desktop
+  tests cover focused text accepting Japanese commits while filtering control
+  text, and the host close policy. Live IME candidate windows and physical
+  keyboard/window interaction were not observed in the locked session.
+- The Mac QA player rendered the full ordinary title/settings/load/cancel route
+  headlessly. For AVG32 Kanon, three 640 × 480 offscreen captures at frame 1536
+  used identical input except for zero, one or two Escape presses. One press
+  changed 107,344 pixels by opening the context menu. Two restored the reference
+  image exactly.
+- The QA executable in `target/release/crysirror-cm3d2-qa` uses the current
+  desktop source and a local validation launcher with Minori omitted. The default
+  all-engine build stopped in Minori on missing shared image and audio APIs.
+  The normal player binary was not replaced. Local tracks, screenshots, build
+  and test logs are under `target/cm3d2-ui/`.
+
+## 2026-11-23 — title input and the day-2 schedule editor
+
+The standard all-engine Mac release linked from this checkout, including Minori.
+For this run Cargo used a fresh build-cache directory while publishing to
+`target/release/crysirror`. The installed CM3D2 1.00 x64 data was read in place.
+Replays used offscreen Metal at 1920 × 1080, muted, with separate writable state.
+
+- Both title UICamera components in the installed `level8` enable mouse,
+  keyboard and controller. TitleMgr creates UpArrow, DownArrow and Return
+  commands; its methods wrap through Start, Continue, Config and End. No
+  invocation of TitleCommand.BaseExecute was recovered beyond its definition.
+  CrySirror binds these actions on a new press. The installed-data test checks
+  wrap-around, all four positions, held keys, safe confirmation through
+  Continue, hidden/modal controls and a moving mouse taking back selection.
+- In the standard player, hovering each of the four title buttons changed the
+  rendered pixels inside its collider. Keyboard confirmation opened Settings.
+  The five previously blank label layers contain `1920x1080`, `X2`, `Medium`,
+  `High` and `X1` for this sample without a root config.xml. The shortcut On/Off
+  selection changes both buttons' resting tint. Graphics dropdown interaction,
+  importing custom graphics settings and applying them to the renderer remain
+  open. Physical keyboard, controller, IME and live window tests were unavailable
+  while the Mac session was locked.
+- The private seed is a slot previously produced through the day-2 player UI.
+  Boot through Title → Continue → slot 1 → OK. The daily Schedule button opens
+  the roster. The sole leader resists removal; an empty row exposes no task.
+  Assign the spare character to slot 2, select a different daytime work, open
+  the removal prompt, click the underlying panel OK, then Cancel the prompt.
+  Schedule OK returns to the daily menu. Save over the private slot copy and
+  reload it through a fresh title session.
+- The installed MaidPlate.SetRightPlateVisible(false) uses a 419 × 111 collider
+  centered at local x = −140 and drives the LeftPlate Animation on hover.
+  Its default clip has five root-scale keys. The replay tests actual pixels on
+  pointer entry and selects the character near the left edge of the card.
+- The replay uses normal Next and declines optional daytime communication,
+  then advances work summaries to the daytime result panel. Assignment and
+  the selected work's completion count are checked independently. The native
+  per-character result rows still need a presentation implementation.
+
+To reproduce, use Python with Pillow and supply a day-2 daytime slot with the
+leader scheduled and one spare character. The output directory must be new.
+Every capture has its own input track, state report and PNG.
+
+```sh
+cargo build --offline --locked --release -p crysirror-desktop --bin crysirror \
+  --config 'build.build-dir="target/cm3d2-ui/day/full"'
+python3 crates/crysirror-cm3d2/tests/replay_schedule.py target/release/crysirror \
+  "$HOME/Downloads/game-cm3d2" /path/to/day2/SaveData000.save /path/to/new-output
+```
+
+On the final release run, character 13 in slot 2 changed from daytime work 3
+to work 1 (sewing). Reload restored work 1 with zero prior completions. At
+ResultWork the completion count was one. At identical frames, mouse hover
+changed 11,176 pixels within the daily Schedule button and 5,984 pixels within
+the roster card. The native title-input corpus test, 25 CM3D2 library tests and
+8 desktop input/lifecycle tests passed. Local outputs are in
+`target/cm3d2-ui/day/accepted/` (roster, edited, reloaded and results) and
+`target/cm3d2-ui/day/state-config-labels/`.

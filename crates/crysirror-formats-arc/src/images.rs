@@ -48,7 +48,7 @@ impl ImageFormat for Plugin {
     }
 }
 pub fn image_format_ids() -> Vec<&'static str> {
-    let mut ids = vec!["bgi/cbg", CMVS_MSK0, CMVS_PB2];
+    let mut ids = vec!["bgi/cbg", "minori/sqz", CMVS_MSK0, CMVS_PB2];
     ids.extend_from_slice(crate::images_a::FORMATS);
     ids.extend_from_slice(crate::images_b::FORMATS);
     ids.extend_from_slice(crate::images_c::FORMATS);
@@ -58,6 +58,11 @@ pub fn image_format_ids() -> Vec<&'static str> {
         .collect()
 }
 pub fn register_images(registry: &mut DecoderRegistry) -> Result<()> {
+    registry.register_format(Arc::new(Plugin {
+        id: "minori/sqz",
+        probe: |_, _, bytes| bytes.starts_with(b"SQZ1"),
+        decode: |_, bytes, _| crysirror_image::sqz::Sequence::first(bytes),
+    }))?;
     registry.register_format(Arc::new(Plugin {
         id: CMVS_PB2,
         probe: |_, _, bytes| bytes.starts_with(b"PB2A"),

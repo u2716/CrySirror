@@ -102,6 +102,9 @@ impl<'a> Reader<'a> {
         Ok(s)
     }
     /// `PPtr<T>` of format 9: i32 file id, i32 path id.
+    pub fn pptr64(&mut self) -> Result<PPtr> {
+        Ok(PPtr { file_id: self.i32()?, path_id: self.i64()? })
+    }
     pub fn pptr(&mut self) -> Result<PPtr> {
         Ok(PPtr { file_id: self.i32()?, path_id: i64::from(self.i32()?) })
     }

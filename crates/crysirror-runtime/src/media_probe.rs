@@ -12,7 +12,7 @@ use crysirror_core::{
     Error,
 };
 use crysirror_tasks::{Cancellation, Task, TaskPool};
-use crysirror_video::{amv, asf, cmv, imoavi, mgv, isobmff, mpeg, theora, webm};
+use crysirror_video::{amv, asf, avi, cmv, imoavi, mgv, isobmff, mpeg, theora, webm};
 use std::{
     cell::Cell,
     io::{Read, Seek, SeekFrom},
@@ -168,6 +168,15 @@ pub(crate) fn begin(
                 result.duration_ms = Some(info.duration_ms);
                 result.frame_ms = Some(info.frame_ms);
                 result.has_audio = Some(info.has_audio);
+            } else if avi::stream::is_input(&mut input)? {
+                let movie = avi::stream::Movie::open(input)?;
+                let info = movie.metadata();
+                result.size = info.size;
+                result.container = "avi".into();
+                result.video_decoder = movie.codec()?.into();
+                result.duration_ms = info.duration_ms;
+                result.frame_ms = info.frame_ms;
+                result.has_audio = Some(movie.has_audio());
             } else if asf::is_asf(&mut input)? {
                 let done = Cell::new(false);
                 let mut metadata = None;

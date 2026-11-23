@@ -1945,6 +1945,7 @@ dependencies = [
  "crysirror-vfx",
  "glam 0.27.0",
  "image 0.24.9",
+ "lru",
  "serde",
  "serde_json",
 ]
@@ -2182,6 +2183,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "tempfile",
 ]
 
 [[package]]
@@ -2407,6 +2409,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "crysirror-exhibit"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "crysirror-core",
+ "crysirror-resource",
+ "crysirror-runtime",
+ "crysirror-tasks",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "crysirror-formats-arc"
 version = "0.2.0"
 dependencies = [
@@ -2529,10 +2544,12 @@ dependencies = [
  "crysirror-cmvs",
  "crysirror-core",
  "crysirror-engine",
+ "crysirror-exhibit",
  "crysirror-formats-arc",
  "crysirror-krkr",
  "crysirror-majiro",
  "crysirror-malie",
+ "crysirror-minori",
  "crysirror-n2system",
  "crysirror-network",
  "crysirror-nscripter",
@@ -2629,6 +2646,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "crysirror-minori"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "crysirror-audio",
+ "crysirror-core",
+ "crysirror-image",
+ "crysirror-resource",
+ "crysirror-runtime",
+ "encoding_rs",
+ "flate2",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "crysirror-mobile"
 version = "0.2.0"
 dependencies = [
@@ -2659,6 +2693,18 @@ dependencies = [
  "glam 0.27.0",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "crysirror-naughty-dog"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "crysirror-capfs",
+ "crysirror-core",
+ "crysirror-formats-arc",
+ "crysirror-image",
+ "crysirror-resource",
 ]
 
 [[package]]

@@ -21,12 +21,16 @@ pub enum Request {
     None,
     /// `SceneSettings.Load(id)`: fade in, then load the scene.
     Load(i32),
+    /// TitleScene passes the selected sex to HumanCustom.
+    Custom { female: bool },
     /// `Application.Quit` (through `ExitDialog`).
     Quit,
     /// `TitleScene.OnLoad`: `SaveLoadUI` (`IsTitle`); its Load runs
     /// `LoadSaveFileInternal`: load a
     /// save and enter the action map.
     LoadSave,
+    /// `Game.ReturnTitleForget(false, false, …)`.
+    ConfirmTitle,
     /// `ConfigWindow.Load`.
     Config,
 }
@@ -203,7 +207,7 @@ impl Title {
     pub fn step(&mut self, level: &mut Level, input: &Input) -> Request {
         if !self.started {
             // After the opening fade (`StartFadeAsync(Out)`): PressAny blinks.
-            // SATD-amanatsu-port: BGM, title call voice and the TOS check.
+            // SATD-amanatsu-port: title call voice and the TOS check.
             if input.fading {
                 return Request::None;
             }
@@ -228,7 +232,6 @@ impl Title {
             return Request::None;
         }
         if input.escape {
-            // SATD-amanatsu-port: `ExitDialog` confirmation UI.
             level.sounds.push(Call::SystemSe(self.ids.ok_l));
             return Request::Quit;
         }
@@ -267,7 +270,7 @@ impl Title {
                 level.sounds.push(Call::SystemSe(self.ids.ok_l));
                 return match call.method.as_str() {
                     "OnStart" => Request::Load(scene_id::ACTION_MAP),
-                    "OnCustomMale" | "OnCustomFemale" => Request::Load(scene_id::CUSTOM),
+                    "OnCustomMale" | "OnCustomFemale" => Request::Custom { female: call.method == "OnCustomFemale" },
                     "OnMemory" => Request::Load(scene_id::MEMORY),
                     "OnQuit" => Request::Quit,
                     _ => Request::Config,

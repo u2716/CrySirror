@@ -88,7 +88,7 @@ static ANDROID_CTX_ONCE: Once = Once::new();
 ///
 /// - `java_vm_ptr`: `JavaVM*` from JNI.
 /// - `context_ptr`: a JNI GlobalRef to an `android.content.Context` instance.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rfvp_android_init_context(
     java_vm_ptr: *mut c_void,
     context_ptr: *mut c_void,
@@ -121,7 +121,7 @@ pub unsafe extern "C" fn rfvp_android_init_context(
 /// - `nls_utf8`: optional UTF-8 NLS string.
 ///
 /// Returns an opaque handle, or null on failure.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rfvp_android_create(
     native_window_ptr: *mut c_void,
     surface_width_px: u32,
@@ -155,7 +155,7 @@ pub unsafe extern "C" fn rfvp_android_create(
 
 /// Step one frame.
 /// Returns 1 if the engine requested exit, else 0.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rfvp_android_step(handle: *mut c_void, dt_ms: u32) -> i32 {
     if handle.is_null() {
         return 1;
@@ -169,7 +169,7 @@ pub unsafe extern "C" fn rfvp_android_step(handle: *mut c_void, dt_ms: u32) -> i
 }
 
 /// Resize the surface (physical pixels).
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rfvp_android_resize(
     handle: *mut c_void,
     surface_width_px: u32,
@@ -183,7 +183,7 @@ pub unsafe extern "C" fn rfvp_android_resize(
 }
 
 /// Recreate the WGPU surface from a new `ANativeWindow*` (e.g. SurfaceView recreated).
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rfvp_android_set_surface(
     handle: *mut c_void,
     native_window_ptr: *mut c_void,
@@ -208,7 +208,7 @@ pub unsafe extern "C" fn rfvp_android_set_surface(
 /// - 1 = moved
 /// - 2 = ended
 /// - 3 = cancelled
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rfvp_android_touch(handle: *mut c_void, phase: i32, x_px: f64, y_px: f64) {
     if handle.is_null() {
         return;
@@ -218,7 +218,7 @@ pub unsafe extern "C" fn rfvp_android_touch(handle: *mut c_void, phase: i32, x_p
 }
 
 /// Enable or disable HiDPI text backing surfaces without changing the Android create ABI.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rfvp_android_set_text_hidpi(handle: *mut c_void, enabled: i32) {
     if handle.is_null() {
         return;
@@ -230,7 +230,7 @@ pub unsafe extern "C" fn rfvp_android_set_text_hidpi(handle: *mut c_void, enable
 /// Inject a key event (Windows VK semantics, aligned with the Siglus host).
 ///
 /// `phase`: 0 = down, 1 = up.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rfvp_android_key(handle: *mut c_void, vk_code: i32, phase: i32) {
     if handle.is_null() {
         return;
@@ -242,7 +242,7 @@ pub unsafe extern "C" fn rfvp_android_key(handle: *mut c_void, vk_code: i32, pha
 /// Enable or disable the system CJK fallback font stack without changing the Android create ABI.
 ///
 /// Must be called after `rfvp_android_create`; enabling triggers a one-shot system font scan.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rfvp_android_set_system_font(handle: *mut c_void, enabled: i32) {
     if handle.is_null() {
         return;
@@ -255,7 +255,7 @@ pub unsafe extern "C" fn rfvp_android_set_system_font(handle: *mut c_void, enabl
 ///
 /// Returns the new font id (>= 0) on success, or -1 when the file is
 /// missing/invalid or the host passed a null handle/path.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rfvp_android_add_font(
     handle: *mut c_void,
     font_path_utf8: *const c_char,
@@ -275,7 +275,7 @@ pub unsafe extern "C" fn rfvp_android_add_font(
 
 /// Force a user font (id from [`rfvp_android_add_font`]) as the primary font
 /// for all rendering; `font_id < 0` clears the override.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rfvp_android_set_forced_font(handle: *mut c_void, font_id: i32) {
     if handle.is_null() {
         return;
@@ -285,7 +285,7 @@ pub unsafe extern "C" fn rfvp_android_set_forced_font(handle: *mut c_void, font_
 }
 
 /// Destroy an Android host-driven instance.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rfvp_android_destroy(handle: *mut c_void) {
     if handle.is_null() {
         return;
@@ -294,5 +294,5 @@ pub unsafe extern "C" fn rfvp_android_destroy(handle: *mut c_void) {
 }
 
 #[cfg(target_os = "android")]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn android_main(_app: *mut core::ffi::c_void) {}

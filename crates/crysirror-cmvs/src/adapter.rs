@@ -4912,6 +4912,7 @@ impl VmFactory for Factory {
         let config: Config = serde_json::from_value(spec.config.clone())?;
         let profile = match config.profile.as_str() {
             "cvns-20040515-x86" => VmProfile::Cvns20040515X86,
+            "pc-20070119-x86" => VmProfile::Pc20070119X86,
             "pc-20160201-x64" => VmProfile::Pc20160201X64,
             "pc-20211007-x64" => VmProfile::Pc20211007X64,
             profile => bail!("unsupported CMVS ABI profile {profile}"),
@@ -5007,6 +5008,10 @@ fn cpz6_registry() -> Result<FormatRegistry> {
     registry.register(
         crysirror_formats_arc::legacy_archive("purple-software/cpz1")
             .context("shared CPZ1 format missing")?,
+    )?;
+    registry.register(
+        crysirror_formats_arc::legacy_archive("purple-software/cpz3")
+            .context("shared CPZ3 format missing")?,
     )?;
     registry.register(
         crysirror_formats_arc::legacy_archive("purple-software/cpz6")

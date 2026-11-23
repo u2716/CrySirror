@@ -40,6 +40,8 @@ formats; pending formats are never registered as working decoders.
 This ledger describes this migration only. Existing CrySirror image, audio and
 native BGI decoding capabilities remain available through their existing APIs.
 
+The independently implemented `sony/psarc` reader mounts the plain PSARC 1.3 zlib profile with 64 KiB blocks. Uncharted 2 uses it for levels, actors, localization and audio. [Installed-data results and supported boundaries](validation/uncharted2.md)
+
 Rust, JS/TS and inspection tools use the same `Resources` class:
 
 ```ts
@@ -66,6 +68,8 @@ This is resource support; a Malie script VM is not registered.
 include QNT/PMS/AJP/DCF, TLG5/6, G00/PDT, CBG, RCT/RC8, PGD, NVSG, PB3,
 ERI, GIM/GTF/XTX and the remaining native IDs recorded in the ledger. Standard
 PNG/JPEG/BMP/DDS/TGA/WebP codecs reuse shared implementations where appropriate.
+ExHibit stored GYU images use the built-in image registry. See the
+[GYU profile and pixel tests](validation/exhibit-gyu.md).
 CMVS MSK0 (`purple-software/msk0`) and PB2A (`purple-software/pb2`) use
 native layout evidence outside the pinned arc_unpacker inventory. MSK0 reads
 its grayscale plane from the offset in the header. The PB2A registry entry

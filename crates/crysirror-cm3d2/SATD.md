@@ -10,15 +10,14 @@ ADV tags `scenecall`, `wait`, `motionblendenabled`, `eval`, `s`; TJS
 functions `SetManFlag`, `GetManFlag`, `SetTmpFlag`, `GetTmpFlag`,
 `SetNewTrophy`.
 
-**Remaining work.** Every other scene controller (`SceneUserEdit`, `SceneEdit`,
+**Remaining work.** Scene-specific branches beyond the [installed-data runs](../../docs/validation/cm3d2.md) in `SceneUserEdit`, `SceneEdit`,
 `SceneCharacterSelect`, `SceneDaily`, `SceneStartDaily`, `SceneYotogi`,
 `SceneMaidManagement`, `SceneShop`, `SceneTrophy`, `SceneTryInfo`,
 `SceneToTitle`, `SceneSingleEffect`, `SceneStaffRoll`, `SceneDance_DDFL`,
-`SceneCompetitiveShow`), title Continue/Config/End and keyboard commands,
+and `SceneCompetitiveShow`;
 the remaining ~90 KAG tags of `BaseKagManager`/`ADVKagManager`/
 `YotogiKagManager`/`MotionKagManager`, the 45 remaining TJS functions of
-`ScriptManager.Initialize`, `MessageWindowMgr` (text, names, backlog,
-skip/auto, voice), `SystemShortcut`, `ConfigMgr`, `SaveAndLoadMgr`,
+`ScriptManager.Initialize`, unverified message-window voice behavior, unported settings controls and save variants,
 `CharacterMgr`/`Maid`/`TBody` (`.menu` assembly, parts, morphs, bone morphs,
 physics hair, IK, eye/head look), `MaidParam`/`PlayerParam`/`Schedule`/
 `Yotogi` state from the `.nei` tables, `SoundMgr` (BGM/SE/voice from
@@ -38,6 +37,7 @@ creation, schedule days, yotogi, saves/loads and an ending, recorded in
 | 2026-11-20 | `SceneYotogi` ([`src/yotogi.rs`](src/yotogi.rs)) over a generic `WfScreenManager`/`WfScreenChildren` ([`src/wf.rs`](src/wf.rs)): stage select (playable stages by best salon grade, thumbnails, BG/camera/BGM per stage), skill select (new-skill acquisition, category tabs, stage/condition/seikeiken/drunk filters, seven slots with HP cost and `only_one`, wait motion per personality/condition, costume edit label, swoon confirmation), play (`NextSkill`, valid commands per normal/insert state and skill level, `EvalExpression`, `ApplyExecCommandStatus` with corrections and study rate, propensity/erogenous-zone awakening, every normal/drunk/proclivity label rule, RC/RRC/RR classification, `yotogi_skill_call_main`/`command_call_main` dispatch, command factory groups, skill tower, parameter bars and scroll, repeat voice, control mask, undressing units, man transparency, swoon), result (skill EXP animation with level-up, parameter changes, acquired skills/propensities, `GIG` voices, yotogi trophies), `ApplyStatus` and `ResetWorld`; static tables in [`src/yotogi_data.rs`](src/yotogi_data.rs); `yotogi_kag` (`talk`/`hitret`/`talkrepeat`/`voicewait`/`playbgmroom`/`controlmask`, unregistered tags ignored as `KagScript.CallTag` does), `yotogicall`, `charaactivateleader`; `TagSceneCall` closes the message window; the file index descends dotted folders. A yotogi night runs from stage select through four skills and the result back to the daily scene. | `MaidManagement`, `Shop`, `Trophy` scenes; the schedule, save and load panels of the menu; the per-maid rows of the work results; maid thumbnails (`ThumShot`); saves (`GameMain.Serialize`: the `KagScript` blob is a read-history block, `KAGParser.store()` as a TJS struct string, a flag byte and the `KagStackCall` list — the KAG snapshot needs krkr line/position mapping); in yotogi, the head-bone camera target of `InitMaidGesture` (CPU skeleton pose), skill icon drag swapping and hover names, `UIWFTabButton` selected states, `HideScroll` window folding, `AttributeViewer` hover, `MulTexRemove` of only layers 10–20, `TrophyAchieveEffect`; `MainCamera.Blur`/`Vignett`. |
 | 2026-11-21 | `SceneTrophy` (trophy list, totals), `SceneStaffRoll` (credits scroll and pictures of `Resources.LoadAll(SceneStaffRoll/Texture)`, Return skip, logo, label return), `SceneSingleEffect` with `startmvpeffect`; title Config/End; `MessageWindowMgr` skip/auto/voice/backlog/config buttons and the skip/auto advance; `ConfigMgr` panel (message, man transparency and volume sliders). | `SceneCompetitiveShow` (`CompetitiveShowMgr`/`MaidExaminationMgr`), `SceneDance_DDFL` (`DanceMain`, its Unity animation/audio timeline), `TrophyAchieveEffect`, `TutorialPanel`; config screen settings without a host counterpart (resolution, full screen, anti-aliasing, shadow/texture quality, bloom, capture size, 3D sound, sequential voice: recorded only), popup lists; skip ignores the read-history condition (`MsgAlreadySkip`) and the text speed has no typewriter to drive; maid thumbnails (`ThumShot`, needs an offscreen render of a second camera). |
 | 2026-11-20 | Original saves ([`src/save.rs`](src/save.rs)): `GameMain.Serialize`/`Deserialize` with header, `CharacterMgr` (player, stock men, stock maids), `MaidProp` lists in `AddProp` order (`nFileNameRID` as Mono `String.GetHashCode`), `MULTI_COL`, `MaidParam`, `MAID_MISC`, and the `ScriptManager` KAG (`KagScript.Serialize` blob through the shared `krkr_store` CM3D2 profile and the plug-in's `Dictionary.toStructString`, `KagStackCall`); slot files `SaveData/SaveDataNNN.save`; `SaveAndLoadMgr`/`SaveAndLoadCtrl` panels from the daily menu and the title's Continue ([`src/saveload.rs`](src/saveload.rs)): pages, units, dialogs, save, load, cancel; `TitleMgr` writes slot −1 (`タイトルへ戻る`). Loading resumes at the saved label with the call stack and restored characters. | No sample save of the original game was available: interoperability with saves written by the game is unverified (field layouts follow the decompiled writers). Not written or kept: the read-history block (empty), maid thumbnails, comments edited in the panel (`OnChangeComment`), save inside `if` blocks or with active macro arguments (refused). `SceneToTitle` (loading slot −1), title Config/End, and the rest listed above. |
+| 2026-11-23 | Verified the ordinary day-2 roster edit, work assignment, delete cancellation, save/load and daytime result panel from an installed-data slot. | Per-character result rows and original-game save interoperability remain open. |
 
 ## SATD-cm3d2-ngui
 
@@ -49,9 +49,9 @@ wrapping, `ShrinkContent`, line spacing).
 **Remaining work.** `UILabel` effects (shadow/outline), justified text,
 gradient, colour markup and bitmap `UIFont` labels, tiled/filled/advanced sprites, flips, panel clipping and soft
 clip, anchors to targets declared after the widget and to cameras,
-transform rotation, `UIGrid`/`UITable`/`UIScrollView` layout, tweens other
-than the title's, `UIButton` colour/sprite states and the `UICamera` event
-model (hover, press, drag, keyboard navigation).
+transform rotation, `UIGrid`/`UITable`/`UIScrollView` layout, tweens
+beyond the verified title and roster clips, animated button transitions,
+drag handling and the physical controller/IME paths.
 
 **Closure evidence.** Captures of every scene's UI against the original
 layout, and input tracks exercising its controls.
@@ -62,6 +62,9 @@ layout, and input tracks exercising its controls.
 | 2026-11-20 | Anchors resolve within their scene and within their `Instantiate` copy (`Scene::find_ref`); `UILabel` layout through the shared text measurement. | As listed, plus `TrophyAchieveEffect`. |
 | 2026-11-21 | Stored-byte (gamma) blending of image layers, sliced-sprite padding in pixels, zero-size nine-patch centres, `UILabel` `spacingX` (glyph runs) and ClampContent line limits, `showScrollBars` fading, run-time `UITexture` Unity textures. | Label effects, popup lists, scroll dragging, the rest listed. |
 | 2026-11-20 | Run-time `Transform.localScale`, `SetDimensions`, `UIButton.isEnabled` (collider off, `disabledColor`), `UI2DSprite.sprite2D` images; `UIPanel` clipping as layer viewport clips and clipped hit tests; `UIScrollView.ResetPosition`; `UITable` cells sized by descendant widgets; right clicks reach `onClick`; slider `onChange` delegates added at run time. | Soft clip edges (`mClipSoftness` alpha), scroll dragging and scroll bars, and the rest listed. |
+| 2026-11-23 | SceneTitle now routes UIButton clicks to the captured top collider on release, including the settings overlay. Title hover selects the cursor, a drag cancels the click, and mouse-mode Escape clears text selection. Verified title → settings → OK and Continue → Cancel against the 1.00 installation. | Other scenes' press/drag/hover delivery, title keyboard navigation bindings and live window/IME interaction still need evidence. |
+| 2026-11-23 | Title keyboard navigation shares the cursor and activation path. SceneDaily buttons now use release capture, preserve right-click removal, and respect the confirmation modal. UIButton target tint and sprite supply visible hover/press feedback. The five graphics labels render the fixed canvas / sample's profile defaults, and the shortcut toggle updates its visible state. | Native physical title-key dispatcher, physical controller/IME, animated hover transitions, interactive graphics popups, reading custom config.xml and applying graphics choices to the host are unverified or unimplemented. |
+| 2026-11-23 | Restored the short roster card's 419 × 111 collider and its −140 local center offset, and sampled the installed LeftPlate root-scale animation forward/backward on hover. Tested a selection near the portrait edge and pixel output of both the daily button and roster hover. | General UIPlayAnimation, other card layouts, and the remaining NGUI controls above. |
 
 ## SATD-cm3d2-rendering
 
@@ -98,3 +101,23 @@ point/spot lights of the forward-add pass.
 | --- | --- | --- |
 | 2026-11-20 | PBR approximation of game and Unity materials, base texture, colour and alpha mode. | Toon shading and everything below. |
 | 2026-11-20 | Engine toon model and outlines; CM3D2 and Unity scene materials mapped to it; parts colour tables; texture layers; visibility by triangle removal; bone-attached parts; Unity lighting/ambient. | As listed. |
+
+## SATD-com3d2-standalone
+
+**Scope.** The Unity 5.6.4p2 retail standalone profile in
+[`src/com3d2`](src/com3d2). Character preload at the warning screen,
+system-shortcut menus, title actions beyond Start, the reserved title save
+and the post-title scene controllers need their original behavior. The title
+background still needs its baked lightmaps, animated fountain and water
+reflection. Full archive coverage includes motion data; the installed sample
+has `motion.arc.bz2` without `motion.arc`. The archive mount uses the
+standalone installation and its supplied GameData_20 overlay. Older linked
+installations and other retail revisions need separate evidence.
+
+**History.** 2026-11-23 — added the standalone archive plan, Unity
+serialized format 17 and startup through the retail title. Start resumes
+the original scenario and reaches the request for `SceneNetorareCheck`.
+
+**Closure.** Exercise the remaining controllers, rendering and resource
+variants through installed original scripts and ordinary input, including
+native save/reload and character assembly. See [validation](../../docs/validation/com3d2.md).

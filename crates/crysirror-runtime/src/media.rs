@@ -15,7 +15,7 @@ use crysirror_core::{
 };
 use crysirror_video::mgv;
 use crysirror_video::{
-    amv, asf, cmv, imoavi, isobmff, theora, webm,
+    amv, asf, avi, cmv, imoavi, isobmff, theora, webm,
     mpeg::{self, VideoFrame},
 };
 use serde::{Deserialize, Serialize};
@@ -459,6 +459,12 @@ impl Workers {
                                 width: frame.width, height: frame.height, rgba: frame.rgba,
                             })? { break; }
                         }
+                    } else if avi::stream::is_input(&mut video_reader)? {
+                        let mut movie = avi::stream::Movie::open(video_reader)?;
+                        publish_metadata(movie.metadata())?;
+                        while let Some(frame) = movie.next_picture(|| stop.load(Ordering::Acquire))? {
+                            if !publish(frame)? { break; }
+                        }
                     } else if webm::is_input(&mut video_reader)? {
                         webm::decode_video_with_metadata(video_reader,
                             ||stop.load(Ordering::Acquire), publish_metadata, publish)?;
@@ -580,6 +586,8 @@ impl Workers {
                                 let range = crysirror_resource::subrange(source.reader()?, offset, length)?;
                                 theora::decode_audio(AssetCursor::new(range)?, || stop.load(Ordering::Acquire), |c| accept(c.pts_ms, c.sample_rate, c.channels, DecodedSamples::F32(c.samples)))?;
                             }
+                        } else if avi::stream::is_input(&mut reader)? {
+                            avi::stream::Movie::open(reader)?.pcm(|| stop.load(Ordering::Acquire), |pts, rate, ch, pcm| accept(pts, rate, ch, DecodedSamples::I16(pcm)))?;
                         } else if asf::is_asf(&mut reader)? {
                             asf::decode_audio(reader, || stop.load(Ordering::Acquire), |c| accept(c.pts_ms,c.sample_rate,c.channels,DecodedSamples::F32(c.samples)))?;
                         } else if theora::is_input(&mut reader)? {

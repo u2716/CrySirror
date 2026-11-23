@@ -1148,10 +1148,128 @@ fn chara_glb() {
         }
     }
     println!("body nodes {:?}", human.body_nodes);
+    println!("scene anchors {:?}", human.scene.nodes.iter().filter(|n| n.name.starts_with("a_n_") || n.name.contains("siru") || n.name.contains("SIRU")).map(|n| (n.name.as_str(), n.origin)).collect::<Vec<_>>());
+    crysirror_amanatsu::siru::attach_hit_objects(&mut u, &mut human).unwrap();
+    if female {
+        let mouth = human.scene.nodes.iter().position(|n| n.name == "SIRU_kuti").unwrap();
+        let prefab = human.scene.nodes[mouth].parent.unwrap();
+        assert_eq!(human.scene.nodes[prefab].name, "atari_kuti");
+        assert_eq!(human.scene.nodes[prefab].xform.position, [0.; 3]);
+        assert_eq!(human.scene.nodes[prefab].xform.rotation, [0., 0., 0., 1.]);
+    }
+    let mut attachments = std::collections::BTreeSet::new();
+    let postures = crysirror_amanatsu::h::load_postures(&mut u).unwrap();
+    let mut references = 0;
+    for pose in &postures {
+        let key = format!("{}_{:02}", pose.file, pose.id);
+        for (sex, _, name) in crysirror_amanatsu::siru::load(&mut u, &key).unwrap() {
+            if sex == i32::from(female) {
+                references += 1;
+                let index = human.scene.nodes.iter().position(|n| n.name == name)
+                    .unwrap_or_else(|| panic!("missing attachment {name} in {card_path} for {key}"));
+                attachments.insert(index);
+            }
+        }
+    }
+    println!("{} installed postures, {references} references, {} unique anchors in {card_path}", postures.len(), attachments.len());
+    let attachments: Vec<_> = attachments.into_iter().collect();
+    if female {
+        assert!(attachments.iter().any(|i| human.scene.nodes[*i].name == "a_n_kokan"));
+    }
     let mut assets = crysirror_amanatsu::chara::CharaAssets { unity: &mut u, human: &human, light: 1., ambient: 1. };
     let options = crysirror_unity::world6::GlbOptions { morph_targets: true, ..Default::default() };
-    let (glb, report) = crysirror_unity::world6::scene_glb(&human.scene, &human.key, &[0], &mut assets, &options, "test").unwrap();
+    let (glb, report) = crysirror_unity::world6::scene_glb_animated_with_nodes(&human.scene, &human.key, &[0], &mut assets, &options, "test", &[], &attachments).unwrap();
+    assert!(!glb.is_empty());
+    let original_heroine = female && card_path == "DefaultData/0/chara/female/AL_F_00.png"
+        && std::env::var_os("AMANATSU_HIDE").is_none();
+    if matches!(card_path.as_str(), "DefaultData/0/chara/female/AL_F_08.png" | "DefaultData/0/chara/female/AL_F_09.png") {
+        assert!(report.errors.is_empty(), "original card renderer failures: {:?}", report.errors);
+    }
+    let mut line_materials = [0; 2];
+    let late_costume = female && card_path == "DefaultData/0/chara/female/AL_F_T001.png"
+        && std::env::var_os("AMANATSU_HIDE").is_none();
+    let mut enabled_queues = Vec::new();
+    for chunk in &glb {
+        let model = crysirror_asset::pbr::load_pbr(chunk, |_| anyhow::bail!("external resource")).unwrap();
+        if late_costume {
+            for material in &model.materials {
+                let Some(toon) = &material.toon else { continue };
+                if let crysirror_unity::world6::ToonLineModel::Cloth { edge_alpha, width, .. } = toon.line_model {
+                    if edge_alpha > 0. {
+                        assert!(width > 0.);
+                        let queue = material.raster_queue.unwrap();
+                        assert!(queue.depth_write);
+                        if queue.order == 3005 {
+                            assert!(material.alpha_mode.transparent());
+                            assert!((material.alpha_cutoff - 0.0001).abs() < 0.000001);
+                        }
+                        enabled_queues.push(queue.order);
+                    }
+                }
+            }
+        }
+        if original_heroine {
+            use crysirror_unity::world6::ToonLineModel;
+            for material in &model.materials {
+                let Some(toon) = &material.toon else { continue };
+                let channel = match toon.line_model {
+                    ToonLineModel::Gated => continue,
+                    ToonLineModel::Face { .. } => 0,
+                    ToonLineModel::Cloth { width, edge_alpha, .. } => {
+                        assert!(width > 0.);
+                        assert_eq!(edge_alpha, 0.);
+                        if material.alpha_mode.transparent() {
+                            assert_eq!(material.raster_queue.map(|q| (q.order,q.depth_write)), Some((2470,true)));
+                            assert_eq!(material.alpha_cutoff, 0.75);
+                        } else {
+                            assert_eq!(material.raster_queue.map(|q| (q.order,q.depth_write)), Some((2450,true)));
+                        }
+                        1
+                    }
+                };
+                let mask = &model.images[toon.surface_line_texture.unwrap()];
+                assert!(!mask.srgb);
+                assert!(mask.width <= 1024 && mask.height <= 1024);
+                if channel == 0 {
+                    let maxima = [0, 1, 2, 3].map(|c| mask.levels[0].chunks_exact(4).map(|p| p[c]).max().unwrap());
+                    assert!(maxima[0] > 128);
+                    assert_eq!(&maxima[1..], &[0, 0, 255]);
+                }
+                line_materials[channel] += 1;
+            }
+        }
+        let world = model.rest_world();
+        for &attachment in &attachments {
+            let mut src = attachment;
+            let mut dst = model.nodes.iter().position(|n| n.name == human.scene.nodes[src].name).expect("exported attachment");
+            let expected_world = crysirror_unity::world6::world_matrix(&human.scene, src);
+            let mirrored = crysirror_unity::gltf::mirror_matrix(expected_world.to_cols_array());
+            assert!(world[dst].abs_diff_eq(glam::Mat4::from_cols_array(&mirrored), 0.0001));
+            loop {
+                let node = &human.scene.nodes[src];
+                let exported = &model.nodes[dst];
+                let x = &node.xform;
+                assert_eq!(node.name, exported.name);
+                assert!(exported.rest.translation.abs_diff_eq(glam::Vec3::from_array(crysirror_unity::gltf::mirror_point(x.position)), 0.00001));
+                assert!(exported.rest.rotation.abs_diff_eq(glam::Quat::from_array(crysirror_unity::gltf::mirror_quat(x.rotation)), 0.00001));
+                assert!(exported.rest.scale.abs_diff_eq(glam::Vec3::from_array(x.scale), 0.00001));
+                let Some(parent) = node.parent else {
+                    assert!(model.roots.contains(&dst));
+                    break;
+                };
+                src = parent;
+                dst = model.nodes.iter().position(|n| n.children.contains(&dst)).expect("exported parent");
+            }
+        }
+    }
     println!("chunks {:?} renderers {} errors {:?}", glb.iter().map(|g| g.len()).collect::<Vec<_>>(), report.renderers, report.errors);
+    if original_heroine {
+        assert_eq!(line_materials, [1, 5], "original head and clothing render materials");
+    }
+    if late_costume {
+        enabled_queues.sort_unstable();
+        assert_eq!(enabled_queues, [2450,2450,2470,2470,3005]);
+    }
     // `AMANATSU_DUMP`: the embedded images whose name contains
     // `AMANATSU_FILTER`.
     if let Ok(dir) = std::env::var("AMANATSU_DUMP") {
@@ -1177,6 +1295,8 @@ fn chara_glb() {
     for g in &glb {
         let len = u32::from_le_bytes(g[12..16].try_into().unwrap()) as usize;
         let json: serde_json::Value = serde_json::from_slice(&g[20..20 + len]).unwrap();
+        let kokan: Vec<&str> = json["nodes"].as_array().into_iter().flatten().filter_map(|n| n["name"].as_str()).filter(|n| n.contains("kokan") || n.contains("siru") || n.contains("SIRU") || n.starts_with("a_n_") || n.contains("pee")).collect();
+        println!("  kokan nodes {kokan:?} of {}", json["nodes"].as_array().map_or(0, Vec::len));
         for m in json["materials"].as_array().into_iter().flatten() {
             let s = m.to_string();
             if s.contains("liquid_blobs") {
@@ -2550,4 +2670,427 @@ fn expression_flush_tears() {
     ids.sort_by_key(|x| x.0);
     println!("{} presets, {} with flush/tears: {ids:?}", list.len(), ids.len());
     assert!(list.values().all(|v| v[7].is_none_or(|t| (0. ..=3.).contains(&t))));
+}
+
+/// `h/list/siru/{obi,param,emitter}` text assets (name, size, head).
+#[test]
+#[ignore = "needs the owner's installed corpus"]
+fn siru_lists() {
+    let mut u = unity();
+    for list in ["obi", "param", "emitter"] {
+        let bundle = format!("lib/h/list/siru/{list}/000_01.unity3d");
+        for key in u.bundle_files().into_iter().filter(|k| k.starts_with(&format!("bundle:{bundle}#")) && !k.ends_with(".resS")) {
+            let objs: Vec<(i64, i32)> = u.file(&key).unwrap().objects.iter().map(|o| (o.path_id, o.class_id)).collect();
+            for (id, class) in objs {
+                if class != 49 {
+                    println!("{list} class {class} {id}");
+                    continue;
+                }
+                let name = u.decode(&key, id).unwrap().string("m_Name").unwrap_or("").to_owned();
+                let b = u.text_asset(&key, id).unwrap();
+                if std::env::var("AMANATSU_DUMP").is_ok_and(|d| name.contains(&d)) {
+                    std::fs::write(format!("/tmp/siru_{name}.bin"), &b).unwrap();
+                }
+                println!("{list} {name} {} {:02x?}", b.len(), &b[..b.len().min(48)]);
+            }
+        }
+    }
+}
+
+/// State names (and hashes) of a posture's animators (`AMANATSU_POSTURE`
+/// = `som_00`).
+#[test]
+#[ignore = "needs the owner's installed corpus"]
+fn posture_states() {
+    let mut u = unity();
+    let want = std::env::var("AMANATSU_POSTURE").unwrap_or("som_00".into());
+    let postures = crysirror_amanatsu::h::load_postures(&mut u).unwrap();
+    for p in postures.iter().filter(|p| want == "all" || format!("{}_{:02}", p.file, p.id) == want) {
+    for c in &p.charas {
+        let bundle = format!("lib/{}", c.info.bundle);
+        let Ok(Some((k, id))) = u.bundle_asset(&bundle, &c.info.asset, 91) else { continue };
+        let ctl = crysirror_unity::animator::Controller::decode(&u.decode(&k, id).unwrap()).unwrap();
+        for l in &ctl.layers {
+            for s in &l.states {
+                let n = ctl.names.get(&s.name_id).cloned().unwrap_or_default();
+                println!("{} {:#010x} {n}", c.info.asset, s.name_id);
+            }
+        }
+    }
+    }
+}
+
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn map_menu_routes_only_the_active_panel() {
+    use crysirror_amanatsu::{actionmap::{Action, ActionMap, Phase, UI_BUNDLE}, level::Level, map, scenes::Request};
+
+    let mut u = unity();
+    let maps = map::map_infos(&mut u).unwrap();
+    let mut panel = Level::prefab(&mut u, UI_BUNDLE, "MapSelectUI").unwrap();
+    let mut menu = ActionMap::new(&mut panel, &maps);
+    let button = |name: &str| panel.scene.nodes.iter().position(|n| n.name == name).unwrap();
+    let (config, title, map_button) = (button("btnOption"), button("btnTitle"), button("btnMap0"));
+    let map_id = panel.scene.nodes[map_button].components.iter().find(|c| c.script == "AL.MapUIInfo").unwrap().fields.int("_id").unwrap() as i32;
+    assert_eq!(menu.click(&mut panel, config), Action::Scene(Request::Config));
+    assert_eq!(menu.click(&mut panel, title), Action::Scene(Request::ConfirmTitle));
+    menu.click(&mut panel, map_button);
+    assert_eq!(menu.phase, Phase::Confirm(map_id));
+    assert_eq!(menu.click(&mut panel, title), Action::None);
+    assert_eq!(menu.click(&mut panel, config), Action::None);
+    menu.back(&mut panel);
+    assert_eq!(menu.phase, Phase::MapSelect);
+    assert_eq!(menu.click(&mut panel, config), Action::Scene(Request::Config));
+}
+
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn memory_wheel_hit_and_hover_restore_the_selected_title() {
+    use crysirror_amanatsu::{level::Level, memory::{self, Entry, Memory}};
+    use crysirror_unity::ugui::{self, Services};
+
+    let mut u = unity();
+    let scenes = u.build_scenes().unwrap();
+    let index = scenes.iter().position(|s| s == "Memory").unwrap();
+    let mut level = Level::load(&mut u, &format!("level{index}"), "Memory").unwrap();
+    let list = memory::thumbnails(&mut u).unwrap();
+    assert_eq!(list.len(), 22);
+    let entries = list.into_iter().enumerate().map(|(i, thumbnail)| Entry {
+        thumbnail, title: format!("memory-{i}"), unlocked: i != 1, image: None
+    }).collect();
+    let mut memory = Memory::new(&mut level, entries, &[]);
+    let manager = level.scene.nodes.iter().flat_map(|n| &n.components).find(|c| c.script == "AL.Memory.MovieManager").unwrap();
+    let title = level.owner(manager.fields.pptr("_title").unwrap().path_id).unwrap();
+    let content = level.find("Canvas/Movie/BackgroundImage/Scroll View/Viewport/Content").unwrap();
+    let viewport = level.scene.nodes[content].parent.unwrap();
+    let cards: Vec<_> = level.scene.nodes[content].children.iter().copied().filter(|&i| level.is_active(i)).collect();
+    assert_eq!(cards.len(), 22);
+    let svc = Services { sprite_info: &|_| None, sprite_size: &|_| None, measure: &|_, _, _| [0., 0.] };
+    let layout = |level: &mut Level| {
+        let states = level.frame_states();
+        ugui::layout(&level.scene, &states, 1920., 1080., &svc)
+    };
+    let before = layout(&mut level);
+    let view = before.rects[&viewport];
+    let (x, y) = ((view.x0 + view.x1) / 2., (view.y0 + view.y1) / 2.);
+    let hit = |level: &Level, snapshot: &ugui::Layout, item| snapshot.hits.iter().find(|(n, _)| level.click_handler(*n) == Some(item)).map(|v| v.0);
+    assert!(hit(&level, &before, cards[21]).is_none());
+    let first = hit(&level, &before, cards[0]).unwrap();
+    memory.click(&mut level, first);
+    let locked = hit(&level, &before, cards[1]).unwrap();
+    memory.hover(&mut level, Some(locked));
+    assert_eq!(level.states[&title].text.as_deref(), Some("memory-0"));
+    assert!(!memory.scroll(&mut level, &before, view.x0 - 1., y, 1.));
+    assert!(memory.scroll(&mut level, &before, x, y, 20.));
+    let bottom = layout(&mut level);
+    assert!(!memory.scroll(&mut level, &bottom, x, y, 1.));
+    assert!(hit(&level, &bottom, cards[0]).is_none());
+    let last = hit(&level, &bottom, cards[21]).unwrap();
+    let frame = *level.scene.nodes[cards[21]].children.iter().find(|&&n| level.scene.nodes[n].name == "MemoryOnPointFrame").unwrap();
+    memory.hover(&mut level, Some(last));
+    assert!(level.is_active(frame));
+    assert_eq!(level.states[&title].text.as_deref(), Some("memory-21"));
+    memory.hover(&mut level, None);
+    assert!(!level.is_active(frame));
+    assert_eq!(level.states[&title].text.as_deref(), Some("memory-0"));
+    assert!(memory.scroll(&mut level, &bottom, x, y, -20.));
+    assert_eq!(layout(&mut level).rects[&cards[0]], before.rects[&cards[0]]);
+}
+
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn pool_wandering_points_and_time_zone_motion() {
+    use crysirror_amanatsu::map::wandering;
+    let mut u = unity();
+    let info = crysirror_amanatsu::map::map_infos(&mut u).unwrap().into_iter().find(|m| m.id == 0).unwrap();
+    let prefab = crysirror_amanatsu::level::Level::prefab(&mut u, &format!("lib/{}", info.point.0), &info.point.1).unwrap();
+    let points = wandering::points(&prefab.scene).unwrap();
+    let nav = wandering::Navigation::load(&mut u, &info).unwrap();
+    let mut connected = None;
+    for p in &points {
+        for q in &points {
+            if p.id == q.id { continue }
+            let (a,b) = (glam::Vec3::from_array(p.position),glam::Vec3::from_array(q.position));
+            if a.distance(b) < 12. {continue}
+            if let Some(path) = nav.route(a,b,3.).filter(|p|p.len() > 2) {
+                assert!(path[0].distance(a) <= 3.);
+                assert!(path.last().unwrap().distance(b) <= 3.);
+                connected = Some((p.id,q.id,path.len()));
+                break;
+            }
+        }
+        if connected.is_some() {break}
+    }
+    println!("{} native polygons, connected route {:?}",nav.polygons(),connected);
+    assert!(connected.is_some());
+    let mut occupied = std::collections::HashSet::new();
+    let mut order = wandering::PointOrder::new(points.len(), |n| n - 1);
+    let mut kinds = std::collections::HashSet::new();
+    for _ in 0..points.len() {
+        let p = &points[order.next(&points, &occupied).unwrap()];
+        assert!(occupied.insert(p.id));
+        kinds.insert(p.motions[0]);
+    }
+    assert!(kinds.len() > 1);
+    let pd = u.find_script_object("StreamingAssets/aa", "AL.PropertyData").unwrap().unwrap();
+    assert_eq!(wandering::zone_motions(&pd).unwrap(), [[208, 208, 209, 210]]);
+    println!("{} authored pool points, {} activity families", points.len(), kinds.len());
+}
+
+#[path = "owner_corpus/adv_rest.rs"]
+mod adv_rest;
+
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn indexed_bundles_release_readers_and_reopen_evicted_files() {
+    let mut u = unity();
+    let keys = u.bundle_files();
+    let first = u.file(&keys[0]).unwrap();
+    let info = *first.objects.first().unwrap();
+    let expected = first.bytes(&info).unwrap();
+    let first_weak = Arc::downgrade(&first);
+    for key in &keys[1..=80] {
+        let _ = u.file(key).unwrap();
+    }
+    // Eviction must not invalidate a live consumer. Once it releases the
+    // source, a second lookup must be served from the original CAB index.
+    assert_eq!(first.bytes(&info).unwrap(), expected);
+    drop(first);
+    assert!(first_weak.upgrade().is_none());
+    let reopened = u.file(&keys[0]).unwrap();
+    assert_eq!(reopened.bytes(reopened.object(info.path_id).unwrap()).unwrap(), expected);
+}
+
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn editor_quick_window_and_page_toggle_together() {
+    use crysirror_amanatsu::{custom::QuickPages, level::Level};
+    let mut u = unity();
+    let mut level = Level::prefab(&mut u, "lib/custom/ui.unity3d", "ControlPanel").unwrap();
+    let mut quick = QuickPages::load(&mut level).unwrap();
+    let by_suffix = |s: &str| (0..level.scene.nodes.len()).find(|&i| level.scene.path(i).ends_with(s)).unwrap();
+    let root = by_suffix("/StateMiniWindow/Window");
+    let pose = by_suffix("/StateWindow/Pose");
+    let light = by_suffix("/StateWindow/Light");
+    let pose_button = by_suffix("/StateCategory/tglPose");
+    let light_button = by_suffix("/StateCategory/tglLight");
+    assert!(!level.is_active(root));
+    quick.click(&mut level, pose_button);
+    assert!(level.is_active(root) && level.is_active(pose) && !level.is_active(light));
+    quick.click(&mut level, light_button);
+    assert!(level.is_active(root) && !level.is_active(pose) && level.is_active(light));
+    quick.click(&mut level, light_button);
+    assert!(!level.is_active(root));
+}
+
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn editor_categories_change_the_visible_page_and_open_settings() {
+    use crysirror_amanatsu::{custom::Categories, level::Level, scenes::Request};
+    let mut unity = unity();
+    let index = unity.build_scenes().unwrap().iter().position(|s| s == "CustomScene").unwrap();
+    let scene = Level::load(&mut unity, &format!("level{index}"), "CustomScene").unwrap();
+    let lists = crysirror_amanatsu::chara::Lists::load(&mut unity).unwrap();
+    let confirm = crysirror_amanatsu::custom::exit_dialog(&mut unity, &scene).unwrap();
+    let labels: Vec<_> = confirm.states.values().filter_map(|state| state.text.as_deref()).collect();
+    for expected in ["キャラクリエイトを終了しますか？", "はい", "いいえ"] {
+        assert!(labels.contains(&expected), "missing editor exit label {expected}");
+    }
+    for female in [true, false] {
+        let list = if female { "cha_sample_f" } else { "cha_sample_m" };
+        let (bundle, asset) = lists.row(list, 0).unwrap().asset(31, 32).unwrap();
+        assert_eq!(bundle, if female { "lib/custom/presets_f_00_02.unity3d" } else { "lib/custom/presets_m_00.unity3d" });
+        let (file, id) = unity.bundle_asset(&bundle, &asset, 49).unwrap().unwrap();
+        let preset = crysirror_amanatsu::card::Card::parse(&unity.text_asset(&file, id).unwrap()).unwrap();
+        assert!(preset.parameter().is_some());
+        let (mut level, mut categories) = Categories::load(&mut unity, &scene, female, false).unwrap();
+        let find = |suffix: &str| (0..level.scene.nodes.len()).find(|&i| level.scene.path(i).ends_with(suffix)).unwrap();
+        let (face, hair, system) = (find("/CategoryMenu/FaceMenu"), find("/CategoryMenu/HairMenu"), find("/CategoryMenu/SystemMenu"));
+        let (face_panel, hair_panel, system_panel) = (find("/SelectionView/00_Face"), find("/SelectionView/02_Hair"), find("/SelectionView/08_System"));
+        let top = level.scene.nodes.iter().flat_map(|n| &n.components).find(|c| c.script == "CharacterCreation.UI.CategorySelectionTop").unwrap();
+        let config = level.owner(top.fields.pptr("_btnConfig").unwrap().path_id).unwrap();
+        for (button, current) in [(face, face_panel), (hair, hair_panel), (system, system_panel)] {
+            categories.click(&mut level, button);
+            for page in [face_panel, hair_panel, system_panel] {
+                assert_eq!(level.is_active(page), page == current);
+            }
+        }
+        assert_eq!(categories.click(&mut level, config), Request::Config);
+    }
+}
+
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn posture_motion_blend_nodes() {
+    use crysirror_unity::animator::Controller;
+    use std::collections::BTreeSet;
+    let mut unity = unity();
+    let mut controllers = BTreeSet::new();
+    for posture in crysirror_amanatsu::h::load_postures(&mut unity).unwrap() {
+        for actor in posture.charas {
+            for source in [actor.base, actor.info] {
+                if !source.asset.is_empty() {
+                    controllers.insert((format!("lib/{}", source.bundle), source.asset));
+                }
+            }
+        }
+    }
+    assert_eq!(controllers.len(), 263);
+    let mut verified = false;
+    for (bundle, asset) in controllers {
+        let (file, id) = unity.bundle_asset(&bundle, &asset, 91).unwrap().unwrap();
+        let fields = unity.decode(&file, id).unwrap();
+        let controller = Controller::decode(&fields).unwrap();
+        let pairs = Controller::linear_clip_pairs(&fields, "Motion");
+        for slots in pairs {
+            assert!(slots.into_iter().all(|slot| slot < controller.clips.len()));
+            if asset == "som_f_base" {
+                let names = slots.map(|slot| {
+                    let (file, id) = unity.target(&file, controller.clips[slot]).unwrap();
+                    unity.decode(&file, id).unwrap().string("m_Name").unwrap().to_owned()
+                });
+                verified |= names == ["WLoop1_M", "WLoop2_M"];
+            }
+        }
+        if asset == "som_f_00" {
+            assert!(Controller::linear_clip_pairs(&fields, "Motion").is_empty());
+        }
+    }
+    assert!(verified, "the base controller must bind both numbered M variants");
+}
+
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn watergun_standby_button_modes_and_emitter_parameters() {
+    use crysirror_amanatsu::watergun::{Click,Controls,Standby};
+    let mut u=unity();
+    let standby=Standby::load(&mut u).unwrap();
+    assert_eq!(standby.enabled(0,0,false),Some(false));
+    assert_eq!(standby.enabled(1,0,false),Some(true));
+    assert_eq!(standby.enabled(1,1,false),Some(false));
+    assert_eq!(standby.enabled(1,0,true),Some(false));
+    assert_eq!(standby.enabled(-9999,0,false),None);
+    let pd=u.find_script_object("StreamingAssets/aa","AL.PropertyData").unwrap().unwrap();
+    let (mut level,mut buttons)=Controls::load(&mut u,pd.fields("_wgParam").unwrap()).unwrap();
+    let mode=level.find("WaterGun/Canvas/Panel/WaterGun/ccr_dropShadow/btnWaterGun").unwrap();
+    let end=level.find("WaterGun/Canvas/Panel/Back/ccr_dropShadow/btnEnd").unwrap();
+    let default=level.states[&mode].sprite.unwrap();
+    let initial=buttons.laser;
+    assert!(initial);
+    assert_eq!(buttons.click(&mut level,mode),Some(Click::Toggle));
+    assert_ne!(buttons.laser,initial);
+    assert_ne!(level.states[&mode].sprite.unwrap(),default);
+    assert_eq!(buttons.click(&mut level,mode),Some(Click::Toggle));
+    assert_eq!(level.states[&mode].sprite.unwrap(),default);
+    assert_eq!(buttons.click(&mut level,end),Some(Click::End));
+    assert_eq!((buttons.laser_speed,buttons.burst_speed),(40.,50.));
+    assert_eq!(buttons.on_seconds,[0.1,0.15]);
+    assert!(buttons.off_seconds[0] > 0. && buttons.off_seconds[0]<=buttons.off_seconds[1]);
+}
+
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn pool_lightmap_is_attached_only_to_its_named_renderer() {
+    let mut u = unity();
+    let info = crysirror_amanatsu::map::map_infos(&mut u).unwrap().into_iter().find(|m| m.id == 0).unwrap();
+    let map = crysirror_amanatsu::map::load(&mut u, &info, 0).unwrap();
+    let mut receivers = Vec::new();
+    let mut ordinary_lakes = Vec::new();
+    for chunk in &map.chunks {
+        let len = u32::from_le_bytes(chunk[12..16].try_into().unwrap()) as usize;
+        let glb: serde_json::Value = serde_json::from_slice(&chunk[20..20 + len]).unwrap();
+        for node in glb["nodes"].as_array().unwrap() {
+            let Some(mesh) = node["mesh"].as_u64() else { continue };
+            let name = node["name"].as_str().unwrap();
+            for primitive in glb["meshes"][mesh as usize]["primitives"].as_array().unwrap() {
+                let Some(mat) = primitive["material"].as_u64() else { continue };
+                let mat = &glb["materials"][mat as usize]["extras"]["crysirror_material"]["material"];
+                if mat["effect"]["kind"] == "directional_lightmap" {
+                    receivers.push(name.to_owned());
+                    let bin = &chunk[20 + len + 8..];
+                    for slot in ["occlusion_texture", "metallic_roughness_texture"] {
+                        let image = mat[slot].as_u64().unwrap() as usize;
+                        let index = glb["images"][image]["bufferView"].as_u64().unwrap() as usize;
+                        let view = &glb["bufferViews"][index];
+                        let offset = view["byteOffset"].as_u64().unwrap_or(0) as usize;
+                        let bytes = view["byteLength"].as_u64().unwrap() as usize;
+                        let surface = crysirror_image::decode_standard(&bin[offset..offset + bytes]).unwrap();
+                        assert!(surface.width > 0 && surface.height > 0);
+                        if slot == "occlusion_texture" {
+                            assert!(surface.rgba.chunks_exact(4).all(|p| p[0] <= 35 && p[1] <= 55 && p[2] <= 102 && p[3] == 255));
+                            assert!(surface.rgba.chunks_exact(4).any(|p| p[2] > 48));
+                        } else {
+                            // Source is linear BC7. Mirroring world Z inverts its blue.
+                            assert!(surface.rgba.chunks_exact(4).all(|p| (132..=136).contains(&p[0]) && (120..=124).contains(&p[2]) && (204..=205).contains(&p[3])));
+                        }
+                    }
+                    let e = &mat["effect"];
+                    for (v, expected) in [(&e["scale"][0], 0.40205857), (&e["scale"][1], 0.40205857),
+                        (&e["offset"][0], 0.5104535), (&e["offset"][1], 1. - 0.40205857 - 0.2614989)] {
+                        assert!((v.as_f64().unwrap() - expected).abs() < 1e-6);
+                    }
+                } else if name.starts_with("Lake Polygon") {
+                    ordinary_lakes.push(name.to_owned());
+                }
+            }
+        }
+    }
+    assert_eq!(receivers, ["Lake Polygon"], "errors: {:?}", map.report.errors);
+    assert!(ordinary_lakes.iter().any(|n| n == "Lake Polygon (1)") && ordinary_lakes.iter().any(|n| n == "Lake Polygon (2)"), "{ordinary_lakes:?}");
+}
+
+/// Replay both held input variants against the original jet and engine particle clock.
+#[test]
+#[ignore = "needs AMANATSU_ROOT"]
+fn watergun_free_flight_from_installed_emitter() {
+    use crysirror_amanatsu::{map::View, watergun::{Click, Jet}};
+    use crysirror_core::service::buttons;
+    use crysirror_vfx::{CpuWorld, SystemInstance};
+    use glam::{Mat4, Vec3};
+    let mut u = unity();
+    let pd = u.find_script_object("StreamingAssets/aa", "AL.PropertyData").unwrap().unwrap();
+    let (mut level,mut jet) = Jet::load(&mut u, pd.fields("_wgParam").unwrap()).unwrap();
+    assert_eq!(crysirror_amanatsu::watergun::entry_motion(&mut u,0,325).unwrap(),(1,String::from("Pose_D_00_Loop")));
+    assert_eq!(crysirror_amanatsu::watergun::entry_motion(&mut u,0,47).unwrap().0,43);
+    assert_eq!(jet.system.emitters[0].capacity, 1500);
+    let gun=jet.model(&level,&mut u).unwrap();
+    assert_eq!(gun.len(),1,"original equipped mesh must be presented");
+    let mode=level.find("WaterGun/Canvas/Panel/WaterGun/ccr_dropShadow/btnWaterGun").unwrap();
+    let view=View{eye:[0.,0.,0.],target:[0.,0.,1.],up:[0.,1.,0.],fov:60.,near:0.05,far:100.};
+    let mut world=CpuWorld::default();
+    let draw=|world:&mut CpuWorld,jet:&Jet,seconds:f64|{
+        let (position,rotation)=jet.pose(&view);
+        world.advance_seconds(&[SystemInstance {key:1,client:1,transform:Mat4::from_rotation_translation(rotation,position).to_cols_array_2d(),spec:jet.system.clone()}],seconds).unwrap()
+    };
+    assert!(!jet.update(buttons::MOUSE_LEFT,0.,||0.5));
+    assert!(draw(&mut world,&jet,0.1).emitters.iter().all(|e|e.particles.is_empty()));
+    assert!(jet.update(buttons::SPACE,0.1,||0.5));
+    let frame=draw(&mut world,&jet,0.25);
+    let laser=&frame.emitters.iter().find(|e|e.emitter_id=="laser").unwrap().particles;
+    assert!((99..=101).contains(&laser.len()), "laser births {}", laser.len());
+    let (origin,rotation)=jet.pose(&view);
+    assert!((rotation * Vec3::Z).z > 0.99, "the equipped gun must point forward");
+    println!("Nozzle {:?}, direction {:?}, laser births {}",origin,rotation*Vec3::Z,laser.len());
+    let first=&laser[0];
+    let expected_v=rotation*Vec3::Z*40.+Vec3::Y*(-6.*first.age);
+    assert!(Vec3::from_array(first.velocity).distance(expected_v)<0.11);
+    assert!(Vec3::from_array(first.position).distance(origin)>8.);
+    assert_eq!(first.lifetime,1.);
+    assert!((first.color[2]-0.990566).abs()<0.00001);
+    assert!(jet.update(0,0.35,||0.5));
+    let frame=draw(&mut world,&jet,0.1);
+    assert_eq!(frame.emitters.iter().find(|e|e.emitter_id=="laser").unwrap().particles.len(),laser.len());
+    assert_eq!(jet.controls.click(&mut level,mode),Some(Click::Toggle));
+    assert!(jet.update(buttons::MOUSE_MIDDLE,0.45,||0.5));
+    let frame=draw(&mut world,&jet,0.1);
+    let n=frame.emitters.iter().find(|e|e.emitter_id=="pulse").unwrap().particles.len();
+    assert!((49..=51).contains(&n),"pulse births {n}");
+    assert!(!jet.update(buttons::MOUSE_MIDDLE,0.55,||0.5));
+    assert!(jet.update(buttons::MOUSE_MIDDLE,0.58,||0.5));
+    assert_eq!(jet.speed,0.);
+    assert!(jet.update(buttons::MOUSE_MIDDLE,0.62,||0.5));
+    assert_eq!(jet.speed,50.);
+    assert!(jet.update(0,0.63,||0.5));
+    let frame=draw(&mut world,&jet,1.);
+    assert!(frame.emitters.iter().all(|e|e.particles.is_empty()));
 }

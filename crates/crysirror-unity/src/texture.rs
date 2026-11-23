@@ -67,3 +67,38 @@ pub fn decode(t: &Texture2D) -> Result<ImageSurface> {
     }
     Ok(ImageSurface { width: t.width, height: t.height, rgba: flipped })
 }
+
+/// Unity 5.6 standalone Texture2D, including its optional sibling .resS stream.
+pub fn decode_56(bytes: &[u8], open: impl FnOnce(&str) -> Result<std::sync::Arc<dyn crysirror_core::service::AssetReader>>) -> Result<ImageSurface> {
+    use crate::reader::Reader;
+    let mut r = Reader::new(bytes);
+    let name = r.string()?;
+    let (width, height) = (r.u32()?, r.u32()?);
+    ensure!(width > 0 && height > 0 && u64::from(width)*u64::from(height) <= 64 << 20, "Unity texture dimensions");
+    let _size = r.u32()?;
+    let format = r.i32()?;
+    let mipmap = r.i32()? > 1;
+    r.take(2)?;
+    r.align()?;
+    let image_count = r.i32()?;
+    ensure!(image_count == 1 && r.i32()? == 2, "expected a single 2D image");
+    let filter_mode = r.i32()?;
+    r.take(8)?;
+    let wrap_mode = r.i32()?;
+    r.take(8)?;
+    let embedded = r.bytes()?;
+    let data = if !embedded.is_empty() {
+        embedded.to_vec()
+    } else {
+        let offset = u64::from(r.u32()?);
+        let size = r.u32()? as usize;
+        let path = r.string()?;
+        ensure!(size <= 256 << 20, "Unity texture stream size");
+        let reader = open(&path)?;
+        ensure!(offset + size as u64 <= reader.len()?, "Unity texture stream outside source");
+        let mut out = vec![0; size];
+        super::read_exact(reader.as_ref(), offset, &mut out)?;
+        out
+    };
+    decode(&Texture2D { name, width, height, format, mipmap, image_count, filter_mode, wrap_mode, data })
+}

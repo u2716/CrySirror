@@ -145,6 +145,10 @@ pub enum TexUse {
     MetallicGloss { smoothness_milli: u16 },
     /// Occlusion in G (Unity) as R.
     Occlusion,
+    /// Linear diffuse light, stored as RGB without color-space conversion.
+    BakedRadiance,
+    /// Direction in Unity world coordinates, alpha carries normalization.
+    BakedDirection,
 }
 
 /// What an importer knows how to draw for a shader.
@@ -303,7 +307,7 @@ pub trait SceneAssets {
     }
 }
 
-pub use crysirror_scene::{effect::ShaderEffect, material::ToonShadeKind};
+pub use crysirror_scene::{effect::ShaderEffect, material::{RasterQueue, ToonLineModel, ToonShadeKind}};
 
 /// A consumer's replacement of parts of a mapped material.
 #[derive(Clone, Debug, Default)]
@@ -312,9 +316,14 @@ pub struct MaterialOverride {
     pub base_texture: Option<(String, ImageSurface)>,
     /// Linear base colour factor.
     pub base_color: Option<[f32; 4]>,
+    /// UV0 scale and offset for a supplied base texture.
+    pub base_uv: Option<([f32; 2], [f32; 2])>,
     /// Do not draw the material.
     pub hidden: bool,
     pub alpha_mode: Option<AlphaMode>,
+    pub alpha_cutoff: Option<f32>,
+    pub double_sided: Option<bool>,
+    pub raster_queue: Option<RasterQueue>,
     /// Cel shading instead of PBR: the engine toon model with this
     /// lookup texture (256×3, see `crysirror_scene::material::ToonShading`)
     /// and inverted-hull outline (clip-space width, colour).
@@ -331,6 +340,11 @@ pub struct MaterialOverride {
     pub toon_shadow_light: Option<[f32; 4]>,
     /// `ToonShading::shade_kind` and `shade_color`.
     pub toon_shade: Option<(ToonShadeKind, [f32; 3])>,
+    /// Linear RGB and weight of the final shadow tone override.
+    pub toon_shadow_tone_override: [f32; 4],
+    /// Raw line gate/coverage mask, linear line RGB and blend power.
+    pub toon_surface_line: Option<(String, ImageSurface, [f32; 4])>,
+    pub toon_line_model: ToonLineModel,
     /// Toon shadow layer (`ToonShading::shadow_texture`: top-down RGBA8,
     /// display-referred colour and amount, sampled raw) with a cache key.
     pub toon_shadow: Option<(String, ImageSurface)>,
@@ -442,7 +456,13 @@ fn downsample(mut img: ImageSurface, max: u32) -> ImageSurface {
 /// Convert decoded Unity texels for an engine slot.
 pub fn convert_texels(img: &mut ImageSurface, usage: TexUse) {
     match usage {
-        TexUse::Color => {}
+        TexUse::Color | TexUse::BakedRadiance => {}
+        TexUse::BakedDirection => {
+            // Unity to GLB reflects world Z, including encoded dominant direction.
+            for pixel in img.rgba.chunks_exact_mut(4) {
+                pixel[2] = 255 - pixel[2];
+            }
+        }
         TexUse::Normal => {
             for px in img.rgba.chunks_exact_mut(4) {
                 let x = f32::from(px[0]) * f32::from(px[3]) / (255. * 255.) * 2. - 1.;
@@ -493,7 +513,7 @@ struct Chunk {
     glb: GlbBuilder,
     /// Scene node → GLB node.
     nodes: HashMap<usize, usize>,
-    materials: HashMap<(String, i64), Option<usize>>,
+    materials: HashMap<(String, i64, Option<usize>), Option<usize>>,
     images: HashMap<(String, i64, TexUse), Option<usize>>,
     /// (mesh file, path id, sub-mesh range, materials) → GLB mesh.
     meshes: HashMap<(String, i64, usize, usize, Vec<Option<usize>>), Option<usize>>,
@@ -619,6 +639,31 @@ pub fn clip_tracks(scene: &Scene6, root: usize, clip: &crate::animator::Clip, na
 
 /// [`scene_glb`] with clips as glTF animations on the chunks' nodes.
 pub fn scene_glb_animated(scene: &Scene6, file: &str, roots: &[usize], assets: &mut dyn SceneAssets, options: &GlbOptions, generator: &str, clips: &[ClipTracks]) -> Result<(Vec<Vec<u8>>, GlbReport)> {
+    scene_glb_animated_with_nodes(scene, file, roots, assets, options, generator, clips, &[])
+}
+
+/// Also keep explicitly referenced scene transforms in every drawable chunk.
+/// Each reference retains its ancestry and animation channels, including for
+/// inactive or meshless nodes. The renderer selection still follows `roots`.
+pub fn scene_glb_animated_with_nodes(scene: &Scene6, file: &str, roots: &[usize], assets: &mut dyn SceneAssets, options: &GlbOptions, generator: &str, clips: &[ClipTracks], referenced: &[usize]) -> Result<(Vec<Vec<u8>>, GlbReport)> {
+    assemble(scene, file, roots, assets, options, generator, clips, referenced, &HashMap::new())
+}
+
+/// A receiver selected by the original lightmap settings, with texture
+/// identities already resolved against the owning serialized file.
+pub struct RendererLightmap {
+    pub radiance: (String, i64),
+    pub direction: (String, i64),
+    /// Native bottom-up Unity scale.xy, offset.zw.
+    pub tiling_offset: [f32; 4],
+}
+
+/// Assemble static receivers whose native lightmap TEXCOORD1 falls back to UV0.
+pub fn scene_glb_with_lightmaps(scene: &Scene6, file: &str, roots: &[usize], assets: &mut dyn SceneAssets, options: &GlbOptions, generator: &str, lightmaps: &HashMap<usize, RendererLightmap>) -> Result<(Vec<Vec<u8>>, GlbReport)> {
+    assemble(scene, file, roots, assets, options, generator, &[], &[], lightmaps)
+}
+
+fn assemble(scene: &Scene6, file: &str, roots: &[usize], assets: &mut dyn SceneAssets, options: &GlbOptions, generator: &str, clips: &[ClipTracks], referenced: &[usize], lightmaps: &HashMap<usize, RendererLightmap>) -> Result<(Vec<Vec<u8>>, GlbReport)> {
     let mut report = GlbReport::default();
     // LOD groups: only LOD 0 renderers are drawn (no distance switching).
     let mut lod_hidden: HashSet<i64> = HashSet::new();
@@ -690,6 +735,16 @@ pub fn scene_glb_animated(scene: &Scene6, file: &str, roots: &[usize], assets: &
             }
         }
     }
+    for (_, node) in &drawable {
+        if let Some(lm) = lightmaps.get(node) {
+            for ((tf, tid), usage) in [(&lm.radiance, TexUse::BakedRadiance), (&lm.direction, TexUse::BakedDirection)] {
+                if seen_textures.insert((tf.clone(), *tid, usage)) {
+                    let (w, h) = assets.texture_size(tf, *tid)?;
+                    wanted.push(((tf.clone(), *tid, usage), w, h));
+                }
+            }
+        }
+    }
     let sides = fit_textures(&wanted, options.max_texture, options.texture_budget);
     report.texture_bytes = wanted.iter().map(|(k, w, h)| {
         let (w, h) = halve_to(*w, *h, sides[k]);
@@ -697,17 +752,23 @@ pub fn scene_glb_animated(scene: &Scene6, file: &str, roots: &[usize], assets: &
     }).sum();
     let mut chunks = Vec::new();
     let springs = magica_bone_cloths(scene, options.spring_unit);
-    let mut chunk = Chunk::new(generator, options.max_texture);
-    chunk.springs = springs.clone();
+    let new_chunk = || -> Result<Chunk> {
+        let mut chunk = Chunk::new(generator, options.max_texture);
+        chunk.springs = springs.clone();
+        for &node in referenced {
+            anyhow::ensure!(node < scene.nodes.len(), "referenced scene transform {node} is out of range");
+            chunk.node(scene, node)?;
+        }
+        Ok(chunk)
+    };
+    let mut chunk = new_chunk()?;
     for (_, node) in drawable {
         let n = &scene.nodes[node];
         let Some(r) = n.components.iter().find(|c| c.class_id == MESH_RENDERER || c.class_id == SKINNED_MESH_RENDERER) else { continue };
         let skinned = r.class_id == SKINNED_MESH_RENDERER;
         let mesh_ptr = if skinned { r.fields.pptr("m_Mesh") } else { n.components.iter().find(|c| c.class_id == MESH_FILTER).and_then(|f| f.fields.pptr("m_Mesh")) }.unwrap_or_default();
         if chunk.glb.estimated_bytes() > CHUNK_BUDGET {
-            let mut fresh = Chunk::new(generator, options.max_texture);
-            fresh.springs = springs.clone();
-            let full = std::mem::replace(&mut chunk, fresh);
+            let full = std::mem::replace(&mut chunk, new_chunk()?);
             report.materials += full.materials.values().filter(|m| m.is_some()).count();
             report.textures += full.images.values().filter(|i| i.is_some()).count();
             chunks.push(finish_chunk(full, clips)?);
@@ -716,10 +777,15 @@ pub fn scene_glb_animated(scene: &Scene6, file: &str, roots: &[usize], assets: &
             let nf = scene.file_of(node, file);
             let Some((mf, mid, _, _)) = assets.object(nf, mesh_ptr)? else { return Ok(false) };
             let mesh = assets.mesh(&mf, mid)?;
+            let binding = lightmaps.get(&node).map(|lm| (node, lm));
+            if binding.is_some() {
+                anyhow::ensure!(!mesh.uv[0].is_empty() && mesh.uv[1].is_empty(),
+                    "{} needs a separate lightmap UV set", mesh.name);
+            }
             let mut ids = Vec::new();
             for p in r.fields.array("m_Materials").unwrap_or(&[]) {
                 if let Value::PPtr(p) = p {
-                    ids.push(material(assets, &mut chunk, &mut report, nf, *p, &sides)?);
+                    ids.push(material(assets, &mut chunk, &mut report, nf, *p, &sides, binding)?);
                 }
             }
             let (first, count) = r.fields.fields("m_StaticBatchInfo").map(|s| (s.int("firstSubMesh").unwrap_or(0) as usize, s.int("subMeshCount").unwrap_or(0) as usize)).unwrap_or((0, 0));
@@ -752,9 +818,10 @@ pub fn scene_glb_animated(scene: &Scene6, file: &str, roots: &[usize], assets: &
                     });
                 }
                 anyhow::ensure!(mesh.bind_poses.len() == joints.len(), "skin of {} has {} bones for {} bind poses", mesh.name, joints.len(), mesh.bind_poses.len());
-                let skin = chunk.glb.skin(joints, &mesh.bind_poses);
-                chunk.glb.set_skin(holder, skin);
                 let index = chunk.glb.mesh6_full(holder, &mesh, range, &ids, true, options.morph_targets)?;
+                if let Some(index) = index {
+                    chunk.glb.bind_mesh_skin(holder, index, joints, &mesh.bind_poses)?;
+                }
                 return Ok(index.is_some());
             }
             let key = (mf, mid, range.start, range.end, ids.clone());
@@ -897,14 +964,39 @@ fn finish_chunk(mut chunk: Chunk, clips: &[ClipTracks]) -> Result<Vec<u8>> {
     chunk.glb.finish()
 }
 
-fn material(assets: &mut dyn SceneAssets, chunk: &mut Chunk, report: &mut GlbReport, file: &str, p: PPtr, sides: &HashMap<(String, i64, TexUse), u32>) -> Result<Option<usize>> {
+fn texture_image(
+    assets: &mut dyn SceneAssets, glb: &mut GlbBuilder,
+    images: &mut HashMap<(String, i64, TexUse), Option<usize>>, report: &mut GlbReport,
+    tf: String, tid: i64, usage: TexUse, sides: &HashMap<(String, i64, TexUse), u32>, material: &str,
+) -> Result<Option<usize>> {
+    if let Some(i) = images.get(&(tf.clone(), tid, usage)) {
+        return Ok(*i);
+    }
+    let img = match assets.texture(&tf, tid) {
+        Ok(img) => {
+            let max = sides.get(&(tf.clone(), tid, usage)).copied().unwrap_or(64);
+            let mut img = downsample(img, max);
+            convert_texels(&mut img, usage);
+            let png = crysirror_image::encode_png(&img)?;
+            Some(glb.image(&format!("{tf}:{tid}:{usage:?}"), || Ok((png, "image/png")))?)
+        }
+        Err(e) => {
+            report.errors.push(format!("texture {tid} of material {}: {e:#}", material));
+            None
+        }
+    };
+    images.insert((tf, tid, usage), img);
+    Ok(img)
+}
+
+fn material(assets: &mut dyn SceneAssets, chunk: &mut Chunk, report: &mut GlbReport, file: &str, p: PPtr, sides: &HashMap<(String, i64, TexUse), u32>, receiver: Option<(usize, &RendererLightmap)>) -> Result<Option<usize>> {
     let Some((mf, mid, class, fields)) = assets.object(file, p)? else { return Ok(None) };
     if class != crate::class_id::MATERIAL {
         return Ok(None);
     }
     // Per renderer file: a consumer hook may draw a shared material
     // differently for each part.
-    let cache_key = (format!("{file}|{mf}"), mid);
+    let cache_key = (format!("{file}|{mf}"), mid, receiver.map(|(node, _)| node));
     if let Some(id) = chunk.materials.get(&cache_key) {
         return Ok(*id);
     }
@@ -920,24 +1012,7 @@ fn material(assets: &mut dyn SceneAssets, chunk: &mut Chunk, report: &mut GlbRep
         if class != crate::class_id::TEXTURE_2D {
             return Ok(None);
         }
-        if let Some(i) = images.get(&(tf.clone(), tid, usage)) {
-            return Ok(*i);
-        }
-        let img = match assets.texture(&tf, tid) {
-            Ok(img) => {
-                let max = sides.get(&(tf.clone(), tid, usage)).copied().unwrap_or(64);
-                let mut img = downsample(img, max);
-                convert_texels(&mut img, usage);
-                let png = crysirror_image::encode_png(&img)?;
-                Some(glb.image(&format!("{tf}:{tid}:{usage:?}"), || Ok((png, "image/png")))?)
-            }
-            Err(e) => {
-                report.errors.push(format!("texture {tid} of material {}: {e:#}", m.name));
-                None
-            }
-        };
-        images.insert((tf, tid, usage), img);
-        Ok(img)
+        texture_image(assets, glb, images, report, tf, tid, usage, sides, &m.name)
     };
     let (mut engine, mut support) = engine_material(&m, &mut image)?;
     if let Some(o) = assets.material_hook(file, &m)? {
@@ -951,21 +1026,31 @@ fn material(assets: &mut dyn SceneAssets, chunk: &mut Chunk, report: &mut GlbRep
             engine.uv_scale = [1.; 2];
             engine.uv_offset = [0.; 2];
         }
+        if let Some((scale, offset)) = o.base_uv {
+            engine.uv_scale = scale;
+            engine.uv_offset = offset;
+        }
         if let Some(c) = o.base_color {
             engine.base_color_factor = c;
         }
         if let Some(e) = o.unlit_effect.clone() {
             engine.unlit = true;
+            if matches!(e, ShaderEffect::NormalShell { .. }) {
+                engine.double_sided = true;
+            }
             engine.effect = Some(e);
             engine.toon = None;
             engine.metallic_roughness_texture = None;
             engine.occlusion_texture = None;
             engine.specular_texture = None;
         }
+        engine.raster_queue = o.raster_queue;
+        if let Some(cutoff) = o.alpha_cutoff { engine.alpha_cutoff = cutoff; }
         if let Some(a) = o.alpha_mode {
             engine.alpha_mode = a;
             engine.double_sided |= a.transparent();
         }
+        if let Some(double) = o.double_sided { engine.double_sided = double; }
         if let Some((lut, width, color)) = o.toon {
             let png = crysirror_image::encode_png(&lut)?;
             let key = format!("toon-lut:{:x}", png.iter().fold(0u64, |h, b| h.wrapping_mul(31).wrapping_add(u64::from(*b))));
@@ -997,7 +1082,16 @@ fn material(assets: &mut dyn SceneAssets, chunk: &mut Chunk, report: &mut GlbRep
                 let rpng = crysirror_image::encode_png(&downsample(ri.clone(), chunk.max_texture.min(512)))?;
                 liquid = (Some(chunk.glb.image(bk, || Ok((bpng, "image/png")))?), Some(chunk.glb.image(rk, || Ok((rpng, "image/png")))?), *tiling, *color);
             }
+            let mut surface_line_texture = None;
+            let mut line_color = [0.; 4];
+            if let Some((key, img, color)) = o.toon_surface_line {
+                let png = crysirror_image::encode_png(&downsample(img, chunk.max_texture.min(1024)))?;
+                surface_line_texture = Some(chunk.glb.image(&key, || Ok((png, "image/png")))?);
+                line_color = color;
+                engine.normal_texture = None;
+            }
             engine.toon = Some(crysirror_scene::material::ToonShading {
+                surface_line_texture, line_color, line_model: o.toon_line_model,
                 lookup_texture: Some(lookup),
                 shadow_texture: shadow,
                 blend_texture: blend,
@@ -1011,6 +1105,7 @@ fn material(assets: &mut dyn SceneAssets, chunk: &mut Chunk, report: &mut GlbRep
                 shade_from_base: o.toon_shade_from_base,
                 shadow_rim: o.toon_shadow_rim.unwrap_or([0.; 4]).map(|x| x.clamp(0., 1.)),
                 shadow_light: o.toon_shadow_light.unwrap_or([0.; 4]).map(|x| x.clamp(0., 1.)),
+                shadow_tone_override: o.toon_shadow_tone_override,
                 shade_kind: o.toon_shade.map_or(Default::default(), |s| s.0),
                 shade_color: o.toon_shade.map_or([0.5; 3], |s| s.1.map(|x| x.clamp(0., 1.))),
                 outline_width: width.clamp(0., 0.1),
@@ -1018,6 +1113,19 @@ fn material(assets: &mut dyn SceneAssets, chunk: &mut Chunk, report: &mut GlbRep
                 ..Default::default()
             });
         }
+    }
+    if let Some((_, lm)) = receiver {
+        anyhow::ensure!(engine.effect.is_none() && engine.toon.is_none() && !engine.unlit
+            && engine.occlusion_texture.is_none() && engine.metallic_roughness_texture.is_none(),
+            "{} lightmap conflicts with material texture bindings", m.name);
+        let mut image = |(tf, tid): &(String, i64), usage| -> Result<usize> {
+            texture_image(assets, &mut chunk.glb, &mut chunk.images, report, tf.clone(), *tid, usage, sides, &m.name)?
+                .ok_or_else(|| anyhow::anyhow!("missing {usage:?} on {}", m.name))
+        };
+        engine.occlusion_texture = Some(image(&lm.radiance, TexUse::BakedRadiance)?);
+        engine.metallic_roughness_texture = Some(image(&lm.direction, TexUse::BakedDirection)?);
+        let [sx, sy, ox, oy] = lm.tiling_offset;
+        engine.effect = Some(ShaderEffect::DirectionalLightmap { scale: [sx, sy], offset: [ox, 1. - sy - oy] });
     }
     let e = report.shaders.entry(m.shader.clone()).or_insert_with(|| (format!("{support:?}"), 0));
     e.1 += 1;

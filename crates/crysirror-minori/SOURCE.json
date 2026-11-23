@@ -1,0 +1,21 @@
+{
+  "mode": "adopt",
+  "authors": ["CrySirror contributors"],
+  "adopted_sources": [
+    {
+      "repository": "https://github.com/AetherKiri/AetherMinori",
+      "commit": "f99edd7e72240c73ab5fd3cdb6a0f366fbd7c0eb",
+      "upstream_author": "yorkyang2333",
+      "files": ["src/command.rs", "src/script.rs", "src/vm.rs"],
+      "license": "GPL-3.0-only",
+      "notice": "LICENSE-GPL-3.0"
+    }
+  ],
+  "format_references": [
+    {
+      "repository": "https://github.com/luoyily/ReMinori",
+      "commit": "79b00990324404bfbd496e7fa76c690cf040f744",
+      "scope": "eden* retail PAZ layout and transform order"
+    }
+  ]
+}

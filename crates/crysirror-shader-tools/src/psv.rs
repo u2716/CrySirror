@@ -23,7 +23,7 @@ pub fn is_shared_2d(module: &str) -> bool {
 }
 const WIPE_KINDS: &[i32] = &[
     -1, 0, 1, 2, 50, 200, 210, 211, 212, 213, 214, 215, 220, 221, 230, 231, 240, 241, 242, 243,
-    900, 901, 910, 911, 912,
+    900, 901, 910, 911, 912, 1001, 1002,
 ];
 // GXM has no compute stage. Accumulate the original ordered taps per pixel.
 // Each horizontal sum is an exact integer <= 255 * 257 (16 bits). Two

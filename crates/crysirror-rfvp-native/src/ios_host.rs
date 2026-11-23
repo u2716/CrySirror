@@ -74,7 +74,7 @@ fn build_app(
 /// - `ui_view` must be a valid pointer to a UIKit `UIView` (or a subclass) that is backed by a
 ///   `CAMetalLayer`.
 /// - The view must remain alive for the lifetime of the returned instance.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rfvp_ios_create(
     ui_view: *mut c_void,
     surface_width: u32,
@@ -139,7 +139,7 @@ pub unsafe extern "C" fn rfvp_ios_create(
 /// Step the engine by `dt_ms` milliseconds.
 ///
 /// Returns 1 if the engine requests exit (ExitMode/WindowClose), otherwise 0.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rfvp_ios_step(handle: *mut c_void, dt_ms: u32) -> i32 {
     if handle.is_null() {
         return 1;
@@ -156,7 +156,7 @@ pub unsafe extern "C" fn rfvp_ios_step(handle: *mut c_void, dt_ms: u32) -> i32 {
 /// Resize the presentation surface.
 ///
 /// `surface_width` and `surface_height` are physical drawable pixels, not UIKit points.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rfvp_ios_resize(
     handle: *mut c_void,
     surface_width: u32,
@@ -173,7 +173,7 @@ pub unsafe extern "C" fn rfvp_ios_resize(
 ///
 /// `phase`: 0=began, 1=moved, 2=ended, 3=cancelled.
 /// Coordinates are in UIKit points relative to the view.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rfvp_ios_touch(
     handle: *mut c_void,
     phase: i32,
@@ -192,7 +192,7 @@ pub unsafe extern "C" fn rfvp_ios_touch(
 /// `button`: 0=left, 1=right.
 /// `phase`: 0=down, 1=move, 2=up, 3=cancel/up.
 /// Coordinates are in UIKit points relative to the view.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rfvp_ios_mouse_button(
     handle: *mut c_void,
     button: i32,
@@ -212,7 +212,7 @@ pub unsafe extern "C" fn rfvp_ios_mouse_button(
 ///
 /// `delta` is forwarded to the engine wheel accumulator.
 /// Coordinates are in UIKit points relative to the view.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rfvp_ios_mouse_wheel(
     handle: *mut c_void,
     delta: i32,
@@ -230,7 +230,7 @@ pub unsafe extern "C" fn rfvp_ios_mouse_wheel(
 ///
 /// `key`: 0=Escape.
 /// `phase`: 0=down, 2=up, 3=cancel/up.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rfvp_ios_key(handle: *mut c_void, key: i32, phase: i32) {
     if handle.is_null() {
         return;
@@ -240,7 +240,7 @@ pub unsafe extern "C" fn rfvp_ios_key(handle: *mut c_void, key: i32, phase: i32)
 }
 
 /// Enable or disable HiDPI text backing surfaces without changing the iOS create ABI.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rfvp_ios_set_text_hidpi(handle: *mut c_void, enabled: i32) {
     if handle.is_null() {
         return;
@@ -250,7 +250,7 @@ pub unsafe extern "C" fn rfvp_ios_set_text_hidpi(handle: *mut c_void, enabled: i
 }
 
 /// Destroy the iOS host-mode instance.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rfvp_ios_destroy(handle: *mut c_void) {
     if handle.is_null() {
         return;

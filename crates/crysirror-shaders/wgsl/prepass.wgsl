@@ -15,8 +15,8 @@ fn vs_main(v: VertexIn) -> PreOut {
 }
 // Entry points cannot call each other; both vertex paths share this.
 fn transform_vertex(v: VertexIn) -> PreOut {
-    let world = object.model * vec4<f32>(v.position, 1.0);
-    let prev_world = object.prev_model * vec4<f32>(v.position, 1.0);
+    let world = shell_world(v.position, v.normal, v.uv, object.model, frame.view_proj);
+    let prev_world = shell_world(v.position, v.normal, v.uv, object.prev_model, frame.prev_view_proj);
     var o: PreOut;
     o.clip = frame.view_proj * world;
     o.normal = (frame.view * vec4<f32>((object.normal * vec4<f32>(v.normal, 0.0)).xyz, 0.0)).xyz;
@@ -33,9 +33,15 @@ struct PreTargets {
 };
 @fragment
 fn fs_main(i: PreOut, @builtin(front_facing) front: bool) -> PreTargets {
+    if raster_culled(front) { discard; }
+    if object.uv.w > 0.0 && !bayer_visible(1.0 - object.uv.w, vec2<u32>(vec2<f32>(i.clip.x, frame.screen.y - i.clip.y))) { discard; }
     let uv=material_uv(i.uv);
     let surface=sample_surface(uv,i.world,i.world_normal,frame.camera_pos.xyz,frame.misc.z);
-    if material.alpha.x == 1.0 && surface.color.a < material.alpha.y {discard;}
+    if material.surface.y == 5.0 && !shell_visible(front, vec2<u32>(vec2<f32>(i.clip.x, frame.screen.y - i.clip.y)), surface.color.a) {discard;}
+    if material.line_params[0].x == 2.0 {
+        let cloth = cloth_coverage(uv, frame.camera_pos.xyz, object.model[3].xyz, vec2<u32>(vec2<f32>(i.clip.x, frame.screen.y - i.clip.y)));
+        if cloth.x < cloth.y { discard; }
+    } else if material.alpha.x == 1.0 && surface.color.a < material.alpha.y {discard;}
     var n = normalize(i.normal);
     if !front {
         n = -n;
@@ -58,6 +64,8 @@ fn vs_skinned(v: VertexIn, s: SkinIn) -> PreOut {
     w.position = (k * vec4<f32>(v.position, 1.0)).xyz;
     w.normal = (k * vec4<f32>(v.normal, 0.0)).xyz;
     var o = transform_vertex(w);
-    o.prev = frame.prev_view_proj * object.prev_model * (kp * vec4<f32>(v.position, 1.0));
+    let pos = (kp * vec4<f32>(v.position, 1.0)).xyz;
+    let normal = (kp * vec4<f32>(v.normal, 0.0)).xyz;
+    o.prev = frame.prev_view_proj * shell_world(pos, normal, v.uv, object.prev_model, frame.prev_view_proj);
     return o;
 }

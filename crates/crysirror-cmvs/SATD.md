@@ -139,3 +139,23 @@ under the supported native sound-buffer modes.
 | Date | Change | Remaining scope |
 | --- | --- | --- |
 | 2026-11-19 | Recovered the native time query in IDA. Connected a new activation interval and fenced decoder rewind through mixer publication. | Reproduce the native device-buffer accounting in the position queries and verify their result words. |
+
+## SATD-cmvs-20070119-profile
+
+**Scope.** The i386 CMVS configuration in `src/vm.rs`, PS2 transfers in
+`src/vm/startup.rs`, the registration result in `src/vm/native_state.rs`
+and the shared handlers reached through `src/adapter.rs`.
+
+**2026-11-23.** Connected the startup executable, PS2A loader, CPZ3 resource
+reader and profile-specific no-effect dispatch. The original installation
+renders its disc-check dialog. `0x22c0` and `0x22c1` query the original
+registration state with argument 1. In the original, `0x22c0` can launch the
+bundled Windows registration helper and poll for its result. The adapter
+currently reports unregistered. A successful registration path and title,
+story and save behavior remain unverified. Other nontrivial syscall handlers
+shared with later CMVS builds still require a per-selector comparison.
+
+**Closure evidence.** Validate the positive and negative registration results
+using original media in their normal environment, compare native operand and
+result behavior for the remaining dispatch entries, and replay title, story
+and save/restore from this profile's normal entry point.

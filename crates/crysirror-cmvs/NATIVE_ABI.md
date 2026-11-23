@@ -15,10 +15,26 @@ explicitly and pass the prepared reader for the supported PS2A layout.
 
 | Admission | ABI identity and scope |
 | --- | --- |
+| Registered as `pc-20070119-x86` | CMVS Windows i386, PE COFF timestamp `0x45b04545`, `cmvs.cfg`, PS2A `start.ps2` and CPZ3 resources. |
 | Registered as `pc-20160201-x64` | CMVS Windows AMD64, PE COFF timestamp `0x56aedd70`, recognized config and `PS2A` startup layout. The VM and syscall tables refer to this profile. |
 | Registered as `cvns-20040515-x86` | CVNS Windows i386, PE COFF timestamp `0x40a51966`, `cvns.cfg` and `PSS0` startup layout. CVNS uses its own syscall table. |
-| Candidate `20160201` x86 | The reference catalogue records the same number of syscall slots at a different RVA and in a different CPU ABI. The launcher has no registered x86 profile. |
+| Candidate `20160201` x86 | The reference catalogue records the same number of syscall slots at a different RVA and in a different CPU ABI. This build has no registered profile. |
 | Candidate `20171114` x64 | The reference catalogue records 992 slots and separate native handlers. Admission requires a profile with verified inheritance and separate behavior for changed slots. |
+
+## CMVS Windows 2007-01-19
+
+The i386 startup routine at VA `0x404570` loads `start.ps2` through
+`0x43d500`. The script reader at `0x42c7e0` transforms the payload then
+expands compressed PS2A segments. Syscall `0x2003` resets into `main.ps2`.
+The 800-entry dispatcher at `0x43ee00` covers `0x2000..=0x231f`. Exactly
+320 slots jump directly to `0x43ee2b` and return `0x4000` with zero operand
+cleanup. These slots take precedence over later builds' handlers.
+
+The CPZ3 constructor at `0x42c2a0` initializes its table from file-backed
+RVA `0x90760`. Index and member reads at `0x42c370` and `0x42c530` share
+the ciphertext checksum at `0x42c180` and transform at `0x42c1c0`.
+The index declares its entire stored length, including padding after the
+last file record. Member offsets are relative to the end of that region.
 
 ## CVNS Windows 2004-05-15
 

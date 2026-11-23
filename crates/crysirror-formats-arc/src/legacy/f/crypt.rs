@@ -675,6 +675,8 @@ fn cpz7_index_mask(block: &[u8]) -> Result<Vec<u8>> {
     Ok(mask)
 }
 
+pub(super) mod cpz3;
+
 /// CVNS `CPZ1` (cvns.exe 2004-05-15, 0x41ee80): a 16-byte header (magic, count, index
 /// bytes, reserved), the index and the members, all transformed as
 /// `(byte ^ key[i % 64]) - 108` with the position restarting at every block. Index

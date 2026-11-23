@@ -20,6 +20,24 @@ rendering are shared engine capabilities:
 | Adapter-built models | `HostServices::upload_model` |
 | KAG parser (CM3D2 `file`/`label` dialect), TJS2 | `crysirror-kag`, `crysirror-tjs2` |
 
+## Custom Order Maid 3D 2
+
+The standalone KISS retail player has its own `com3d2` adopt profile for Unity
+5.6.4p2, serialized file format 17. Run it from the installed game directory:
+
+```sh
+./target/release/crysirror play ~/Downloads/game-com3d2
+```
+
+Release Return or a mouse button after each of the two startup fades to
+advance. The adapter reads the Unity BuildSettings, logo, warning and title
+widgets from the installation. It executes the installed `AllMain.ks` and
+`reset_scene.ks` through the shared KAG/TJS machinery. The title uses the
+retail club mesh hierarchy, texture resources, six buttons and BGM004. Start
+resumes the scenario at `*title_end`; the next scene controller is pending.
+See the [installed-data validation](../../docs/validation/com3d2.md) and
+[remaining work](SATD.md#satd-com3d2-standalone).
+
 ## Source provenance
 
 Analysis inputs (not distributed): the installed game's
@@ -88,3 +106,20 @@ outstanding scope is tracked in [SATD.md](SATD.md).
 Owner-corpus tests (`CM3D2_ROOT=<game> cargo test --release -p crysirror-cm3d2 -- --ignored`)
 convert all 427 models, 3058 animations and decrypt all 44 tables. Behaviour
 evidence is recorded in [docs/validation/cm3d2.md](../../docs/validation/cm3d2.md).
+
+
+### Title and daily-menu controls (1.00)
+
+Use Up/Down to cycle Start, Continue, Config and End, and Enter to activate the
+focused button. The desktop controller navigation mapping supplies the same
+actions. Moving the mouse over a title button takes focus back. The title
+binding is provided by CrySirror using the recovered TitleMgr commands and
+order. The installed scene enables keyboard/controller input, but the original
+physical command dispatcher has not been independently established. Settings
+closes through OK. The load panel has its own Cancel button.
+
+On the daytime menu, select Schedule, click a roster slot to choose a character,
+then click the slot's daytime task to assign work. Right-click an occupied slot
+to request removal. Cancel preserves the assignment. The sole leader cannot be
+removed. Schedule OK returns to the daily menu. The verified day-2 route and
+graphics-setting limitations are in [the UI validation record](../../docs/validation/cm3d2.md).

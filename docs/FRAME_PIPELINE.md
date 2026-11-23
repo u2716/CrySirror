@@ -56,7 +56,7 @@ cargo run -p crysirror-desktop -- render examples/aaa-fox-sponza/project.json \
   --output target/verification/sponza.png
 ```
 
-Sponza exceeds the default 256 MiB prepared-cache budget; the example explicitly
+Sponza exceeds 256 MiB of prepared CPU data. The example explicitly
 requests 1024 MiB. This is a host CPU-cache policy, separate from total RAM/VRAM.
 This Sponza recipe uses the raster material path. Native alpha-tested RT
 casters were added later in ADR 0055; this earlier capture recipe does not

@@ -619,3 +619,19 @@ fn automatic_callback_enters_on_the_next_native_frame_and_resumes_the_caller() {
     assert_eq!(vm.integer(5), Some(42));
     assert_eq!(vm.parameter(4), None);
 }
+
+#[test]
+fn ps2_profile_keeps_native_no_effect_slots_distinct_from_later_handlers() {
+    let mut code = Vec::new();
+    push_integer(&mut code, 10);
+    for opcode in [0x201fu16, 0x2000, 0x2320] {
+        code.extend_from_slice(&opcode.to_le_bytes());
+    }
+    let reader = startup_code(0, &code, &[]);
+    let mut vm = CmvsVm::prepare(VmProfile::Pc20070119X86, &reader).unwrap();
+    assert_eq!(vm.script_name(), b"start.ps2");
+    assert_eq!(vm.run(16).unwrap(), VmYield::Frame);
+    assert_eq!(vm.settings().archive_mode, None);
+    assert_eq!(vm.parameter(4), Some(10));
+    assert_eq!(vm.run(1).unwrap_err().reason, "outside CMVS 2007 syscall table");
+}

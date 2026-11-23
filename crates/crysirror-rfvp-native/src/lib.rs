@@ -1183,7 +1183,7 @@ static TEXT_HIDPI_DEFAULT: AtomicBool = AtomicBool::new(true);
 /// Set the default text HiDPI mode for instances created after this call.
 /// Existing host-driven instances should use their handle-specific setter.
 #[cfg(all(not(feature = "no_std"), feature = "gpu-render"))]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rfvp_set_text_hidpi_enabled(enabled: i32) {
     TEXT_HIDPI_DEFAULT.store(enabled != 0, Ordering::Relaxed);
 }
@@ -1230,7 +1230,7 @@ pub struct RfvpPumpHandle {
     any(target_os = "macos", target_os = "windows", target_os = "linux")
 ))]
 #[cfg(feature = "gpu-render")]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rfvp_pump_create(
     game_root_utf8: *const c_char,
     nls_utf8: *const c_char,
@@ -1308,7 +1308,7 @@ pub unsafe extern "C" fn rfvp_pump_create(
     any(target_os = "macos", target_os = "windows", target_os = "linux")
 ))]
 #[cfg(feature = "gpu-render")]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rfvp_pump_step(handle: *mut RfvpPumpHandle, timeout_ms: u32) -> i32 {
     if handle.is_null() {
         return 2;
@@ -1329,7 +1329,7 @@ pub unsafe extern "C" fn rfvp_pump_step(handle: *mut RfvpPumpHandle, timeout_ms:
     any(target_os = "macos", target_os = "windows", target_os = "linux")
 ))]
 #[cfg(feature = "gpu-render")]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rfvp_pump_set_text_hidpi(
     handle: *mut RfvpPumpHandle,
     enabled: i32,
@@ -1347,7 +1347,7 @@ pub unsafe extern "C" fn rfvp_pump_set_text_hidpi(
     any(target_os = "macos", target_os = "windows", target_os = "linux")
 ))]
 #[cfg(feature = "gpu-render")]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rfvp_pump_destroy(handle: *mut RfvpPumpHandle) {
     if handle.is_null() {
         return;
@@ -1356,7 +1356,7 @@ pub unsafe extern "C" fn rfvp_pump_destroy(handle: *mut RfvpPumpHandle) {
 }
 
 #[cfg(all(not(feature = "no_std"), feature = "gpu-render"))]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rfvp_run_entry(
     game_root_utf8: *const c_char,
     nls_utf8: *const c_char,

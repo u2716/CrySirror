@@ -30,7 +30,7 @@ unsafe fn read<'a>(ptr: *const c_char) -> anyhow::Result<&'a str> {
     Ok(unsafe { CStr::from_ptr(ptr) }.to_str()?)
 }
 /// All returned JSON strings are owned; release with crysirror_string_free.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn crysirror_probe(path: *const c_char) -> *mut c_char {
     guarded(|| embedded::probe(std::path::Path::new(unsafe { read(path)? })))
 }
@@ -81,7 +81,7 @@ fn native_surface(
         Ok(unsafe { instance.create_surface_unsafe(target) }?)
     }
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn crysirror_start(
     request: *const c_char,
     view: *mut c_void,
@@ -99,7 +99,7 @@ pub unsafe extern "C" fn crysirror_start(
         )
     })
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn crysirror_attach(
     id: u64,
     view: *mut c_void,
@@ -116,7 +116,7 @@ pub unsafe extern "C" fn crysirror_attach(
         Ok(serde_json::json!({"surface_generation":generation}))
     })
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn crysirror_detach(id: u64, generation: u64) -> *mut c_char {
     guarded(|| {
         session(id)?.detach(generation)?;
@@ -124,7 +124,7 @@ pub extern "C" fn crysirror_detach(id: u64, generation: u64) -> *mut c_char {
     })
 }
 /// Session handles remain valid across Surface replacement; destroyed handles fail.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn crysirror_command(id: u64, request: *const c_char) -> *mut c_char {
     guarded(|| {
         let q: serde_json::Value = serde_json::from_str(unsafe { read(request)? })?;
@@ -147,7 +147,7 @@ pub unsafe extern "C" fn crysirror_command(id: u64, request: *const c_char) -> *
         Ok(serde_json::json!({"ok":true}))
     })
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn crysirror_destroy(id: u64) {
     // Remove under lock, join outside it. A completed owner cannot retain its surface.
     let _ = std::panic::catch_unwind(|| {
@@ -155,7 +155,7 @@ pub extern "C" fn crysirror_destroy(id: u64) {
         drop(session);
     });
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn crysirror_string_free(ptr: *mut c_char) {
     if !ptr.is_null() {
         drop(unsafe { CString::from_raw(ptr) });

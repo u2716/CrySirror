@@ -130,7 +130,12 @@ pub fn open(bytes: Vec<u8>) -> Result<Box<dyn VideoStream>> {
         Container::Asf => Box::new(AsfStream::new(bytes)?),
         Container::Mp4 => Box::new(isobmff::Mp4Stream::new(Cursor::new(bytes))?),
         Container::Amv => Box::new(AmvStream::new(bytes)?),
-        Container::Avi => Box::new(avi::AviStream::new(bytes)?),
+        Container::Avi => {
+            let wmv3 = avi::stream::Movie::open(Cursor::new(bytes.as_slice()))
+                .is_ok_and(|movie| movie.codec().ok() == Some("wmv3"));
+            if wmv3 { Box::new(avi::stream::MemoryMovie::new(bytes)?) }
+            else { Box::new(avi::AviStream::new(bytes)?) }
+        }
         Container::ImoAvi => Box::new(imoavi::Movie::new(Cursor::new(bytes))?),
         Container::Cmv => Box::new(cmv::Movie::new(Cursor::new(bytes))?),
         Container::WebM => Box::new(webm::WebmStream::new(bytes)?),

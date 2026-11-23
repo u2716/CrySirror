@@ -15,6 +15,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 const CPZ6_FORMAT: &str = "purple-software/cpz6";
 const CPZ7_FORMAT: &str = "purple-software/cpz7";
+const CPZ3_FORMAT: &str = "purple-software/cpz3";
 const CPZ1_FORMAT: &str = "purple-software/cpz1";
 const CPZ6_KEY: &str = "cmvs-mode1-table";
 const CPZ6_TABLE_BYTES: usize = 96;
@@ -215,7 +216,8 @@ pub(crate) fn cpz6_from_pe(
         .find(|section| &section.name == b".rdata\0\0")
         .context("CMVS executable has no .rdata section")?;
     let is_cvns = profile == VmProfile::Cvns20040515X86;
-    let table_len = if is_cvns { 64 } else { CPZ6_TABLE_BYTES };
+    let is_cpz3 = profile == VmProfile::Pc20070119X86;
+    let table_len = if is_cvns || is_cpz3 { 64 } else { CPZ6_TABLE_BYTES };
     let table_rva = profile.archive_table_rva();
     ensure!(
         table_rva >= section.rva
@@ -224,7 +226,15 @@ pub(crate) fn cpz6_from_pe(
         "native archive table is not in the supported file-backed section"
     );
     let mut bytes = pe.rva_slice(table_rva, table_len)?.to_vec();
-    let (format, id, parameters) = if is_cvns {
+    let (format, id, parameters) = if is_cpz3 {
+        // cmvs.exe 0x42c2a0 unmasks the archive reader's 64-byte table.
+        let mut mask = 0xd7u8;
+        for byte in &mut bytes {
+            *byte ^= mask;
+            mask = mask.wrapping_sub(29);
+        }
+        (CPZ3_FORMAT, CPZ3_FORMAT, serde_json::json!({"key_id": CPZ3_FORMAT}))
+    } else if is_cvns {
         for byte in &mut bytes {
             *byte = byte.wrapping_add(10);
         }

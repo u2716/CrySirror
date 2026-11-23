@@ -72,7 +72,7 @@ pub struct Sound {
     setups: HashMap<u32, Option<Vec<u8>>>,
     player: Option<Vec<u8>>,
     current_bgm: Option<(String, String)>,
-    pending: Vec<u64>,
+    pending: Vec<(u32, u64)>,
     /// The config mix groups exist (`apply_volumes` succeeded).
     groups: bool,
     pub log: Vec<String>,
@@ -135,17 +135,47 @@ impl Sound {
 
     /// `Manager.Sound.Play(Loader)` of a bundle asset.
     pub fn play(&mut self, host: &mut dyn HostServices, client: ClientId, unity: &mut Unity, kind: Kind, bundle: &str, asset: &str, gain: f32) -> Result<()> {
-        self.play_in(host, client, unity, kind, bundle, asset, gain, kind.group().to_owned())
+        self.play_in(host, client, unity, kind, kind.channel(), bundle, asset, gain, kind.group().to_owned())
     }
 
     /// A character voice in its personality's config volume
     /// (`Voice/cNN`, under the voice master).
     pub fn play_voice(&mut self, host: &mut dyn HostServices, client: ClientId, unity: &mut Unity, bundle: &str, asset: &str, personality: Option<i64>) -> Result<()> {
-        let group = personality.filter(|p| (0..PERSONALITIES).contains(p)).map_or_else(|| Kind::Voice.group().to_owned(), |p| format!("voice_c{p:02}"));
-        self.play_in(host, client, unity, Kind::Voice, bundle, asset, 1., group)
+        self.play_adv_voice(host, client, unity, 0, bundle, asset, personality)
     }
 
-    fn play_in(&mut self, host: &mut dyn HostServices, client: ClientId, unity: &mut Unity, kind: Kind, bundle: &str, asset: &str, gain: f32, group: String) -> Result<()> {
+    // Channel 5 remains the talking heroine / normal map voice. The player
+    // and additional scenario actors have separate playback and waits.
+    fn actor_channel(actor: i32) -> Result<u32> {
+        match actor {
+            0 => Ok(Kind::Voice.channel()),
+            -1 => Ok(6),
+            n if n > 0 => Ok(6 + n as u32),
+            _ => anyhow::bail!("unknown ADV voice actor {actor}"),
+        }
+    }
+
+    pub(crate) fn voice_playing(&self, host: &dyn HostServices, client: ClientId, actor: i32) -> Result<bool> {
+        let channel = Self::actor_channel(actor)?;
+        Ok(self.pending.iter().any(|(c, _)| *c == channel) || host.audio_playing(client, channel)?)
+    }
+
+    pub(crate) fn stop_voice(&mut self, host: &mut dyn HostServices, client: ClientId, actor: i32) -> Result<()> {
+        let channel = Self::actor_channel(actor)?;
+        while let Some(at) = self.pending.iter().position(|(c, _)| *c == channel) {
+            host.release_audio(client, self.pending[at].1)?;
+            self.pending.remove(at);
+        }
+        host.submit_audio(client, AudioRequest::Stop { channel, fade_ms: 0. })?;
+        Ok(())
+    }
+
+    pub(crate) fn play_adv_voice(&mut self, host: &mut dyn HostServices, client: ClientId, unity: &mut Unity, actor: i32, bundle: &str, asset: &str, personality: Option<i64>) -> Result<()> {
+        let group = personality.filter(|p| (0..PERSONALITIES).contains(p)).map_or_else(|| Kind::Voice.group().to_owned(), |p| format!("voice_c{p:02}"));
+        self.play_in(host, client, unity, Kind::Voice, Self::actor_channel(actor)?, bundle, asset, 1., group)
+    }
+
+    fn play_in(&mut self, host: &mut dyn HostServices, client: ClientId, unity: &mut Unity, kind: Kind, channel: u32, bundle: &str, asset: &str, gain: f32, group: String) -> Result<()> {
         let bytes = self.stream(unity, bundle, asset)?;
         let parameters = AudioParameters {
             gain,
@@ -160,8 +190,8 @@ impl Sound {
             mix_group: self.groups.then_some(group),
             ..Default::default()
         };
-        let ticket = host.begin_audio(client, AudioRequest::Play { channel: kind.channel(), source: EncodedAudio { bytes: bytes.into(), frame_limit: None }, intro: None, parameters })?;
-        self.pending.push(ticket);
+        let ticket = host.begin_audio(client, AudioRequest::Play { channel, source: EncodedAudio { bytes: bytes.into(), frame_limit: None }, intro: None, parameters })?;
+        self.pending.push((channel, ticket));
         Ok(())
     }
 
@@ -246,7 +276,7 @@ impl Sound {
     /// Release finished preparations.
     pub fn poll(&mut self, host: &mut dyn HostServices, client: ClientId) -> Result<()> {
         let mut keep = Vec::new();
-        for t in std::mem::take(&mut self.pending) {
+        for (channel, t) in std::mem::take(&mut self.pending) {
             match host.audio_preparation(client, t)?.phase {
                 AudioPreparePhase::Ready => host.release_audio(client, t)?,
                 AudioPreparePhase::Failed => {
@@ -254,10 +284,61 @@ impl Sound {
                     self.log.push(format!("audio preparation failed: {}", p.error.unwrap_or_default()));
                     host.release_audio(client, t)?;
                 }
-                AudioPreparePhase::Pending => keep.push(t),
+                AudioPreparePhase::Pending => keep.push((channel, t)),
             }
         }
         self.pending = keep;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod adv_voice_tests {
+    use super::*;
+    use crysirror_core::{path::VfsPath, service::FileSystem, state::Command};
+
+    #[derive(Default)]
+    struct AudioHost {
+        playing: Vec<u32>,
+        released: Vec<u64>,
+    }
+
+    impl FileSystem for AudioHost {
+        fn read(&mut self, _: ClientId, _: &VfsPath) -> crysirror_core::Result<Vec<u8>> { unreachable!() }
+        fn write_atomic(&mut self, _: ClientId, _: &VfsPath, _: &[u8]) -> crysirror_core::Result<()> { unreachable!() }
+    }
+
+    impl HostServices for AudioHost {
+        fn submit(&mut self, _: ClientId, _: &[Command]) -> crysirror_core::Result<()> { unreachable!() }
+        fn now_ms(&self) -> u64 { 0 }
+        fn audio_playing(&self, _: ClientId, channel: u32) -> crysirror_core::Result<bool> {
+            Ok(self.playing.contains(&channel))
+        }
+        fn release_audio(&mut self, _: ClientId, ticket: u64) -> crysirror_core::Result<()> {
+            self.released.push(ticket);
+            Ok(())
+        }
+        fn submit_audio(&mut self, _: ClientId, request: AudioRequest) -> crysirror_core::Result<()> {
+            let AudioRequest::Stop { channel, .. } = request else { unreachable!() };
+            self.playing.retain(|c| *c != channel);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn waits_for_pending_or_published_actor_voice_and_cancels_only_that_actor() {
+        let client = ClientId(1);
+        let mut host = AudioHost { playing: vec![5, 7], ..Default::default() };
+        let mut sound = Sound { pending: vec![(6, 100), (7, 101)], ..Default::default() };
+        assert!(sound.voice_playing(&host, client, -1).unwrap());
+        assert!(sound.voice_playing(&host, client, 0).unwrap());
+        sound.stop_voice(&mut host, client, -1).unwrap();
+        assert_eq!(host.released, [100]);
+        assert!(!sound.voice_playing(&host, client, -1).unwrap());
+        sound.stop_voice(&mut host, client, 0).unwrap();
+        assert!(!sound.voice_playing(&host, client, 0).unwrap());
+        assert!(sound.voice_playing(&host, client, 1).unwrap());
+        assert_eq!(sound.pending, [(7, 101)]);
+        assert_eq!(host.playing, [7]);
     }
 }

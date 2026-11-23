@@ -163,6 +163,44 @@ impl UnityData {
         Ok(Some(ObjectKey { file, path_id: p.path_id }))
     }
 
+    /// Read the root scale track used by the roster plate's Unity 4 legacy Animation.
+    /// The trailing component property curve is independent of this transform.
+    pub fn root_scale_clip(&mut self, opener: &mut dyn UnityFiles, animation: &ObjectKey) -> Result<[Vec<[f32; 4]>; 3]> {
+        use crysirror_unity::Reader;
+        let (_, bytes) = self.bytes(opener, animation)?;
+        let mut r = Reader::new(&bytes);
+        let _owner = r.pptr()?;
+        let _enabled = r.bool()?;
+        r.align()?;
+        let clip = self.resolve(opener, &animation.file, r.pptr()?)?.context("default AnimationClip")?;
+        let (class, bytes) = self.bytes(opener, &clip)?;
+        anyhow::ensure!(class == 74, "expected AnimationClip");
+        let mut r = Reader::new(&bytes);
+        let _name = r.string()?;
+        anyhow::ensure!(r.i32()? == 1 && !r.bool()?, "unsupported roster clip encoding");
+        let _high_quality = r.bool()?;
+        r.align()?;
+        anyhow::ensure!(r.i32()? == 0 && r.i32()? == 0 && r.i32()? == 0 && r.i32()? == 1,
+            "expected a single roster scale curve");
+        let count = r.count(40)?;
+        anyhow::ensure!((1..=4096).contains(&count), "invalid roster scale key count");
+        let mut axes = [Vec::new(), Vec::new(), Vec::new()];
+        let mut last = -1.;
+        for _ in 0..count {
+            let t = r.f32()?;
+            anyhow::ensure!(t.is_finite() && t >= 0. && t > last, "invalid scale key time");
+            last = t;
+            let (value, incoming, outgoing) = (r.f32s::<3>()?, r.f32s::<3>()?, r.f32s::<3>()?);
+            for axis in 0..3 {
+                anyhow::ensure!(value[axis].is_finite(), "invalid scale key value");
+                axes[axis].push([t, value[axis], incoming[axis], outgoing[axis]]);
+            }
+        }
+        let (_pre, _post) = (r.i32()?, r.i32()?);
+        anyhow::ensure!(r.string()?.is_empty(), "expected a root scale track");
+        Ok(axes)
+    }
+
     pub fn bytes(&mut self, opener: &mut dyn UnityFiles, key: &ObjectKey) -> Result<(i32, Vec<u8>)> {
         let file = self.file(opener, &key.file)?;
         let info = *file.object(key.path_id).with_context(|| format!("Unity object {}:{} missing", key.file, key.path_id))?;

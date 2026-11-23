@@ -59,6 +59,7 @@ Read STATUS.md, docs/ARCHITECTURE.md and docs/NATIVE_ADAPTERS.md before editing.
 - Keep project/VM data distinct from GPU/device pointers and executable code.
 - Never distribute user game data, fonts, credentials or proprietary SDK files.
 - Document implementation, compilation and behavior validation separately.
+- Use Rust edition 2024 for CrySirror-owned crates. New workspace members inherit the edition from the root manifest.
 - Run Python tooling tests and cargo checks/tests when the environment permits.
   Use `cargo check/test --release` for local validation (owner preference).
 - Current contracts belong in adapter docs, native findings beside their code,

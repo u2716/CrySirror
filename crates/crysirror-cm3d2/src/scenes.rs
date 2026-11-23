@@ -18,6 +18,8 @@ pub struct Title {
     started_ms: u64,
     /// `TitleCtrl.m_currentActiveButton`.
     active: usize,
+    hovered: Option<usize>,
+    pointer: Option<[i32; 2]>,
     closing: Option<u64>,
     /// Continue: the title panel's 0.5 s `TweenAlpha` (out, then the load
     /// panel; in again after a cancel) and the open load panel.
@@ -137,14 +139,16 @@ pub fn start(game: &mut Game, opener: &mut Opener, scene: &str) -> Result<Active
                     .with_context(|| format!("title button group {name}"))?;
                 let base = level.scene.nodes[group].position;
                 level.states.entry(group).or_default().position = Some([BUTTON_START_X, base[1], base[2]]);
-                let cursor = level.scene.find(&format!("UI Root/TitlePanel/ButtonGroup/{name}Group/{name}/SelectCursor"));
+                let button = level.scene.child(group, name).context("title button")?;
+                level.states.entry(button).or_default().click = Some("TitleMgr.ClickButton".into());
+                let cursor = level.scene.child(button, "SelectCursor");
                 if let Some(c) = cursor {
                     level.states.entry(c).or_default().active = Some(i == 0);
                 }
             }
             // TitleMgr: Serialize(-1, "タイトルへ戻る") for SceneToTitle.
             game.save_slot(opener, -1, "タイトルへ戻る")?;
-            Active::Title(Title { started_ms: game.now, active: 0, closing: None, panel: TitlePanel::Shown })
+            Active::Title(Title { started_ms: game.now, active: 0, hovered: None, pointer: None, closing: None, panel: TitlePanel::Shown })
         }
         // SATD-cm3d2-game-logic: remaining scene controllers.
         "SceneUserEdit" => {
@@ -203,7 +207,7 @@ pub fn start(game: &mut Game, opener: &mut Opener, scene: &str) -> Result<Active
 }
 
 /// iTween `easeOutExpo` (the iTween default ease type).
-fn ease_out_expo(t: f32) -> f32 {
+pub(crate) fn ease_out_expo(t: f32) -> f32 {
     if t >= 1. {
         1.
     } else {
@@ -448,22 +452,57 @@ pub fn update(game: &mut Game, opener: &mut Opener) -> Result<()> {
                     game.active = Active::Title(Title { closing: None, ..t });
                     return Ok(());
                 }
-            } else if click {
-                let (px, py) = (game.input.pointer_x as f32, game.input.pointer_y as f32);
-                let hit = TITLE_BUTTONS.iter().position(|name| {
-                    level
-                        .scene
-                        .find(&format!("UI Root/TitlePanel/ButtonGroup/{name}Group/{name}"))
-                        .and_then(|n| game.ui.rects.get(&(1, n)))
-                        .is_some_and(|r| px >= r.x0 && px < r.x1 && py >= r.y0 && py < r.y1)
+            } else {
+                // TitleMouseOver.OnHover(true) follows UICamera's topmost collider.
+                let hover = crate::uiev::pick(&game.ui.hits, game.input.pointer_x as f32, game.input.pointer_y as f32)
+                    .filter(|hit| hit.scene == 1 && level.states.get(&hit.node).and_then(|state| state.click.as_deref()) == Some("TitleMgr.ClickButton"))
+                    .and_then(|hit| TITLE_BUTTONS.iter().position(|name| level.scene.nodes[hit.node].name == *name));
+                let mut activated = None;
+                game.events.retain(|(scene,node,handler)| {
+                    if *scene == 1 && handler == "TitleMgr.ClickButton" {
+                        activated = TITLE_BUTTONS.iter().position(|name| level.scene.nodes[*node].name == *name);
+                        false
+                    } else {
+                        true
+                    }
                 });
-                if let Some(button) = hit {
-                    t.active = button;
+                let pointer = [game.input.pointer_x, game.input.pointer_y];
+                let pointer_selection = (hover != t.hovered || t.pointer != Some(pointer)).then_some(hover).flatten();
+                t.hovered = hover;
+                t.pointer = Some(pointer);
+                let available = TITLE_BUTTONS.map(|name| game.ui.hits.iter().any(|hit|
+                    hit.scene == 1 && level.scene.nodes[hit.node].name == name &&
+                    level.states.get(&hit.node).and_then(|s| s.click.as_deref()) == Some("TitleMgr.ClickButton")));
+                let keys = game.input.buttons_pressed;
+                use crysirror_core::service::buttons;
+                let has_modal = game.main.scene.find("__GameMain__/SystemUI Root/SystemDialog").is_some_and(|n|
+                    game.main.states.get(&n).and_then(|s| s.active).unwrap_or(game.main.scene.nodes[n].active));
+                let accepts_keys = !game.cm_system.open && !has_modal && game.input_focus.is_none();
+                let movement = if accepts_keys {
+                    match (keys & buttons::UP != 0, keys & buttons::DOWN != 0) {
+                        (true, false) => -1, (false, true) => 1, _ => 0,
+                    }
+                } else { 0 };
+                let focus = pointer_selection.unwrap_or(t.active);
+                let selection = if movement != 0 {
+                    (1..=TITLE_BUTTONS.len()).map(|step|
+                        (focus as isize + movement * step as isize).rem_euclid(TITLE_BUTTONS.len() as isize) as usize
+                    ).find(|&index| available[index])
+                } else { pointer_selection };
+                let focused = selection.unwrap_or(focus);
+                if accepts_keys && keys & buttons::ENTER != 0 && available[focused] && activated.is_none() {
+                    activated = Some(focused);
+                }
+                let selection = activated.or(selection);
+                if let Some(selected) = selection {
+                    t.active = selected;
                     for (i, name) in TITLE_BUTTONS.iter().enumerate() {
                         if let Some(c) = level.scene.find(&format!("UI Root/TitlePanel/ButtonGroup/{name}Group/{name}/SelectCursor")) {
-                            level.states.entry(c).or_default().active = Some(i == button);
+                            level.states.entry(c).or_default().active = Some(i == selected);
                         }
                     }
+                }
+                if let Some(button) = activated {
                     let button_node = level.scene.find(&format!("UI Root/TitlePanel/ButtonGroup/{0}Group/{0}", TITLE_BUTTONS[button]));
                     if let Some(f) = button_node.and_then(|n| level.scene.script(n, "UIButton")) {
                         if let Some(file) = crate::sound::button_click(f.int("clickMouseSe").unwrap_or(0), f.string("clickMouseSeFile").unwrap_or("")) {

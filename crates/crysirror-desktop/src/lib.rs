@@ -148,8 +148,8 @@ enum Command {
         #[arg(long, value_enum, default_value = "raster")]
         renderer: RenderChoice,
         /// Prepared CPU asset-cache budget, separate from total RAM/VRAM.
-        #[arg(long,default_value_t=256,value_parser=clap::value_parser!(u32).range(16..=4096))]
-        asset_cache_mib: u32,
+        #[arg(long,value_parser=clap::value_parser!(u32).range(16..=4096))]
+        asset_cache_mib: Option<u32>,
         /// JS/TS sources run by the engine App (playable games).
         #[arg(long)]
         script: Vec<PathBuf>,
@@ -177,8 +177,8 @@ enum Command {
         #[arg(long, value_enum, default_value = "raster")]
         renderer: RenderChoice,
         /// Prepared CPU asset-cache budget, separate from total RAM/VRAM.
-        #[arg(long,default_value_t=256,value_parser=clap::value_parser!(u32).range(16..=4096))]
-        asset_cache_mib: u32,
+        #[arg(long,value_parser=clap::value_parser!(u32).range(16..=4096))]
+        asset_cache_mib: Option<u32>,
         /// JS/TS sources run by the engine App before capture (repeatable).
         #[arg(long)]
         script: Vec<PathBuf>,
@@ -655,8 +655,9 @@ fn run() -> Result<()> {
             let mut rt = load_runtime(&project, &state_dir)?;
             rt.set_audio_nonblocking(true);
             app::load_fonts(&mut rt, font.as_deref())?;
-            rt.assets
-                .set_prepared_budget(usize::try_from(u64::from(asset_cache_mib) * 1024 * 1024)?)?;
+            if let Some(mib) = asset_cache_mib {
+                rt.assets.set_prepared_budget(usize::try_from(u64::from(mib) * 1024 * 1024)?)?;
+            }
             let core = if script.is_empty() {
                 app::Core::Plain(rt)
             } else {
@@ -710,8 +711,9 @@ fn run() -> Result<()> {
             });
             // Native callbacks may measure fonts during the first VM tick.
             app::load_fonts(&mut rt, font.as_deref())?;
-            rt.assets
-                .set_prepared_budget(usize::try_from(u64::from(asset_cache_mib) * 1024 * 1024)?)?;
+            if let Some(mib) = asset_cache_mib {
+                rt.assets.set_prepared_budget(usize::try_from(u64::from(mib) * 1024 * 1024)?)?;
+            }
             let track = input_track::InputTrack::load(input_track.as_deref())?;
             anyhow::ensure!(!track.has_text(), "committed text input tracks require play --headless");
             let input = |frame: u32| {

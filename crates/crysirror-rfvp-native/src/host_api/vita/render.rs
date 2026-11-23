@@ -13,7 +13,7 @@ use crate::host_api::{
 const SCREEN_WIDTH: u32 = 960;
 const SCREEN_HEIGHT: u32 = 544;
 
-extern "C" {
+unsafe extern "C" {
     // rfvp_psv_gpu.c
     fn rfvp_psv_gpu_create_texture(width: u32, height: u32, rgba: *const u8, linear: i32) -> *mut c_void;
     fn rfvp_psv_gpu_update_texture(texture: *mut c_void, x: u32, y: u32, w: u32, h: u32, rgba: *const u8);

@@ -114,6 +114,44 @@ pub struct RunOptions {
 fn window_decorations(requested: bool, fullscreen: bool, allow_borderless: bool) -> bool {
     requested || (!fullscreen && !allow_borderless)
 }
+fn navigation_button(code: KeyCode) -> Option<u64> {
+    match code {
+        KeyCode::Enter | KeyCode::NumpadEnter => Some(buttons::ENTER),
+        KeyCode::Space => Some(buttons::SPACE),
+        KeyCode::ArrowLeft => Some(buttons::LEFT),
+        KeyCode::ArrowRight => Some(buttons::RIGHT),
+        KeyCode::ArrowUp => Some(buttons::UP),
+        KeyCode::ArrowDown => Some(buttons::DOWN),
+        KeyCode::Tab => Some(buttons::TAB),
+        KeyCode::Escape => Some(buttons::ESCAPE),
+        _ => None,
+    }
+}
+
+fn update_button(input: &mut InputFrame, bit: u64, down: bool) {
+    if down {
+        if input.buttons_down & bit == 0 {
+            input.buttons_pressed |= bit;
+        }
+        input.buttons_down |= bit;
+    } else {
+        input.buttons_down &= !bit;
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DesktopShortcut { Save, Load, Capture }
+
+fn desktop_shortcut(code: KeyCode, pressed: bool, repeat: bool, siglus: bool) -> Option<DesktopShortcut> {
+    if !pressed || repeat || siglus { return None; }
+    match code {
+        KeyCode::F5 => Some(DesktopShortcut::Save),
+        KeyCode::F9 => Some(DesktopShortcut::Load),
+        KeyCode::F12 => Some(DesktopShortcut::Capture),
+        _ => None,
+    }
+}
+
 struct WindowState {
     pending_snapshot: Option<crysirror_runtime::frame::PendingFrame>,
     render_snapshot: Option<crysirror_runtime::frame::RenderSnapshot>,
@@ -591,16 +629,6 @@ impl App {
         log::info!("restored quick.save; audio restarts at sample zero");
         Ok(())
     }
-    fn button(&mut self, bit: u64, down: bool) {
-        if down {
-            if self.input.buttons_down & bit == 0 {
-                self.input.buttons_pressed |= bit;
-            }
-            self.input.buttons_down |= bit;
-        } else {
-            self.input.buttons_down &= !bit;
-        }
-    }
     fn redraw(&mut self, el: &ActiveEventLoop) -> Result<()> {
         let profiler = self.core.rt().profiler.clone();
         let _redraw_span = profiler.span(profiler.frame(), "desktop.redraw");
@@ -960,18 +988,13 @@ impl App {
                     }
                 }
                 if let PhysicalKey::Code(code) = event.physical_key {
-                    // Siglus owns these keys (menu, native saves and native shortcuts).
+                    // Siglus owns its native function-key shortcuts. Escape is routed through InputFrame.
                     let siglus = self.core.rt().project.clients.iter().any(|client| client.adapter == "siglus");
-                    if pressed && !event.repeat && !siglus {
-                        match code {
-                            KeyCode::Escape => {
-                                if !self.core.rt().host.engine.ui.focused_text_field() {
-                                    el.exit();
-                                }
-                            }
-                            KeyCode::F5 => self.save()?,
-                            KeyCode::F9 => self.load()?,
-                            KeyCode::F12 => {
+                    if let Some(shortcut) = desktop_shortcut(code, pressed, event.repeat, siglus) {
+                        match shortcut {
+                            DesktopShortcut::Save => self.save()?,
+                            DesktopShortcut::Load => self.load()?,
+                            DesktopShortcut::Capture => {
                                 let path = self.options.capture.clone().unwrap_or_else(|| {
                                     self.options.state_dir.join(format!(
                                         "capture-{}.png",
@@ -987,17 +1010,9 @@ impl App {
                                     )?;
                                 }
                             }
-                            _ => {}
                         }
                     }
                     let bit = match code {
-                        KeyCode::Enter | KeyCode::NumpadEnter => Some(1),
-                        KeyCode::Space => Some(2),
-                        KeyCode::ArrowLeft => Some(4),
-                        KeyCode::ArrowRight => Some(8),
-                        KeyCode::ArrowUp => Some(16),
-                        KeyCode::ArrowDown => Some(32),
-                        KeyCode::Tab => Some(64),
                         KeyCode::KeyW => Some(1 << 7),
                         KeyCode::KeyA => Some(1 << 8),
                         KeyCode::KeyS => Some(1 << 9),
@@ -1021,7 +1036,6 @@ impl App {
                         KeyCode::KeyB => Some(buttons::KEY_B),
                         KeyCode::KeyN => Some(buttons::KEY_N),
                         KeyCode::Delete => Some(buttons::DELETE),
-                        KeyCode::Escape => Some(buttons::ESCAPE),
                         KeyCode::Backspace => Some(buttons::BACKSPACE),
                         KeyCode::Home => Some(buttons::HOME),
                         KeyCode::End => Some(buttons::END),
@@ -1050,10 +1064,10 @@ impl App {
                         KeyCode::F10 => Some(buttons::F10),
                         KeyCode::F11 => Some(buttons::F11),
                         KeyCode::F12 => Some(buttons::F12),
-                        _ => None,
+                        _ => navigation_button(code),
                     };
                     if let Some(bit) = bit {
-                        self.button(bit, pressed);
+                        update_button(&mut self.input, bit, pressed);
                     }
                 }
             }
@@ -1080,7 +1094,7 @@ impl App {
                     _ => None,
                 };
                 if let Some(bit) = bit {
-                    self.button(bit, state == ElementState::Pressed);
+                    update_button(&mut self.input, bit, state == ElementState::Pressed);
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
@@ -1202,6 +1216,25 @@ mod audio_frame_tests {
         let rt = Runtime::load(&path, &dir.path().join("state")).unwrap();
         (dir, rt)
     }
+    #[test]
+    fn physical_escape_reaches_the_game_once_per_press() {
+        for siglus in [false, true] {
+            let mut input = InputFrame::default();
+            for (pressed, repeat, expected_edge) in [
+                (true, false, true), (true, true, false), (false, false, false), (true, false, true),
+            ] {
+                assert_eq!(desktop_shortcut(KeyCode::Escape, pressed, repeat, siglus), None);
+                input.buttons_pressed = 0;
+                update_button(&mut input, navigation_button(KeyCode::Escape).unwrap(), pressed);
+                assert_eq!(input.buttons_down & buttons::ESCAPE != 0, pressed);
+                assert_eq!(input.buttons_pressed & buttons::ESCAPE != 0, expected_edge);
+            }
+        }
+        assert_eq!(desktop_shortcut(KeyCode::F5, true, false, false), Some(DesktopShortcut::Save));
+        assert_eq!(desktop_shortcut(KeyCode::F5, true, true, false), None);
+        assert_eq!(desktop_shortcut(KeyCode::F5, true, false, true), None);
+    }
+
     #[test]
     fn committed_controls_do_not_abort_text_entry_or_replace_key_actions() {
         use crysirror_scene::ui::{UiCommand, WidgetSpec};

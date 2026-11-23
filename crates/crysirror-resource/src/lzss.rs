@@ -52,6 +52,11 @@ pub fn lzss_decompress(input: &[u8], size: usize, params: &LzssParams) -> Result
     }
 }
 
+/// Decode an exact-size Okumura 12/4 stream without archive padding.
+pub fn decompress_exact_12_4(input: &[u8], size: usize) -> Result<Vec<u8>> {
+    bytewise(input, size, &LzssParams::default(), true)
+}
+
 fn bytewise_strict(params: &LzssParams) -> Result<bool> {
     match (params.position_bits, params.size_bits, params.min_match) {
         (12, 4, 3) => Ok(false),

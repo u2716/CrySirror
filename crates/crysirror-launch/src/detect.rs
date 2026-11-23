@@ -6,8 +6,11 @@
 //! profile, and produces a typed engine resource plan. Only data is read;
 //! no native executable or external launcher script runs.
 mod majiro;
+mod minori;
+mod exhibit;
 mod amanatsu;
 mod cm3d2;
+mod com3d2;
 mod cmvs;
 mod system_nnn;
 mod system4;
@@ -196,7 +199,9 @@ fn detect_layout(dir: &SourcePath) -> Result<Plan> {
         if crate::source_path::SourceFile::open(path)?.read_exact(&mut signature).is_err() || signature != *b"KIF\0" { continue; }
         return catsystem2(dir,&local,&name,prefix,&format!("{config}/{startup}"));
     }
+    if let Some(plan) = com3d2::detect(dir, &names, &name)? { return Ok(plan); }
     if let Some(plan) = cm3d2::detect(dir, &names, &name)? { return Ok(plan); }
+    if let Some(plan) = exhibit::detect(dir, &names, &name)? { return Ok(plan); }
     if let Some(plan) = amanatsu::detect(dir, &names, &name)? { return Ok(plan); }
     if let Some(plan) = system4::detect(dir, &names, &name)? { return Ok(plan); }
     if let Some(plan) = majiro::detect(dir, &names, &name)? { return Ok(plan); }
@@ -205,6 +210,7 @@ fn detect_layout(dir: &SourcePath) -> Result<Plan> {
     if let Some(plan) = bgi::detect(dir,&names,&name)? {return Ok(plan);}
     if let Some(plan) = softpal::detect(dir,&names,&name)? {return Ok(plan);}
     if let Some(plan) = qlie::detect(dir,&names,&name)? {return Ok(plan);}
+    if let Some(plan) = minori::detect(dir, &names, &name)? { return Ok(plan); }
     if let Some(plan) = sugarpot::detect(dir,&names,&name)? {return Ok(plan);}
     if let Some(plan) = nsystem::detect(dir,&names,&name)? {return Ok(plan);}
     if let Some(plan) = malie::detect(dir,&names,&name)? {return Ok(plan);}

@@ -64,6 +64,20 @@ pub enum ShaderEffect {
         #[serde(default)]
         white: f32,
     },
+    /// Back-face shell over a dedicated mesh. Base texture alpha is the
+    /// extrusion/coverage mask. The ILLGAMES shell's depth-limited displacement
+    /// is applied in object space after skinning. The base colour tints the shell.
+    NormalShell {
+        width: f32,
+        distance_scale: f32,
+        depth_limit: f32,
+        dither: f32,
+        cutoff: f32,
+    },
+    /// Directional baked diffuse radiance. The occlusion and metallic-roughness
+    /// slots carry linear RGB radiance and encoded direction/normalization
+    /// respectively. UV0 is mapped into the atlas independently of base UV.
+    DirectionalLightmap { scale: [f32; 2], offset: [f32; 2] },
     Custom {
         asset: String,
         #[serde(default)]
@@ -106,6 +120,14 @@ impl ShaderEffect {
             Self::BlockNoise { scale, rate, color_a, color_b, white } => ensure!(
                 range(*scale, 0.001, 1000.) && range(*rate, 0., 120.) && color_a.iter().chain(color_b).all(|x| range(*x, 0., 16.)) && range(*white, 0., 1.),
                 "block noise effect parameter range"
+            ),
+            Self::NormalShell { width, distance_scale, depth_limit, dither, cutoff } => ensure!(
+                range(*width, 0., 1.) && range(*distance_scale, 0., 1.) && range(*depth_limit, 0., 100.)
+                    && range(*dither, 0., 1.) && range(*cutoff, 0., 1.),
+                "normal shell parameter range"
+            ),
+            Self::DirectionalLightmap { scale, offset } => ensure!(
+                scale.iter().chain(offset).all(|v| v.is_finite()), "non-finite lightmap transform"
             ),
             Self::Custom { asset, parameters } => {
                 let p =
@@ -164,6 +186,15 @@ impl ShaderEffect {
                 p[1] = [color_a[0], color_a[1], color_a[2], 0.];
                 p[2] = [color_b[0], color_b[1], color_b[2], 0.];
                 4.
+            }
+            Self::NormalShell { width, distance_scale, depth_limit, dither, cutoff } => {
+                p[0] = [*width, *distance_scale, *depth_limit, *dither];
+                p[1][0] = *cutoff;
+                5.
+            }
+            Self::DirectionalLightmap { scale, offset } => {
+                p[0] = [scale[0], scale[1], offset[0], offset[1]];
+                6.
             }
             Self::Custom { parameters, .. } => {
                 p = *parameters;

@@ -20,7 +20,7 @@ use crysirror_image::ImageSurface;
 use crysirror_unity::{
     msgpack::Value,
     scene6::Scene6,
-    world6::{MaterialOverride, SceneAssets, UnityMaterial},
+    world6::{MaterialOverride, SceneAssets, ToonLineModel, UnityMaterial},
     PPtr,
 };
 use std::collections::HashMap;
@@ -28,6 +28,7 @@ use std::collections::HashMap;
 /// `ChaListDefine.KeyType` columns used here.
 pub mod key {
     pub const ID: i32 = 26;
+    pub const LIPLINE_TEX: i32 = 29;
     pub const MAIN_AB: i32 = 31;
     pub const MAIN_DATA: i32 = 32;
     pub const MAIN_TEX: i32 = 34;
@@ -200,19 +201,13 @@ const FACE_TEXTURES: [(&str, &str, i32, &str, [&str; 3]); 3] = [
 /// The `chara/list/characustom` tables, merged over every list bundle.
 #[derive(Default)]
 pub struct Lists {
-    tables: HashMap<String, Table>,
+    tables: HashMap<String, Vec<Table>>,
 }
 
 impl Lists {
     pub fn load(unity: &mut Unity) -> Result<Self> {
         let mut out = Lists::default();
-        let bundles: Vec<String> = unity
-            .bundle_files()
-            .into_iter()
-            .filter_map(|k| k.strip_prefix("bundle:").and_then(|r| r.split_once('#')).map(|(b, _)| b.to_owned()))
-            .filter(|b| b.starts_with("lib/chara/list/characustom/"))
-            .collect();
-        for key in unity.bundle_files().into_iter().filter(|k| bundles.iter().any(|b| k.starts_with(&format!("bundle:{b}#")))) {
+        for key in unity.bundle_files().into_iter().filter(|k| k.starts_with("bundle:lib/chara/list/characustom/") && !k.ends_with(".resS")) {
             let file = unity.file(&key)?;
             let ids: Vec<i64> = file.objects.iter().filter(|o| o.class_id == 49).map(|o| o.path_id).collect();
             for id in ids {
@@ -220,10 +215,7 @@ impl Lists {
                 let name = f.string("m_Name").unwrap_or("").to_owned();
                 let list = name.split('[').next().unwrap_or(&name).to_owned();
                 let Ok(t) = Table::parse(&unity.text_asset(&key, id)?) else { continue };
-                let e = out.tables.entry(list).or_insert_with(|| Table { keys: t.keys.clone(), rows: Vec::new() });
-                if e.keys == t.keys {
-                    e.rows.extend(t.rows);
-                }
+                out.tables.entry(list).or_default().push(t);
             }
         }
         Ok(out)
@@ -236,10 +228,13 @@ impl Lists {
 
     /// A row of `list` by id, as a key → value lookup.
     pub fn row(&self, list: &str, id: i64) -> Option<Row<'_>> {
-        let t = self.tables.get(list)?;
-        let col = t.keys.iter().position(|k| *k == key::ID)?;
-        let values = t.rows.iter().find(|r| r.get(col).and_then(|v| v.parse::<i64>().ok()) == Some(id))?;
-        Some(Row { keys: &t.keys, values })
+        // ListManager.LoadListInfo assigns by ID. A later list may replace
+        // just one ID and can carry a different set of columns.
+        self.tables.get(list)?.iter().rev().find_map(|table| {
+            let column = table.keys.iter().position(|k| *k == key::ID)?;
+            let values = table.rows.iter().rev().find(|row| row.get(column).and_then(|v| v.parse::<i64>().ok()) == Some(id))?;
+            Some(Row { keys: &table.keys, values })
+        })
     }
 }
 
@@ -297,6 +292,7 @@ pub struct Makeup {
     /// The meshes sharing the base texture (uv0) the layers bake into.
     pub meshes: Vec<std::sync::Arc<crysirror_unity::unity6::Mesh6>>,
     pub layers: Vec<MakeupLayer>,
+    pub lip_line: Option<(String, String)>,
 }
 
 #[derive(Clone, Debug)]
@@ -379,10 +375,10 @@ impl Place {
 
 /// `HumanFace` makeup of the card: cheek (`mt_cheek`, uv1: R blush, B
 /// highlight at its own placement), nose (`mt_nose`, uv2: R), lip and lip
-/// line (`mt_lip` R with the B highlight, `mt_lipline`, uv3), as the
+/// highlight (`mt_lip` R with the B highlight, uv3), as the
 /// `AL/skin_head` forward program mixes them (`HumanFace.ChangeSettingCheek*`
 /// write the card values to the material unchanged). SATD-amanatsu-port:
-/// the nose gloss (A) and line (B), eye shadow (eyelid layer), face detail
+/// the nose gloss (A), eye shadow (eyelid layer), face detail
 /// and paint and moles are not drawn; highlights are added to the base
 /// texture instead of lit. The expression flush is `flush_layer`.
 fn face_makeup(lists: &Lists, face: &Value, makeup: Option<&Value>) -> Vec<MakeupLayer> {
@@ -414,9 +410,6 @@ fn face_makeup(lists: &Lists, face: &Value, makeup: Option<&Value>) -> Vec<Makeu
         if let Some(c) = makeup.and_then(|m| color(m.get("lipHighlightColor"))) {
             out.push(MakeupLayer { texture: t, uv: 3, color: c, channel: 2, additive: true, color2: None, tinted: false, place: None });
         }
-    }
-    if let Some(t) = tex("mt_lipline", id(Some(face), "lipLineId"), 29) {
-        out.push(MakeupLayer { texture: t, uv: 3, color: color(face.get("lipLineColor")).unwrap_or([1., 0.6, 0.6, 1.]), channel: 0, additive: false, color2: None, tinted: false, place: None });
     }
     out
 }
@@ -507,6 +500,45 @@ pub fn bake_hair_gloss(img: &mut ImageSurface, mesh: &crysirror_unity::unity6::M
     }
 }
 
+/// Project a mesh's secondary UVs into its existing UV0 atlas.
+fn project_uvs(mesh: &crysirror_unity::unity6::Mesh6, w: usize, h: usize, slot: usize, mut write: impl FnMut(usize, [f32; 2])) {
+    let uv0 = &mesh.uv[0];
+    let Some(uvk) = mesh.uv.get(slot).filter(|v| v.len() == mesh.positions.len()) else { return };
+    if w == 0 || h == 0 || uv0.len() != mesh.positions.len() { return }
+    let inside = |v: [f32; 2]| (0. ..=1.).contains(&v[0]) && (0. ..=1.).contains(&v[1]);
+    for t in mesh.indices.chunks_exact(3) {
+        let q = [0, 1, 2].map(|i| uvk[t[i] as usize]);
+        if !q.iter().any(|p| inside(*p)) {
+            continue;
+        }
+        let p = [0, 1, 2].map(|i| uv0[t[i] as usize]);
+        let d = (p[1][0] - p[0][0]) * (p[2][1] - p[0][1]) - (p[2][0] - p[0][0]) * (p[1][1] - p[0][1]);
+        if d.abs() < 1e-12 {
+            continue;
+        }
+        let lo = |k: usize| p.iter().map(|v| v[k]).fold(f32::MAX, f32::min);
+        let hi = |k: usize| p.iter().map(|v| v[k]).fold(f32::MIN, f32::max);
+        let (x0, x1) = (((lo(0) * w as f32) as i64).max(0), ((hi(0) * w as f32) as i64).min(w as i64 - 1));
+        let (y0, y1) = (((lo(1) * h as f32) as i64).max(0), ((hi(1) * h as f32) as i64).min(h as i64 - 1));
+        for py in y0..=y1 {
+            for px in x0..=x1 {
+                let (x, y) = ((px as f32 + 0.5) / w as f32, (py as f32 + 0.5) / h as f32);
+                let b1 = ((x - p[0][0]) * (p[2][1] - p[0][1]) - (p[2][0] - p[0][0]) * (y - p[0][1])) / d;
+                let b2 = ((p[1][0] - p[0][0]) * (y - p[0][1]) - (x - p[0][0]) * (p[1][1] - p[0][1])) / d;
+                let b0 = 1. - b1 - b2;
+                if b0 < -1e-4 || b1 < -1e-4 || b2 < -1e-4 {
+                    continue;
+                }
+                let v = [0, 1].map(|i| q[0][i] * b0 + q[1][i] * b1 + q[2][i] * b2);
+                if !inside(v) {
+                    continue;
+                }
+                write(((h - 1 - py as usize) * w + px as usize) * 4, v);
+            }
+        }
+    }
+}
+
 /// Draw makeup layers into a face texture: every triangle is rasterised in
 /// UV0 space and each layer sampled through its own UV set.
 pub fn bake_makeup(img: &mut ImageSurface, mesh: &crysirror_unity::unity6::Mesh6, layers: &[(MakeupLayer, ImageSurface)], m: Option<&UnityMaterial>) {
@@ -516,7 +548,6 @@ pub fn bake_makeup(img: &mut ImageSurface, mesh: &crysirror_unity::unity6::Mesh6
         return;
     }
     for (layer, tex) in layers {
-        let Some(uvk) = mesh.uv.get(layer.uv).filter(|u| u.len() == uv0.len()) else { continue };
         if tex.width == 0 || tex.height == 0 {
             continue;
         }
@@ -533,67 +564,39 @@ pub fn bake_makeup(img: &mut ImageSurface, mesh: &crysirror_unity::unity6::Mesh6
             Place::Nose { .. } => Place::Nose { scale: get("_NoseScale", 0.) },
             p => p,
         });
-        for t in mesh.indices.chunks_exact(3) {
-            let q = [0, 1, 2].map(|i| uvk[t[i] as usize]);
-            if !q.iter().any(|p| inside(*p)) {
-                continue;
-            }
-            let p = [0, 1, 2].map(|i| uv0[t[i] as usize]);
-            let d = (p[1][0] - p[0][0]) * (p[2][1] - p[0][1]) - (p[2][0] - p[0][0]) * (p[1][1] - p[0][1]);
-            if d.abs() < 1e-12 {
-                continue;
-            }
-            let lo = |k: usize| p.iter().map(|v| v[k]).fold(f32::MAX, f32::min);
-            let hi = |k: usize| p.iter().map(|v| v[k]).fold(f32::MIN, f32::max);
-            let (x0, x1) = (((lo(0) * w as f32) as i64).max(0), ((hi(0) * w as f32) as i64).min(w as i64 - 1));
-            let (y0, y1) = (((lo(1) * h as f32) as i64).max(0), ((hi(1) * h as f32) as i64).min(h as i64 - 1));
-            for py in y0..=y1 {
-                for px in x0..=x1 {
-                    let (x, y) = ((px as f32 + 0.5) / w as f32, (py as f32 + 0.5) / h as f32);
-                    let b1 = ((x - p[0][0]) * (p[2][1] - p[0][1]) - (p[2][0] - p[0][0]) * (y - p[0][1])) / d;
-                    let b2 = ((p[1][0] - p[0][0]) * (y - p[0][1]) - (x - p[0][0]) * (p[1][1] - p[0][1])) / d;
-                    let b0 = 1. - b1 - b2;
-                    if b0 < -1e-4 || b1 < -1e-4 || b2 < -1e-4 {
-                        continue;
-                    }
-                    let mut v = [0, 1].map(|i| q[0][i] * b0 + q[1][i] * b1 + q[2][i] * b2);
-                    if !inside(v) {
-                        continue;
-                    }
-                    if let Some(p) = place {
-                        v = p.apply(v, m);
-                        if !inside(v) {
-                            continue;
-                        }
-                    }
-                    let sx = ((v[0] * tex.width as f32) as u32).min(tex.width - 1);
-                    let sy = (((1. - v[1]) * tex.height as f32) as u32).min(tex.height - 1);
-                    let j = ((sy * tex.width + sx) * 4) as usize;
-                    let texel = [0, 1, 2, 3].map(|c| f32::from(tex.rgba[j + c]) / 255.);
-                    let (mask, target) = match (layer.color2, layer.tinted) {
-                        (Some(c2), _) => {
-                            let t = texel[0] * c2[3].clamp(0., 1.);
-                            (texel[3] * layer.color[3].clamp(0., 1.), [0, 1, 2].map(|c| srgb_decode(layer.color[c]) + (srgb_decode(c2[c]) - srgb_decode(layer.color[c])) * t))
-                        }
-                        (None, true) => (texel[3] * layer.color[3].clamp(0., 1.), [0, 1, 2].map(|c| texel[c] * srgb_decode(layer.color[c]))),
-                        (None, false) => (texel[layer.channel.min(3)] * layer.color[3].clamp(0., 1.), [0, 1, 2].map(|c| srgb_decode(layer.color[c]))),
-                    };
-                    // Image rows run top-down; UV v runs bottom-up.
-                    let o = ((h - 1 - py as usize) * w + px as usize) * 4;
-                    // Mixed in linear space (URP linear project).
-                    for c in 0..3 {
-                        let mut out = srgb_decode(f32::from(img.rgba[o + c]) / 255.);
-                        let col = target[c];
-                        if layer.additive {
-                            out += col * mask;
-                        } else {
-                            out += (col - out) * mask;
-                        }
-                        img.rgba[o + c] = (srgb_encode(out) * 255.).round() as u8;
-                    }
+        project_uvs(mesh, w, h, layer.uv, |o, mut v| {
+            if let Some(p) = place {
+                v = p.apply(v, m);
+                if !inside(v) {
+                    return;
                 }
             }
-        }
+            let sx = ((v[0] * tex.width as f32) as u32).min(tex.width - 1);
+            let sy = (((1. - v[1]) * tex.height as f32) as u32).min(tex.height - 1);
+            let j = ((sy * tex.width + sx) * 4) as usize;
+            let texel = [0, 1, 2, 3].map(|c| f32::from(tex.rgba[j + c]) / 255.);
+            let (mask, target) = match (layer.color2, layer.tinted) {
+                (Some(c2), _) => {
+                    let t = texel[0] * c2[3].clamp(0., 1.);
+                    (texel[3] * layer.color[3].clamp(0., 1.), [0, 1, 2].map(|c| srgb_decode(layer.color[c]) + (srgb_decode(c2[c]) - srgb_decode(layer.color[c])) * t))
+                }
+                (None, true) => (texel[3] * layer.color[3].clamp(0., 1.), [0, 1, 2].map(|c| texel[c] * srgb_decode(layer.color[c]))),
+                (None, false) => (texel[layer.channel.min(3)] * layer.color[3].clamp(0., 1.), [0, 1, 2].map(|c| srgb_decode(layer.color[c]))),
+            };
+            // Image rows run top-down; UV v runs bottom-up.
+
+            // Mixed in linear space (URP linear project).
+            for c in 0..3 {
+                let mut out = srgb_decode(f32::from(img.rgba[o + c]) / 255.);
+                let col = target[c];
+                if layer.additive {
+                    out += col * mask;
+                } else {
+                    out += (col - out) * mask;
+                }
+                img.rgba[o + c] = (srgb_encode(out) * 255.).round() as u8;
+            }
+        });
     }
 }
 
@@ -654,9 +657,15 @@ pub struct ClothPart {
     pub list: &'static str,
     pub root: String,
     pub variants: Vec<String>,
+    /// HumanDataClothes.PartsInfo.hideCategory (bit 0 is Underwater).
+    pub hide_category: i64,
 }
 
 impl ClothPart {
+    pub(crate) fn visible_state(&self, desired: usize, underwater: bool) -> usize {
+        if underwater && self.hide_category & 1 != 0 { self.states() - 1 } else { desired }
+    }
+
     /// The number of states: each variant, then off.
     pub fn states(&self) -> usize {
         self.variants.len().max(1) + 1
@@ -747,7 +756,7 @@ impl Human {
                 }
             }
         }
-        let body_makeup = (!detail.is_empty() && !body_meshes.is_empty()).then(|| std::sync::Arc::new(Makeup { meshes: body_meshes, layers: detail }));
+        let body_makeup = (!detail.is_empty() && !body_meshes.is_empty()).then(|| std::sync::Arc::new(Makeup { meshes: body_meshes, layers: detail, lip_line: None }));
         looks.insert(body.key.clone(), PartLook { shaders: &["AL/skin_body"], main: body_row.asset(key::MAIN_TEX_AB, key::MAIN_TEX), colors: vec![skin], shadow, makeup: body_makeup, ..Default::default() });
         for name in HIDDEN_BODY {
             for n in scene.nodes.iter_mut().filter(|n| n.name == name) {
@@ -822,12 +831,14 @@ impl Human {
             });
         }
         let makeup_block = coordinate_at(card, coordinate).ok().and_then(|c| c.block("FaceMakeup").and_then(|b| crysirror_unity::msgpack::decode(b).ok()));
+        let lip_line_id = face.get("lipLineId").and_then(Value::as_i64).unwrap_or(0);
+        let lip_line = lists.row("mt_lipline", lip_line_id).and_then(|row| row.asset(key::MAIN_AB, key::LIPLINE_TEX));
         let makeup_layers = face_makeup(lists, face, makeup_block.as_ref());
         let face_mesh = head.scene.nodes.iter().find(|n| n.name == "cf_O_face").and_then(|n| n.components.iter().find(|c| c.class_id == 137)).and_then(|c| c.fields.pptr("m_Mesh"));
         let makeup = match face_mesh {
-            Some(p) if !makeup_layers.is_empty() => {
+            Some(p) => {
                 let (f, id) = unity.target(&head.key, p)?;
-                Some(std::sync::Arc::new(Makeup { meshes: vec![SceneAssets::mesh(&mut *unity, &f, id)?], layers: makeup_layers }))
+                Some(std::sync::Arc::new(Makeup { meshes: vec![SceneAssets::mesh(&mut *unity, &f, id)?], layers: makeup_layers, lip_line }))
             }
             _ => None,
         };
@@ -925,7 +936,7 @@ impl Human {
                     // One variant set per part: the first letter group.
                     let root = format!("{list}#root");
                     scene.nodes[r].name = root.clone();
-                    clothes.push(ClothPart { list, root, variants: variants.into_iter().map(|v| v.0).collect() });
+                    clothes.push(ClothPart { list, root, variants: variants.into_iter().map(|v| v.0).collect(), hide_category: part.get("hideCategory").and_then(Value::as_i64).unwrap_or(0) });
                     log.push(format!("{list} {id}: {ab} {data} ({n} bones)"));
                 }
                 Err(e) => log.push(format!("{list} {id}: {e:#}")),
@@ -1222,6 +1233,105 @@ impl CharaAssets<'_> {
         Ok(Some(((format!("{key}:liquid-blobs"), blobs), (format!("{key}:liquid-regions"), regions), [lt[2], lt[3], lt[0], lt[1]], color)))
     }
 
+    fn material_mask(&mut self, file: &str, m: &UnityMaterial, slot: &str) -> Result<Option<ImageSurface>> {
+        let Some(env) = m.texture(slot) else { return Ok(None) };
+        let (key, id) = self.unity.target(file, env.texture)?;
+        self.mask(&key, id).map(Some)
+    }
+
+    fn cloth_line_mask(&mut self, renderer_file: &str, m: &UnityMaterial, size: [u32; 2]) -> Result<ImageSurface> {
+        let file = if m.file.is_empty() { renderer_file } else { &m.file };
+        let detail = self.material_mask(file,m,"_Detail_mask_01")?;
+        let painted = self.material_mask(file,m,"_Detail_mask_02")?;
+        let top = self.material_mask(file,m,"_Cloth_alpha")?;
+        let bottom = self.material_mask(file,m,"_Cloth_alpha_bot")?;
+        let [w,h] = size.map(|x| x.min(1024) as usize);
+        let mut mask = ImageSurface { width: w as u32, height: h as u32, rgba: vec![255; w*h*4] };
+        let cut = |uv| {
+            let sample = |img: &Option<ImageSurface>| img.as_ref().map_or([0.; 3], |t|
+                [0,1,2].map(|c| f32::from(sample_channel(t,slot_uv(m,"_Cloth_alpha",uv),c))/255.));
+            let [r,g,b] = sample(&top);
+            let [br,bg,bb] = sample(&bottom);
+            let a = m.float("_alpha_a").unwrap_or(0.).round_ties_even();
+            let d = m.float("_alpha_b").unwrap_or(0.).round_ties_even();
+            let top = ((2.-g).max(a)-1.).clamp(0.,1.).min(a.max((1.-r).min(1.-bb)));
+            let bottom = ((2.-bg).max(d)-1.).clamp(0.,1.).min(d.max((1.-b).min(1.-br)));
+            (top.min(bottom)*255.).round() as u8
+        };
+        let has_cut = top.is_some() || bottom.is_some();
+        let mix_uv = m.float("_AlphaMaskuv").unwrap_or(0.);
+        for y in 0..h {
+            for x in 0..w {
+                let uv = [(x as f32 + 0.5)/w as f32, 1.-(y as f32+0.5)/h as f32];
+                let o = (y*w+x)*4;
+                mask.rgba[o] = 255-detail.as_ref().map_or(0,|img|sample_channel(img,uv,2));
+                mask.rgba[o+1] = painted.as_ref().map_or(0,|img|sample_channel(img,uv,1));
+                mask.rgba[o+2] = if has_cut { cut(uv) } else { 255 };
+            }
+        }
+        if has_cut && mix_uv != 0. {
+            let mut meshes = Vec::new();
+            for (i,n) in self.human.scene.nodes.iter().enumerate().filter(|(i,_)|self.human.scene.file_of(*i,&self.human.key)==renderer_file) {
+                let Some(renderer) = n.components.iter().find(|c| c.class_id == 137) else {continue};
+                let mut matched = false;
+                for item in renderer.fields.array("m_Materials").unwrap_or_default() {
+                    let crysirror_unity::managed::Value::PPtr(ptr) = item else {continue};
+                    if let Some((material_file,_,_,fields)) = SceneAssets::object(&mut *self.unity,renderer_file,*ptr)? {
+                        matched |= material_file == file && fields.string("m_Name") == Some(m.name.as_str());
+                    }
+                }
+                if matched {
+                    let ptr = renderer.fields.pptr("m_Mesh").context("cloth renderer mesh")?;
+                    let (mf,mid) = self.unity.target(self.human.scene.file_of(i,renderer_file),ptr)?;
+                    meshes.push(SceneAssets::mesh(&mut *self.unity,&mf,mid)?);
+                }
+            }
+            anyhow::ensure!(!meshes.is_empty(), "cloth {} requires secondary UVs without a matching renderer", m.name);
+            for mesh in meshes {
+                project_uvs(&mesh,w,h,1,|o, secondary| {
+                    let base = [((o/4%w) as f32+0.5)/w as f32,1.-((o/4/w) as f32+0.5)/h as f32];
+                    mask.rgba[o+2] = cut([0,1].map(|c| base[c]+mix_uv*(secondary[c]-base[c])));
+                });
+            }
+        }
+        Ok(mask)
+    }
+
+    fn face_line_mask(&mut self, file: &str, m: &UnityMaterial, makeup: &Makeup, size: [u32; 2]) -> Result<ImageSurface> {
+        let mut nose = None;
+        if let Some(layer) = makeup.layers.iter().find(|l| matches!(l.place, Some(Place::Nose { .. }))) {
+            nose = self.mask_named(&layer.texture)?;
+        }
+        if nose.is_none() { nose = self.material_mask(file, m, "_Nose_texture")?; }
+        let mut lip = match &makeup.lip_line { Some(t) => self.mask_named(t)?, None => None };
+        if lip.is_none() { lip = self.material_mask(file, m, "_Lip_line_texture")?; }
+        let spec = self.material_mask(file, m, "_spmap")?;
+        let detail = self.material_mask(file, m, "_Detail_mask_02")?;
+        let (w,h) = (size[0].min(1024) as usize,size[1].min(1024) as usize);
+        let mut out = ImageSurface { width: w as u32, height: h as u32, rgba: vec![0; w*h*4] };
+        for (c, slot, tex) in [(2,"_spmap",spec.as_ref()), (3,"_Detail_mask_02",detail.as_ref())] {
+            if let Some(tex) = tex {
+                for y in 0..h {
+                    for x in 0..w {
+                        let uv = [(x as f32 + 0.5) / w as f32, 1. - (y as f32 + 0.5) / h as f32];
+                        out.rgba[(y*w+x)*4+c] = sample_channel(tex, slot_uv(m,slot,uv), 2);
+                    }
+                }
+            }
+        }
+        for mesh in &makeup.meshes {
+            for (slot, chan, uv_set, tex) in [("_Nose_texture",0,2,nose.as_ref()),("_Lip_line_texture",1,3,lip.as_ref())] {
+                if let Some(tex) = tex {
+                    project_uvs(mesh,w,h,uv_set,|o,uv| {
+                        let uv = if chan == 0 { Place::Nose { scale: m.float("_NoseScale").unwrap_or(0.) }.apply(uv,Some(m)) } else { slot_uv(m,slot,uv) };
+                        out.rgba[o+chan] = sample_channel(tex, uv, 2);
+                    });
+                }
+            }
+        }
+        Ok(out)
+    }
+
     fn mask_named(&mut self, (bundle, name): &(String, String)) -> Result<Option<ImageSurface>> {
         let Some((k, id)) = self.unity.bundle_asset(bundle, name, crysirror_unity::class_id::TEXTURE_2D)? else { return Ok(None) };
         Ok(Some(self.mask(&k, id)?))
@@ -1293,6 +1403,36 @@ impl SceneAssets for CharaAssets<'_> {
                 }),
                 ..Default::default()
             }));
+        }
+        // Hair has a dedicated skinned front-culled mesh. Its displacement
+        // and cutout use the blue channel of _md_01, sampled in UV0.
+        if shader == "AL/hair_outline" {
+            let color = look.outline.or_else(|| m.color("_Line_color")).unwrap_or([0., 0., 0., 1.]);
+            let mut o = MaterialOverride {
+                base_color: Some(linear_color([color[0], color[1], color[2], 1.])),
+                alpha_mode: Some(AlphaMode::Opaque),
+                unlit_effect: Some(crysirror_unity::world6::ShaderEffect::NormalShell {
+                    width: self.human.line_width.clamp(0., 1.),
+                    distance_scale: 0.05,
+                    depth_limit: 0.35,
+                    dither: m.floats.get("_Dither").copied().unwrap_or(1.),
+                    cutoff: m.floats.get("_Cutoff").copied().unwrap_or(0.5),
+                }),
+                ..Default::default()
+            };
+            if let Some(t) = m.texture("_md_01").filter(|t| t.texture.path_id != 0) {
+                let (f, id) = self.unity.target(if m.file.is_empty() { file } else { &m.file }, t.texture)?;
+                let mut img = self.mask(&f, id)?;
+                for rgba in img.rgba.chunks_exact_mut(4) {
+                    rgba.copy_from_slice(&[255, 255, 255, 255 - rgba[2]]);
+                }
+                o.base_texture = Some((format!("{f}#{id}:shell"), img));
+                o.base_uv = Some((t.scale, [t.offset[0], 1. - t.scale[1] - t.offset[1]]));
+            } else {
+                // The shader declares a black default, giving full coverage.
+                o.base_texture = Some(("AL:full-shell".into(), ImageSurface { width: 1, height: 1, rgba: vec![255; 4] }));
+            }
+            return Ok(Some(o));
         }
         // Outline shells and helper passes draw nothing here; the eyelid
         // layer shades the skin in the original shader (not converted).
@@ -1381,7 +1521,8 @@ impl SceneAssets for CharaAssets<'_> {
         if !look.shaders.iter().any(|s| shader.starts_with(s)) {
             return Ok(None);
         }
-        // AL character shaders are cel shaded with outlines.
+        // Hair draws its own shell above. The body and cloth forward fragment
+        // programs evaluate line masks on their surfaces; neither has a hull pass.
         let outline = look.outline.unwrap_or([0.25, 0.18, 0.18, 1.]);
         // The material's `_Lamp` ramp (G: shadow amount over the half
         // Lambert term) between the full colour and a shadow tone. The AL
@@ -1411,7 +1552,9 @@ impl SceneAssets for CharaAssets<'_> {
         // `ChangeShadowDepth`: the card's depth replaces `_Shadow_power`.
         if let Some(power) = m.floats.get("_Shadow_power").map(|_| &self.human.shadow_depth) {
             let floor = 1. - (power * 0.4 + 0.5).clamp(0., 1.);
-            let shade = m.colors.get("_Shade_color").filter(|_| m.floats.get("_UseShadowColor").is_some_and(|u| *u > 0.5));
+            // Skin, clothes and accessories mix continuously toward the override
+            // after ambient/key grading. Hair uses its own _Shadow_color.
+            o.toon_shadow_tone_override = shadow_tone_override(m);
             // Skin derives the tone from its base colour; hair and clothes
             // from the ambient light (`HSV(SH · 0.7 + 0.3)` with the
             // saturation × 1.5: grey for the engine's scalar ambient).
@@ -1428,22 +1571,23 @@ impl SceneAssets for CharaAssets<'_> {
             // tone in the original).
             use crysirror_unity::world6::ToonShadeKind;
             let lin3 = |c: &[f32; 4]| { let l = linear_color(*c); [l[0], l[1], l[2]] };
-            o.toon_shade = Some(match shade {
-                Some(c) => (ToonShadeKind::Fixed, lin3(c)),
-                None if skin => (ToonShadeKind::BaseHsv, [0.5; 3]),
-                None if shader.starts_with("AL/hair") => (ToonShadeKind::Fixed, m.colors.get("_Shadow_color").map_or([0.5; 3], lin3)),
-                None => (ToonShadeKind::Cloth, [0.5; 3]),
+            o.toon_shade = Some(if skin {
+                (ToonShadeKind::BaseHsv, [0.5; 3])
+            } else if shader.starts_with("AL/hair") {
+                (ToonShadeKind::Fixed, m.colors.get("_Shadow_color").map_or([0.5; 3], lin3))
+            } else {
+                (ToonShadeKind::Cloth, [0.5; 3])
             });
             o.toon_shade_from_base = true;
             // The card `skinShadowColor` (`_Shadow_color`) at grazing angles.
-            if skin && shade.is_none() {
+            if skin {
                 o.toon_shadow_rim = look.shadow.map(|c| { let l = linear_color(c); [l[0], l[1], l[2], c[3]] });
             }
             o.toon_light_limit = Some(1.);
             o.toon_shadow_light = Some([0.539542, 0.546249, 0.737911, 1.]);
             o.toon_ambient = Some(0.);
             // The md layers keep their own shadow tone.
-            let tone = shade.map(|c| [c[0], c[1], c[2]]).or(ambient);
+            let tone = ambient;
             let k = 1.;
             let mut o = self.base_look(file, m, &look, shader, k, o)?;
             // The body's md layers (`_Detail_mask_01` slice 0) shade painted
@@ -1453,6 +1597,13 @@ impl SceneAssets for CharaAssets<'_> {
                 let (f, id) = self.unity.target(&mf, md.texture)?;
                 let (slices, srgb) = self.unity.texture_array(&f, id)?;
                 if let Some(md) = slices.first() {
+                    let enabled = m.floats.get("_linetexon").copied().unwrap_or(0.);
+                    if enabled > 0. && self.human.line_width > 0. {
+                        let mask = body_line_mask(md, slices.get(1).context("body line detail slice 1")?, srgb, enabled)?;
+                        let mut color = linear_color(m.color("_Line_color").unwrap_or([0., 0., 0., 1.]));
+                        color[3] = m.floats.get("_Line_power").copied().unwrap_or(1.) * 0.8 + 0.2;
+                        o.toon_surface_line = Some((format!("{f}#{id}:body-line:{enabled}"), mask, color));
+                    }
                     let alpha = look.shadow.map_or(0., |c| c[3]);
                     let layer = md_shadow_layer(img, md, srgb, k, tone, floor, alpha, m);
                     o.toon_shadow = Some((format!("{key}:md"), layer));
@@ -1470,6 +1621,49 @@ impl SceneAssets for CharaAssets<'_> {
                 // A mask that does not decode leaves the layer off (the
                 // decode error surfaces on the base textures).
                 o.toon_liquid = self.liquid_layer(&mf, m, shader.starts_with("AL/skin_head")).ok().flatten();
+            }
+            if matches!(shader,"AL/cloth" | "AL/cloth_alpha") {
+                if let Some((key,base)) = &o.base_texture {
+                    let mask = self.cloth_line_mask(file,m,[base.width,base.height])?;
+                    let mut color = linear_color(m.color("_Line_color").unwrap_or([0.,0.,0.,1.]));
+                    color[3] = 0.2 + 0.8*m.float("_Line_power").unwrap_or(1.);
+                    o.toon_surface_line = Some((format!("{key}:cloth-line"),mask,color));
+                    o.toon_line_model = ToonLineModel::Cloth {
+                        width: self.human.line_width*m.float("_LineWidthS").unwrap_or(1.),
+                        edge_alpha: m.float("_AlphaLine").unwrap_or(0.),
+                        mip_bias: m.float("_Mip").unwrap_or(0.),
+                        alpha_dither: m.float("_AlphaDither").unwrap_or(0.),
+                        opacity: m.float("_alpha").unwrap_or(1.),
+                        clip: m.float("_AlphaClip").unwrap_or(0.),
+                        clip_force: m.float("_AlphaClipForce").unwrap_or(0.),
+                    };
+                    // Single-sample forward output is opaque after the shader's cutout.
+                    let blend = shader == "AL/cloth_alpha";
+                    o.alpha_mode = Some(if blend { AlphaMode::Blend } else { AlphaMode::Mask });
+                    let cull = m.float("_CullMode").unwrap_or(0.);
+                    o.double_sided = Some(cull != 2.);
+                    if blend {
+                        // The alpha shader has an independent ShadowCaster threshold.
+                        o.alpha_cutoff = Some(m.float("_ShadowClip").unwrap_or(0.75));
+                    }
+                    let queue = if m.render_queue >= 0 { m.render_queue } else if blend { 3000 } else { 2450 };
+                    o.raster_queue = Some(crysirror_unity::world6::RasterQueue {
+                        order: queue.try_into().context("cloth render queue")?,
+                        cull_front: cull == 1.,
+                        // AL/cloth's Forward pass enables ZWrite unconditionally.
+                        depth_write: !blend || m.float("_ZWriteMode").unwrap_or(1.) != 0.,
+                    });
+                }
+            }
+            if shader == "AL/skin_head" {
+                if let (Some(makeup), Some((key, base))) = (&look.makeup, &o.base_texture) {
+                    let mask = self.face_line_mask(&mf, m, makeup, [base.width, base.height])?;
+                    let mut color = linear_color(m.color("_Line_color").unwrap_or([0.,0.,0.,1.]));
+                    color[3] = 0.2 + 0.8 * m.float("_Line_power").unwrap_or(1.);
+                    o.toon_surface_line = Some((format!("{key}:face-line"), mask, color));
+                    o.toon_line_model = ToonLineModel::Face { nose_color: linear_color(m.color("_Nose_line_color").unwrap_or([0.,0.,0.,1.])) };
+                    if look.shadow.is_none() { o.toon_shadow_rim = m.color("_Shadow_color").map(linear_color); }
+                }
             }
             // The face's md layers (two Texture2D masks).
             if let (Some(md), Some((key, img))) = (m.textures.get("_Detail_mask_01").filter(|t| t.texture.path_id != 0 && shader.starts_with("AL/skin_head")), o.base_texture.clone()) {
@@ -1493,7 +1687,7 @@ impl SceneAssets for CharaAssets<'_> {
             }
             let ramp = toon_ramp_floor(&curve, [0.; 3], floor, o.toon_shadow.is_some());
             let outline = [outline[0] * k, outline[1] * k, outline[2] * k, outline[3]];
-            o.toon = Some((ramp, if shader.starts_with("AL/hair") || shader.starts_with("AL/cloth") || shader.starts_with("AL/skin") { 0.0015 } else { 0. }, outline));
+            o.toon = Some((ramp, 0., outline));
             return Ok(Some(o));
         }
         let shadow = match look.shadow.filter(|_| shader.starts_with("AL/skin")) {
@@ -1509,7 +1703,7 @@ impl SceneAssets for CharaAssets<'_> {
         let k = self.light;
         // The outline colour is shaded like the surface colour.
         let outline = [outline[0] * k, outline[1] * k, outline[2] * k, outline[3]];
-        o.toon = Some((ramp, if shader.starts_with("AL/hair") || shader.starts_with("AL/cloth") || shader.starts_with("AL/skin") { 0.0015 } else { 0. }, outline));
+        o.toon = Some((ramp, 0., outline));
         self.base_look(file, m, &look, shader, k, o).map(Some)
     }
 
@@ -1792,6 +1986,16 @@ pub fn hsv_shade(c: [f32; 3]) -> [f32; 3] {
 /// coordinate by this amount and light terms (not decoded); the layer
 /// applies it at a fixed 1.5× strength.
 /// A material/card colour (sRGB, alpha linear) in linear space.
+fn shadow_tone_override(m: &UnityMaterial) -> [f32; 4] {
+    if !matches!(m.shader.as_str(), "AL/skin_body" | "AL/skin_head" | "AL/cloth"
+        | "AL/cloth_alpha" | "AL/acs" | "AL/acs_alpha" | "AL/acs_easy") {
+        return [0.; 4];
+    }
+    let Some(c) = m.colors.get("_Shade_color") else { return [0.; 4] };
+    let [r, g, b, _] = linear_color(*c);
+    [r, g, b, m.floats.get("_UseShadowColor").copied().unwrap_or(0.).clamp(0., 1.)]
+}
+
 fn linear_color(c: [f32; 4]) -> [f32; 4] {
     [srgb_decode(c[0]), srgb_decode(c[1]), srgb_decode(c[2]), c[3]]
 }
@@ -1805,12 +2009,27 @@ fn srgb_encode(c: f32) -> f32 {
     if c <= 0.0031308 { c * 12.92 } else { 1.055 * c.powf(1. / 2.4) - 0.055 }
 }
 
+/// Store 1 - slice zero R and gated slice one R in linear channels. The
+/// body forward shader takes ceil of the first sample, then min with the
+/// second. The positive view factor cannot change the ceil for a nonzero width.
+fn body_line_mask(zero: &ImageSurface, one: &ImageSurface, srgb: bool, enable: f32) -> Result<ImageSurface> {
+    anyhow::ensure!((zero.width, zero.height) == (one.width, one.height), "body line mask slice dimensions");
+    let lin = |c: u8| if srgb { srgb_decode(f32::from(c) / 255.) } else { f32::from(c) / 255. };
+    let mut out = zero.clone();
+    for (a, b) in out.rgba.chunks_exact_mut(4).zip(one.rgba.chunks_exact(4)) {
+        let gate = ((1. - lin(a[0])) * 255.).round() as u8;
+        let coverage = (lin(b[0]) * enable * 255.).round() as u8;
+        a.copy_from_slice(&[gate, coverage, 0, 255]);
+    }
+    Ok(out)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn md_shadow_layer(base: &ImageSurface, md: &ImageSurface, srgb: bool, k: f32, tone: Option<[f32; 3]>, floor: f32, shadow_alpha: f32, m: &UnityMaterial) -> ImageSurface {
     let lin = |b: u8| if srgb { srgb_decode(f32::from(b) / 255.) } else { f32::from(b) / 255. };
     let get = |n: &str, d: f32| m.floats.get(n).copied().unwrap_or(d);
     let (intensity, power, bust) = (get("_mdGIntensity", 0.8), get("_mdGPower", 0.5), get("_Bust_shadowonoff", 0.));
-    shadow_layer(base, k, tone, floor, 512, &|u, v| {
+    shadow_layer(base, k, tone, shadow_tone_override(m), floor, 512, &|u, v| {
         let j = texel(md, u, v);
         let (g, b, a) = (lin(md.rgba[j + 1]), lin(md.rgba[j + 2]), lin(md.rgba[j + 3]));
         let chest = ((a - 0.66) * -4.16667 + 1.).clamp(0., 1.);
@@ -1832,7 +2051,7 @@ fn face_md_layer(base: &ImageSurface, md: &ImageSurface, md2: Option<&ImageSurfa
     let get = |n: &str, d: f32| m.floats.get(n).copied().unwrap_or(d);
     let (intensity, power) = (get("_mdGIntensity", 1.), get("_mdGPower", 0.));
     let ch = |img: &ImageSurface, u: f32, v: f32, c: usize| f32::from(img.rgba[texel(img, u, v) + c]) / 255.;
-    shadow_layer(base, k, None, floor, 512, &|u, v| {
+    shadow_layer(base, k, None, shadow_tone_override(m), floor, 512, &|u, v| {
         let (r, g, b) = (ch(md, u, v, 0), ch(md, u, v, 1), ch(md, u, v, 2));
         let oval = md2.map_or(0., |t| ch(t, u, v, 2));
         let lit = (((1. - g) * 1.23 - 0.31).clamp(0., 1.) - (r - oval)).clamp(0., 1.);
@@ -1851,7 +2070,28 @@ fn green_md_layer(base: &ImageSurface, md: &ImageSurface, k: f32, tone: Option<[
     let get = |n: &str, d: f32| m.floats.get(n).copied().unwrap_or(d);
     let (intensity, power) = (get("_mdGIntensity", 0.5), get("_mdGPower", 0.5));
     let div = (1. - 0.5 * power).clamp(0.5, 1.);
-    shadow_layer(base, k, tone, floor, 256, &|u, v| (f32::from(md.rgba[texel(md, u, v) + 1]) / 255. / div).clamp(0., 1.) * intensity)
+    shadow_layer(base, k, tone, shadow_tone_override(m), floor, 256, &|u, v| (f32::from(md.rgba[texel(md, u, v) + 1]) / 255. / div).clamp(0., 1.) * intensity)
+}
+
+/// Apply the named Unity texture's scale and offset.
+fn slot_uv(m: &UnityMaterial, name: &str, uv: [f32; 2]) -> [f32; 2] {
+    m.textures.get(name).map_or(uv, |t| [uv[0]*t.scale[0]+t.offset[0], uv[1]*t.scale[1]+t.offset[1]])
+}
+
+/// Authored masks are sampled in bottom-up Unity UVs. Interpolate at texel
+/// centres before packing into the shared UV0 atlas.
+fn sample_channel(surface: &ImageSurface, uv: [f32; 2], channel: usize) -> u8 {
+    let p = [uv[0] * surface.width as f32 - 0.5, (1.-uv[1]) * surface.height as f32 - 0.5];
+    let [x,y] = p.map(|v| v.floor() as i32);
+    let [fx,fy] = p.map(|v| v-v.floor());
+    let get = |x:i32,y:i32| {
+        let x = x.clamp(0, surface.width as i32 - 1) as usize;
+        let y = y.clamp(0, surface.height as i32 - 1) as usize;
+        f32::from(surface.rgba[(y*surface.width as usize+x)*4+channel])
+    };
+    let a = get(x,y)*(1.-fx)+get(x+1,y)*fx;
+    let b = get(x,y+1)*(1.-fx)+get(x+1,y+1)*fx;
+    (a*(1.-fy)+b*fy).round() as u8
 }
 
 /// Byte offset of the texel at top-down image coordinates `u`, `v` in [0, 1).
@@ -1865,7 +2105,7 @@ fn texel(img: &ImageSurface, u: f32, v: f32) -> usize {
 /// `base · k · mix(tone, 1, floor)` in linear space (tone: the given one or
 /// the HSV shade of the texel), alpha `amount(u, v) · 1.5`; at most `max`
 /// texels a side (prepared-asset budget).
-fn shadow_layer(base: &ImageSurface, k: f32, tone: Option<[f32; 3]>, floor: f32, max: u32, amount: &dyn Fn(f32, f32) -> f32) -> ImageSurface {
+fn shadow_layer(base: &ImageSurface, k: f32, tone: Option<[f32; 3]>, over: [f32; 4], floor: f32, max: u32, amount: &dyn Fn(f32, f32) -> f32) -> ImageSurface {
     let (ow, oh) = (base.width.min(max).max(1), base.height.min(max).max(1));
     let mut out = ImageSurface { width: ow, height: oh, rgba: vec![0; (ow * oh * 4) as usize] };
     for y in 0..oh {
@@ -1876,7 +2116,8 @@ fn shadow_layer(base: &ImageSurface, k: f32, tone: Option<[f32; 3]>, floor: f32,
             let t = tone.unwrap_or_else(|| hsv_shade(c));
             let i = ((y * ow + x) * 4) as usize;
             for n in 0..3 {
-                let v = srgb_encode(c[n] * (t[n] + (1. - t[n]) * floor)) * k;
+                let shade = t[n] + over[3] * (over[n] - t[n]);
+                let v = srgb_encode(c[n] * (shade + (1. - shade) * floor)) * k;
                 out.rgba[i + n] = (v.clamp(0., 1.) * 255.).round() as u8;
             }
             out.rgba[i + 3] = ((amount(u, v) * 1.5).clamp(0., 1.) * 255.).round() as u8;
@@ -1917,6 +2158,34 @@ mod tests {
         assert_eq!(out.rgba[0], (srgb_encode(l) * 255.).round() as u8);
         assert_eq!(&out.rgba[1..3], &[0, 0]);
         assert_eq!(&out.rgba[4..8], &[188, 188, 188, 255]);
+    }
+
+    #[test]
+    fn body_line_takes_red_from_two_array_slices_in_linear_space() {
+        let mask = |v| ImageSurface { width: 2, height: 1, rgba: vec![255, 1, 2, 255, v, 3, 4, 255] };
+        let zero = mask(0);
+        let one = mask(128);
+        let line = body_line_mask(&zero, &one, true, 0.5).unwrap();
+        assert_eq!(line.rgba, [0, 128, 0, 255, 255, 28, 0, 255]);
+    }
+
+    #[test]
+    fn shadow_tone_uses_linear_rgb_and_preserves_fractional_weight() {
+        let mut material = UnityMaterial { shader: "AL/cloth".into(), ..Default::default() };
+        material.colors.insert("_Shade_color".into(), [0.5, 1., 0., 0.9]);
+        material.floats.insert("_UseShadowColor".into(), 0.25);
+        let tint = shadow_tone_override(&material);
+        assert!((tint[0] - 0.214041).abs() < 1e-5);
+        assert_eq!([tint[1], tint[2], tint[3]], [1., 0., 0.25]);
+        let white = ImageSurface { width: 1, height: 1, rgba: vec![255; 4] };
+        let layer = shadow_layer(&white, 1., Some([0.; 3]), tint, 0., 1, &|_, _| 1.);
+        assert_eq!(layer.rgba, [65, 137, 0, 255]);
+        for shader in ["AL/skin_body", "AL/skin_head", "AL/cloth_alpha", "AL/acs", "AL/acs_alpha", "AL/acs_easy"] {
+            material.shader = shader.into();
+            assert_eq!(shadow_tone_override(&material), tint);
+        }
+        material.shader = "AL/hair".into();
+        assert_eq!(shadow_tone_override(&material), [0.; 4]);
     }
 
     #[test]

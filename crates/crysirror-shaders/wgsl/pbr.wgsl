@@ -16,7 +16,7 @@ fn vs_main(v: VertexIn) -> VertexOut {
 }
 // Entry points cannot call each other; both vertex paths share this.
 fn transform_vertex(v: VertexIn) -> VertexOut {
-    let world = object.model * vec4<f32>(v.position, 1.0);
+    let world = shell_world(v.position, v.normal, v.uv, object.model, frame.view_proj);
     var o: VertexOut;
     o.clip = frame.view_proj * world;
     o.world = world.xyz;
@@ -600,6 +600,7 @@ fn toon_table(c: vec3<f32>) -> vec3<f32> {
 // (display-referred, like the toon surface).
 @fragment
 fn fs_outline(i: VertexOut) -> @location(0) vec4<f32> {
+    if object.uv.w > 0.0 && !bayer_visible(1.0 - object.uv.w, vec2<u32>(vec2<f32>(i.clip.x, frame.screen.y - i.clip.y))) { discard; }
     let n = normalize(i.normal);
     let l = normalize(-frame.toon_dir.xyz);
     let ramp = toon_lookup(0.0, dot(n, l) * 0.495 + 0.5).rgb;
@@ -616,14 +617,16 @@ fn fs_outline(i: VertexOut) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_main(i: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    if raster_culled(front) { discard; }
     // Sample everything first: derivatives stay in uniform control flow.
+    if object.uv.w > 0.0 && !bayer_visible(1.0 - object.uv.w, vec2<u32>(vec2<f32>(i.clip.x, frame.screen.y - i.clip.y))) { discard; }
     let uv=material_uv(i.uv);
     let surface=sample_surface(uv,i.world,i.normal,frame.camera_pos.xyz,frame.misc.z);
     let base=surface.color;
     let tn = decode_normal(textureSample(t_normal, s_material, uv));
     let specular_color = textureSample(t_specular, s_material, uv).rgb * material.surface.w;
     let occ_sample = textureSample(t_occlusion, s_material, uv);
-    let occ_tex = occ_sample.r;
+    let occ_tex = select(occ_sample.r, 1.0, material.surface.y == 6.0);
     // Toon: raw base, shadow (slot 3) and highlight (slot 6) samples.
     var toon_base = textureSample(t_base, s_material, uv);
     let toon_blend = textureSample(t_emissive, s_material, uv);
@@ -641,11 +644,16 @@ fn fs_main(i: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec
         toon_base = vec4<f32>(mix(toon_base.rgb, material.liquid_color.rgb, c), toon_base.a);
     }
     let toon_hi = textureSample(t_specular, s_material, uv);
-    if material.alpha.x == 1.0 && base.a < material.alpha.y {
+    var alpha=select(1.0,clamp(base.a,0.0,1.0),material.alpha.x>=2.0);
+    if material.line_params[0].x == 2.0 {
+        let cloth = cloth_coverage(uv, frame.camera_pos.xyz, object.model[3].xyz, vec2<u32>(vec2<f32>(i.clip.x, frame.screen.y - i.clip.y)));
+        if cloth.x < cloth.y { discard; }
+        alpha = select(1.0,cloth.x,material.alpha.x >= 2.0);
+    } else if material.alpha.x == 1.0 && base.a < material.alpha.y {
         discard;
     }
 
-    var alpha=select(1.0,clamp(base.a,0.0,1.0),material.alpha.x>=2.0);
+
     if material.alpha.x>=2.0 && material.surface.x>0.0 {
         let depth=textureLoad(opaque_depth,vec2<i32>(i.clip.xy),0);
         let uv_depth=i.clip.xy*frame.screen.zw;
@@ -659,7 +667,25 @@ fn fs_main(i: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec
     // alpha.z: 0 lit, 1 unlit, 2 toon.
     if material.alpha.z>0.5 && material.alpha.z<1.5 {
         var color=base.rgb+emissive;
-        if material.surface.y == 4.0 {
+        if material.surface.y == 5.0 {
+            let pixel = vec2<u32>(vec2<f32>(i.clip.x, frame.screen.y - i.clip.y));
+            if !shell_visible(front, pixel, toon_base.a) { discard; }
+            let n = normalize(i.normal);
+            let nl = dot(n, normalize(-frame.toon_dir.xyz));
+            var attenuation = 1.0;
+            if frame.sun_color.w > 0.0 {
+                attenuation = mix(1.0, sun_shadow(i.world, max(nl, 0.0), i.clip.xy), frame.sun_color.w);
+            }
+            let t = clamp(0.33 * nl + 0.1, 0.0, 1.0) * attenuation;
+            let line = material.base_color.rgb;
+            let y = dot(line, vec3<f32>(0.212673, 0.715152, 0.072175));
+            let saturated = y + 1.2 * (line - y);
+            let k = 1.5 * t * clamp(dot(line, vec3<f32>(0.340136)) + 0.5, 0.0, 1.0);
+            let key = clamp(frame.toon_color.rgb * frame.toon_dir.w, vec3<f32>(0.0), vec3<f32>(1.0));
+            let lit = clamp(mix(line, saturated, t) + k * key, vec3<f32>(0.0), vec3<f32>(1.0));
+            let fog = height_fog(i.world);
+            color = mix(lit, fog.rgb, fog.a);
+        } else if material.surface.y == 4.0 {
             color = block_noise_color(i.clip.xy);
         }
         if frame.misc.w > 0.5 {
@@ -718,7 +744,8 @@ fn fs_main(i: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec
             let kk = 1.1 + 0.9 * clamp((s - 1.0) / 3.0, 0.0, 1.0);
             let fm = fl * mixed;
             let lum = dot(fm, lw);
-            let tone = lum + kk * (fm - lum);
+            let graded = lum + kk * (fm - lum);
+            let tone = mix(graded, material.shadow_tone_override.rgb, material.shadow_tone_override.a);
             let lit = mix(toon_lookup(0.0, 0.0).r, toon_lookup(0.0, u).r, cast_light);
             let unlit = mix(material.toon_light.rgb, sh, clamp((dot(key, vec3<f32>(1.0 / 3.0)) - 1.0) * 0.5, 0.0, 1.0));
             let kc = min(key, vec3<f32>(1.0));
@@ -759,7 +786,29 @@ fn fs_main(i: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec
         let ambient = toon_encode(sh_irradiance(tn_toon) * frame.env.x / PI);
         let shaded = m * ramp * light + vec3<f32>(pow(nh, 48.0) * p[2].x) + c * ambient * p[3].w;
         let fog_t = height_fog(i.world);
-        let color = mix(toon_decode(shaded), fog_t.rgb, fog_t.a);
+        var line_surface = toon_decode(shaded);
+        if material.line_color.a >= 0.0 {
+            let mask = textureSample(t_normal, s_material, uv);
+            let line = material.line_params[0];
+            if line.x == 1.0 {
+                let nose = material.line_params[1];
+                line_surface = mix(line_surface, nose.rgb, mask.r * nose.a);
+                let view = normalize(tv + vec3<f32>(0.0, 0.36, 0.03));
+                let rim = clamp(0.75 - 0.75 * dot(view, tn_toon), 0.0, 1.0) * material.toon.a * (1.0 - mask.a);
+                let line_base = toon_base.rgb * mix(vec3<f32>(1.0), material.toon.rgb, rim);
+                line_surface = mix(line_surface, mix(line_base, material.line_color.rgb, material.line_color.a), max(mask.g, mask.b));
+            } else if line.x == 2.0 {
+                let tint = mix(line_surface, material.line_color.rgb, material.line_color.a);
+                let edge = clamp(4.0 * mask.r * line.y, 0.0, 1.0) * line.z;
+                let source_alpha = textureSampleBias(t_base, s_material, uv, line.w).a;
+                line_surface = mix(line_surface, tint, (1.0 - source_alpha) * edge);
+                line_surface = mix(line_surface, mask.g * tint, mask.g);
+            } else {
+                let line_tint = clamp(mix(line_surface, material.line_color.rgb, material.line_color.a), vec3<f32>(0.0), vec3<f32>(0.95));
+                line_surface = mix(line_surface, line_tint, select(0.0, mask.g, mask.r > 0.0));
+            }
+        }
+        let color = mix(line_surface, fog_t.rgb, fog_t.a);
         if frame.misc.w > 0.5 {
             return gi_capture(color, i.world, front);
         }
@@ -820,6 +869,15 @@ fn fs_main(i: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec
     var diffuse_irr = gi_irradiance(i.world, n, v, irradiance * frame.env.x);
     if frame.ssr.w > 0.0 && material.alpha.x < 2.0 {
         diffuse_irr = textureLoad(ssr_texture, vec2<i32>(i.clip.xy), 1, 0).rgb * frame.ssr.w;
+    }
+    if material.surface.y == 6.0 {
+        let st = material.effect_params[0];
+        let half_texel = vec2<f32>(0.5) / vec2<f32>(textureDimensions(t_occlusion));
+        let atlas_uv = clamp(i.uv * st.xy + st.zw, half_texel, vec2<f32>(1.0) - half_texel);
+        let radiance = textureSample(t_occlusion, s_material, atlas_uv).rgb;
+        let direction = textureSample(t_mr, s_material, atlas_uv);
+        let half_lambert = dot(n, direction.rgb - vec3<f32>(0.5)) + 0.5;
+        diffuse_irr = PI * radiance * half_lambert / max(direction.a, 0.0001);
     }
     let ambient = (kd_ibl * base.rgb * diffuse_irr / PI + specular_ibl) * occlusion;
     let local = local_lights(i.world, i.clip.xy, ng, n, v, base.rgb, metallic, f0, max(a, 0.002), nv);

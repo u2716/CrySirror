@@ -181,16 +181,31 @@ pub struct Material {
 }
 impl Material {
     pub fn read(bytes: &[u8]) -> Result<Self> {
+        Self::read_layout(bytes, false)
+    }
+    pub fn read_56(bytes: &[u8]) -> Result<Self> {
+        Self::read_layout(bytes, true)
+    }
+    fn read_layout(bytes: &[u8], unity56: bool) -> Result<Self> {
         let mut r = Reader::new(bytes);
         let name = r.string()?;
-        let shader = r.pptr()?;
-        let keywords = r.strings()?;
+        let pointer = |r: &mut Reader| if unity56 { r.pptr64() } else { r.pptr() };
+        let shader = pointer(&mut r)?;
+        let keywords = if unity56 {
+            let keys = r.string()?.split_whitespace().map(str::to_owned).collect();
+            r.take(8)?;
+            keys
+        } else { r.strings()? };
         let render_queue = r.i32()?;
+        if unity56 {
+            for _ in 0..r.count(8)? { r.string()?; r.string()?; }
+            for _ in 0..r.count(4)? { r.string()?; }
+        }
         let n = r.count(28)?;
         let mut textures = Vec::with_capacity(n);
         for _ in 0..n {
             let key = r.string()?;
-            textures.push((key, TexEnv { texture: r.pptr()?, scale: r.f32s()?, offset: r.f32s()? }));
+            textures.push((key, TexEnv { texture: pointer(&mut r)?, scale: r.f32s()?, offset: r.f32s()? }));
         }
         let n = r.count(8)?;
         let mut floats = Vec::with_capacity(n);
@@ -410,6 +425,12 @@ const CHANNEL_UV1: usize = 4;
 
 impl Mesh {
     pub fn read(bytes: &[u8]) -> Result<Self> {
+        Self::read_layout(bytes, false)
+    }
+    pub fn read_56(bytes: &[u8]) -> Result<Self> {
+        Self::read_layout(bytes, true)
+    }
+    fn read_layout(bytes: &[u8], unity56: bool) -> Result<Self> {
         let mut r = Reader::new(bytes);
         let name = r.string()?;
         let n = r.count(44)?;
@@ -438,7 +459,7 @@ impl Mesh {
         r.take(n * 4)?;
         r.u32()?;
         let compression = r.u8()?;
-        let _stream_compression = r.u8()?;
+        if !unity56 { r.u8()?; }
         r.take(3)?;
         r.align()?;
         ensure!(compression == 0, "compressed Unity mesh {name} is not supported");
@@ -455,22 +476,41 @@ impl Mesh {
             let c = r.take(4)?;
             channels.push([c[0], c[1], c[2], c[3]]);
         }
-        let n = r.count(12)?;
-        let mut streams = Vec::with_capacity(n);
-        for _ in 0..n {
-            let _mask = r.u32()?;
-            let offset = r.u32()? as usize;
-            let stride = r.u8()? as usize;
-            r.take(3)?;
-            streams.push((offset, stride));
+        let mut streams = Vec::new();
+        if unity56 {
+            // Unity 5 stores the channel table. Streams are reconstructed from
+            // its format, dimension and byte offsets; each starts 16-byte aligned.
+            let mut strides = [0usize; 16];
+            for &[stream, offset, format, dim] in &channels {
+                if dim == 0 { continue; }
+                let size = match format { 0=>4, 1=>2, 2|3=>1, _=>anyhow::bail!("unsupported Unity 5 vertex format {format}") };
+                let stride = strides.get_mut(stream as usize).context("Unity vertex stream index")?;
+                *stride=(*stride).max(offset as usize + size * dim as usize);
+            }
+            let mut base=0usize;
+            for stride in strides {
+                streams.push((base,stride));
+                base=vertex_count.checked_mul(stride).and_then(|n| n.checked_add(base)).and_then(|n|n.checked_add(15)).context("Unity vertex stream overflow")? & !15;
+            }
+        } else {
+            let n = r.count(12)?;
+            for _ in 0..n {
+                let _mask = r.u32()?;
+                let offset = r.u32()? as usize;
+                let stride = r.u8()? as usize;
+                r.take(3)?;
+                streams.push((offset, stride));
+            }
         }
         let data = r.bytes()?;
+        ensure!(vertex_count <= data.len(), "Unity vertex count exceeds buffer");
         let mut mesh = Mesh { name, submeshes, indices, ..Default::default() };
         let read = |channel: usize, out_dim: usize| -> Result<Vec<Vec<f32>>> {
             let Some(&[stream, offset, format, dim]) = channels.get(channel) else { return Ok(Vec::new()) };
             if dim == 0 {
                 return Ok(Vec::new());
             }
+            ensure!(dim as usize >= out_dim, "short Unity vertex attribute");
             let (base, stride) = *streams.get(stream as usize).context("Unity vertex stream")?;
             let size = match format {
                 0 => 4,

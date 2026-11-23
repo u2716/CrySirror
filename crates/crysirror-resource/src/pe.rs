@@ -72,6 +72,11 @@ impl<'a> PeData<'a> {
             sha256,
         })
     }
+    /// Resolve a local named export to its file-image RVA without loading code.
+    pub fn export_rva(&self, name: &str) -> Result<u32> {
+        let image = pelite::PeFile::from_bytes(self.bytes).context("PE export header")?;
+        image.get_export_by_name(name)?.symbol().context("forwarded PE export")
+    }
     /// Preferred image base from the optional header, never a process pointer.
     pub fn image_base(&self) -> u64 {
         self.image_base

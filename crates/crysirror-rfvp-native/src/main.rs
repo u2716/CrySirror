@@ -212,11 +212,18 @@ mod tests {
     use crate::subsystem::world::GameData;
     use std::{thread::sleep, time::Duration};
 
+    fn fixture_vfs() -> crate::subsystem::resources::vfs::Vfs {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(std::env::var_os("FVP_TESTCASE").unwrap_or_else(|| "testcase".into()));
+        let root = crate::host_api::std_fs::StdDir::new(dir);
+        crate::subsystem::resources::vfs::Vfs::from_dir(Nls::ShiftJIS, std::sync::Arc::new(root)).unwrap()
+    }
+
     #[test]
     fn test_audio_system() {
-        std::env::set_var("FVP_TEST", "1");
         let mut world = GameData::default();
-        let vfs = crate::utils::file::desktop_vfs(Nls::ShiftJIS).unwrap();
+        let vfs = fixture_vfs();
         let buff = vfs.read_file("bgm/001").unwrap();
         // is oggs?
         assert!(
@@ -239,9 +246,8 @@ mod tests {
 
     #[test]
     fn test_audio_system_mix() {
-        std::env::set_var("FVP_TEST", "1");
         let mut world = GameData::default();
-        let vfs = crate::utils::file::desktop_vfs(Nls::ShiftJIS).unwrap();
+        let vfs = fixture_vfs();
         let buff = vfs.read_file("bgm/001").unwrap();
         let buff2 = vfs.read_file("bgm/002").unwrap();
         // is oggs?

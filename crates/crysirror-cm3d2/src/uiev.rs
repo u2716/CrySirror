@@ -78,3 +78,63 @@ pub fn slider_value(rect: crate::ngui::Rect2, x: f32, fields: &Fields) -> f32 {
     }
     v
 }
+
+/// Mouse capture, tracked independently for the two NGUI buttons.
+#[derive(Clone, Copy)]
+pub struct ButtonPress {
+    pub(super) target: (usize, usize),
+    origin: [f32; 2],
+}
+
+pub fn release_click(
+    capture: &mut Option<ButtonPress>,
+    target: Option<(usize, usize)>,
+    position: [f32; 2],
+    pressed: bool,
+    down: bool,
+) -> Option<(usize, usize)> {
+    if pressed {
+        *capture = target.map(|target| ButtonPress { target, origin: position });
+    }
+    let gesture = (*capture)?;
+    let dx = position[0] - gesture.origin[0];
+    let dy = position[1] - gesture.origin[1];
+    // UICamera.ProcessTouch cancels BasedOnDelta clicks beyond mouseClickThreshold.
+    if dx * dx + dy * dy > 10.0 * 10.0 {
+        *capture = None;
+        return None;
+    }
+    if down {
+        return None;
+    }
+    *capture = None;
+    target.filter(|t| *t == gesture.target)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn click_releases_once_on_the_pressed_collider() {
+        let mut capture = None;
+        let target = Some((1, 25));
+        let position = [35., 60.];
+        assert_eq!(release_click(&mut capture, target, position, true, true), None);
+        assert_eq!(release_click(&mut capture, target, position, false, true), None);
+        assert_eq!(release_click(&mut capture, target, position, false, false), target);
+        assert_eq!(release_click(&mut capture, target, position, false, false), None);
+        assert_eq!(release_click(&mut capture, target, position, true, false), target);
+    }
+
+    #[test]
+    fn drag_and_release_over_a_different_collider_cancel_the_click() {
+        let target = Some((1, 25));
+        let mut capture = None;
+        release_click(&mut capture, target, [0., 0.], true, true);
+        release_click(&mut capture, target, [7., 8.], false, true);
+        assert_eq!(release_click(&mut capture, target, [0., 0.], false, false), None);
+        release_click(&mut capture, target, [0., 0.], true, true);
+        assert_eq!(release_click(&mut capture, Some((0, 25)), [0., 1.], false, false), None);
+    }
+}

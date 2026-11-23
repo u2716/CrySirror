@@ -604,6 +604,8 @@ pub enum PbrDrawable {
         animation: Vec<crate::components::AnimationLayer>,
         /// Non-zero morph target weights by target name.
         morphs: Vec<(String, f32)>,
+        /// Coverage for all draws of this model.
+        dither: f32,
         /// Node names whose subtrees are not drawn.
         hidden: Vec<String>,
         /// UV0 offsets of named nodes' meshes.
@@ -869,6 +871,7 @@ impl World {
                             .filter(|(_, w)| **w != 0.)
                             .map(|(n, w)| (n.clone(), *w))
                             .collect(),
+                        dither: spec.animation.as_ref().and_then(|a| a.dither).unwrap_or(1.),
                         hidden: spec.animation.iter().flat_map(|a| a.hidden.iter().cloned()).collect(),
                         uv_offsets: spec.animation.iter().flat_map(|a| a.uv_offsets.iter().map(|(n, o)| (n.clone(), *o))).collect(),
                         base_blend: spec.animation.iter().flat_map(|a| a.base_blend.iter().map(|(n, w)| (n.clone(), *w))).collect(),

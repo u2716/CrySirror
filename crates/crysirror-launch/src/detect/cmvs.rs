@@ -11,8 +11,13 @@ pub(super) fn detect(dir: &SourcePath, names: &[String], name: &str) -> Result<O
     } else {
         return Ok(None);
     };
-    let executable = find(names, if cvns { "cvns.exe" } else { "cmvs64.exe" })
+    let executable = if cvns {
+        find(names, "cvns.exe")
+    } else {
+        find(names, "cmvs64.exe").or_else(|| find(names, "cmvs.exe"))
+    }
         .context("Purple Software installation needs a supported executable")?;
+    let ps2 = !cvns && executable.eq_ignore_ascii_case("cmvs.exe");
     let root = dir.canonicalize()?;
     let mut config = scoped_open(&root, config_name)?;
     let mut bytes = Vec::new();
@@ -79,7 +84,7 @@ pub(super) fn detect(dir: &SourcePath, names: &[String], name: &str) -> Result<O
     let script = format!(
         "{}/{}",
         script_dir.relative(),
-        if cvns { "start.pss" } else { "start.ps3" }
+        if cvns { "start.pss" } else if ps2 { "start.ps2" } else { "start.ps3" }
     );
     let mut signature = [0; 4];
     scoped_open(&root, &script)?.read_exact(&mut signature)?;
@@ -101,14 +106,15 @@ pub(super) fn detect(dir: &SourcePath, names: &[String], name: &str) -> Result<O
     exe.read_exact(&mut header)?;
     ensure!(
         &header[..4] == b"PE\0\0"
-            && u16::from_le_bytes(header[4..6].try_into()?) == if cvns { 0x014c } else { 0x8664 },
+            && u16::from_le_bytes(header[4..6].try_into()?) == if cvns || ps2 { 0x014c } else { 0x8664 },
         "unsupported CMVS executable architecture"
     );
     let stamp = u32::from_le_bytes(header[8..12].try_into()?);
-    let profile = match (cvns, stamp) {
-        (true, 0x40a51966) => "cvns-20040515-x86",
-        (false, 0x56aedd70) => "pc-20160201-x64",
-        (false, 0x615e1fde) => "pc-20211007-x64",
+    let profile = match (cvns, ps2, stamp) {
+        (true, false, 0x40a51966) => "cvns-20040515-x86",
+        (false, true, 0x45b04545) => "pc-20070119-x86",
+        (false, false, 0x56aedd70) => "pc-20160201-x64",
+        (false, false, 0x615e1fde) => "pc-20211007-x64",
         _ => bail!("unsupported CMVS Windows build timestamp 0x{stamp:08x}"),
     };
     let canvas = if cvns {

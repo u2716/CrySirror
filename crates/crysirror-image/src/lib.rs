@@ -14,6 +14,7 @@ pub mod pna;
 pub mod psd;
 use anyhow::{Result, ensure};
 use std::{collections::BTreeMap, io::Cursor, sync::Arc};
+mod exhibit_gyu;
 mod fixed_blend;
 mod formats;
 mod standard_encoding;
@@ -21,6 +22,7 @@ pub use formats::{ImageDecodeContext, ImageFormat, ImageSource};
 
 pub const MAX_DECODED_BYTES: usize = 64 * 1024 * 1024;
 pub mod nvsg;
+pub mod sqz;
 pub mod padding;
 pub mod pixels;
 mod png;
@@ -268,6 +270,7 @@ impl Default for DecoderRegistry {
             this.decoders.insert(extension.into(), Arc::new(Standard));
         }
         this.decoders.insert("pdt".into(), Arc::new(Pdt));
+        this.formats.insert(exhibit_gyu::ID, Arc::new(exhibit_gyu::Format));
         this.formats.insert("circus/crx", Arc::new(crx::Format));
         this.formats.insert(kiss_tex::ID, Arc::new(kiss_tex::Format));
         this.formats
@@ -457,6 +460,8 @@ pub mod alpha_planes;
 pub mod particle;
 
 pub mod alpha_stamps;
+pub mod packed_stamps;
+pub mod row_strip;
 
 pub mod alpha_mask;
 pub mod block_average;

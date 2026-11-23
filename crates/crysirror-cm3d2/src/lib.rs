@@ -48,3 +48,6 @@ pub mod yotogi_data;
 pub use adapter::{Config, ENGINE_ID};
 #[cfg(feature = "runtime")]
 pub use adapter::register;
+
+#[cfg(feature = "runtime")]
+mod com3d2;

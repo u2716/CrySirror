@@ -157,6 +157,53 @@ impl GlbBuilder {
         self.doc.nodes[node].skin = Some(skin);
     }
 
+    /// Imported renderers may carry a copy of the complete character rig.
+    /// Keep every weighted influence, while omitting unused entries from an
+    /// oversized GPU palette. The transform hierarchy stays in the document.
+    pub(crate) fn bind_mesh_skin(&mut self, node: usize, mesh: usize, mut joints: Vec<usize>, bind: &[[f32; 16]]) -> Result<()> {
+        // The importer reports an invalid renderer and continues. An
+        // unbindable mesh must not remain visible in its rest pose.
+        self.doc.nodes[node].mesh = None;
+        let limit = crysirror_asset::anim::MAX_JOINTS;
+        let skin = if joints.len() > limit {
+            let primitives = &mut self.doc.meshes[mesh].1;
+            let mut used = vec![false; joints.len()];
+            for primitive in primitives.iter() {
+                for (indices, weights) in primitive.joints.iter().zip(&primitive.weights) {
+                    for (index, weight) in indices.iter().zip(weights) {
+                        if *weight != 0. {
+                            let slot = used.get_mut(usize::from(*index)).ok_or_else(|| anyhow::anyhow!("joint {index} outside renderer palette"))?;
+                            *slot = true;
+                        }
+                    }
+                }
+            }
+            let kept = used.iter().filter(|u| **u).count();
+            ensure!(kept > 0 && kept <= limit, "skin uses {kept} of {} joints (palette limit {limit})", joints.len());
+            let mut compact = Vec::with_capacity(kept);
+            let mut remap = vec![0; joints.len()];
+            for (i, retained) in used.iter().copied().enumerate() {
+                if retained {
+                    remap[i] = compact.len() as u16;
+                    joints[compact.len()] = joints[i];
+                    compact.push(bind[i]);
+                }
+            }
+            joints.truncate(kept);
+            for primitive in primitives {
+                for (indices, weights) in primitive.joints.iter_mut().zip(&primitive.weights) {
+                    for (index, weight) in indices.iter_mut().zip(weights) {
+                        *index = if *weight == 0. { 0 } else { remap[usize::from(*index)] };
+                    }
+                }
+            }
+            self.skin(joints, &compact)
+        } else { self.skin(joints, bind) };
+        self.doc.nodes[node].mesh = Some(mesh);
+        self.set_skin(node, skin);
+        Ok(())
+    }
+
     /// [`Self::mesh6`] with the mesh's joints/weights when `skinned`.
     pub fn mesh6_skinned(&mut self, node: usize, mesh: &crate::unity6::Mesh6, range: std::ops::Range<usize>, materials: &[Option<usize>], skinned: bool) -> Result<Option<usize>> {
         self.mesh6_full(node, mesh, range, materials, skinned, false)
@@ -307,4 +354,30 @@ pub fn image_plane_glb(generator: &str, png: Vec<u8>, corners: [[f32; 3]; 4]) ->
     doc.nodes.push(glb::Node { mesh: Some(0), ..glb::Node::named("image") });
     doc.roots.push(0);
     doc.to_glb()
+}
+
+#[cfg(test)]
+mod palette_tests {
+    use super::*;
+
+    #[test]
+    fn oversized_skin_keeps_weighted_nodes_and_matching_bind_matrices() {
+        let mut builder = GlbBuilder::new("palette regression");
+        let holder = builder.node("mesh", None, [0.; 3], [0., 0., 0., 1.], [1.; 3]).unwrap();
+        let bones: Vec<_> = (0..300).map(|i| builder.node(&format!("bone{i}"), Some(holder), [0.; 3], [0., 0., 0., 1.], [1.; 3]).unwrap()).collect();
+        let poses: Vec<_> = (0..300).map(|i| glam::Mat4::from_translation(glam::Vec3::new(i as f32, 0., 0.)).to_cols_array()).collect();
+        let weights = [0.25, 0.75, 0., 0.];
+        let primitive = glb::Primitive {
+            joints: vec![[298, 17, 125, u16::MAX]], weights: vec![weights], ..Default::default()
+        };
+        builder.doc.meshes.push(("weighted".into(), vec![primitive]));
+        builder.bind_mesh_skin(holder, 0, bones.clone(), &poses).unwrap();
+        let skin = &builder.doc.skins[builder.doc.nodes[holder].skin.unwrap()];
+        assert_eq!(skin.joints, [bones[17], bones[298]]);
+        assert_eq!(skin.inverse_bind, [mirror_matrix(poses[17]), mirror_matrix(poses[298])]);
+        let compact = &builder.doc.meshes[0].1[0];
+        assert_eq!(compact.joints, [[1, 0, 0, 0]]);
+        assert_eq!(compact.weights, [weights]);
+        assert_eq!(builder.doc.nodes[holder].children.len(), 300);
+    }
 }

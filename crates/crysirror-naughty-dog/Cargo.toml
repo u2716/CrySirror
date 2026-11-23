@@ -1,0 +1,19 @@
+[package]
+name = "crysirror-naughty-dog"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Naughty Dog native resource semantics for CrySirror"
+
+[dependencies]
+anyhow.workspace = true
+
+crysirror-core.workspace = true
+crysirror-resource.workspace = true
+
+[dev-dependencies]
+crysirror-image.workspace = true
+crysirror-formats-arc.workspace = true
+crysirror-capfs.workspace = true

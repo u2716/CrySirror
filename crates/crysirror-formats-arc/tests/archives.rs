@@ -474,6 +474,9 @@ fn explicit_registration_lists_only_implemented_decoders() {
     let mut expected = vec![
         "bgi/arc",
         "kirikiri/xp3",
+        "lilim/abm-frames",
+        "minori/paz",
+        "sony/psarc",
         "majiro/arc",
         "nscripter/nsa",
         "nscripter/sar",

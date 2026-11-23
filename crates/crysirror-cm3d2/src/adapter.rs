@@ -243,10 +243,12 @@ pub struct Game {
     pub pending_textures: Vec<(usize, usize, String)>,
     /// NGUI events of this frame: (scene index, node, `Class.Method`).
     pub events: Vec<(usize, usize, String)>,
+    ui_presses: [Option<crate::uiev::ButtonPress>; 2],
+    pub right_click: Option<(usize, usize)>,
     /// Slider being dragged: (scene index, node).
     drag: Option<(usize, usize)>,
     /// Selected `UIInput`: (scene index, node, host session).
-    input_focus: Option<(usize, usize, crysirror_core::service::TextInputSessionHandle)>,
+    pub(crate) input_focus: Option<(usize, usize, crysirror_core::service::TextInputSessionHandle)>,
     /// `MotionKagManager` instances by slot.
     pub motion_kags: std::collections::BTreeMap<i32, AdvKag>,
     /// `SoundMgr` calls queued by scene logic for this frame.
@@ -330,6 +332,7 @@ impl Game {
             self.ambient = a;
             self.push_environment();
         }
+        self.ui_presses = [None; 2];
         self.level = Some(Level { name: name.to_owned(), scene, states: HashMap::new() });
         self.active = scenes::start(self, opener, name)?;
         crate::daily::update_status_viewers(self)?;
@@ -785,8 +788,16 @@ impl Game {
         let pressed = self.input.buttons_pressed & (b::MOUSE_LEFT | b::MOUSE_RIGHT) != 0;
         let down = self.input.buttons_down & b::MOUSE_LEFT != 0;
         self.click_on_ui = false;
+        let release_buttons = self.level.as_ref().is_some_and(|l| matches!(l.name.as_str(), "SceneTitle" | "SceneDaily"));
+        self.right_click = None;
+        let picked = crate::uiev::pick(&self.ui.hits, x, y);
         if pressed {
-            let picked = crate::uiev::pick(&self.ui.hits, x, y);
+            if let Some((scene, node, handle)) = self.input_focus {
+                if picked.map(|hit| (hit.scene, hit.node)) != Some((scene, node)) {
+                    host.release_text_input_session(client, handle)?;
+                    self.input_focus = None;
+                }
+            }
             let path = picked.and_then(|h| self.scene_mut(h.scene).map(|l| l.scene.path(h.node)));
             self.log.push(format!("press {x},{y}: {:?} {path:?}", picked.map(|h| (h.scene, h.node, h.order))));
             if let Some(hit) = picked {
@@ -794,23 +805,44 @@ impl Game {
                 let slider = crate::uiev::slider_of(&level.scene, hit.node);
                 let is_input = level.scene.script(hit.node, "UIInput").is_some();
                 let handlers = crate::uiev::click_handlers(&level.scene, &level.states, hit.node);
-                if let Some((_, _, h)) = self.input_focus.take() {
-                    host.release_text_input_session(client, h)?;
-                }
                 if let Some(s) = slider {
                     self.drag = Some((hit.scene, s));
-                } else if is_input {
+                } else if is_input && self.input_focus.is_none() {
                     let h = host.open_text_input_session(client, crysirror_core::service::TextInputSessionSpec { capture: true, ..Default::default() })?;
                     self.input_focus = Some((hit.scene, hit.node, h));
                 }
                 // UICamera.isFallThrough is false over any widget; the
                 // message box forwards its click (ClickMessageBox).
                 self.click_on_ui = !handlers.iter().any(|h| h == "MessageWindowMgr.ClickMessageBox");
-                for h in handlers {
-                    self.events.push((hit.scene, hit.node, h));
+                if !release_buttons {
+                    self.events.extend(handlers.into_iter().map(|h| (hit.scene, hit.node, h)));
                 }
             }
         }
+        if release_buttons {
+            let target = picked.map(|h| (h.scene,h.node));
+            for (index, bit) in [b::MOUSE_LEFT,b::MOUSE_RIGHT].into_iter().enumerate() {
+                let clicked = crate::uiev::release_click(&mut self.ui_presses[index], target, [x,y],
+                    self.input.buttons_pressed & bit != 0, self.input.buttons_down & bit != 0);
+                if let Some((si,node)) = clicked {
+                    if bit == b::MOUSE_RIGHT { self.right_click = Some((si, node)); }
+                    let level = self.scene_mut(si).context("clicked scene")?;
+                    let handlers = crate::uiev::click_handlers(&level.scene, &level.states, node);
+                    self.events.extend(handlers.into_iter().map(|h| (si,node,h)));
+                }
+            }
+        }
+        self.ui.button_visual = picked.filter(|_| release_buttons).and_then(|hit| {
+            let pressed = self.ui_presses.iter().flatten().any(|press| press.target == (hit.scene, hit.node));
+            let level = self.scene_mut(hit.scene)?;
+            let button = level.scene.script(hit.node, "UIButton")?;
+            let target = button.pptr("tweenTarget").filter(|reference| !reference.is_null())
+                .and_then(|reference| level.scene.find_ref(hit.node, reference.path_id)).unwrap_or(hit.node);
+            let color = button.floats(if pressed { "pressed" } else { "hover" })?;
+            let sprite = button.string(if pressed { "pressedSprite" } else { "hoverSprite" })
+                .filter(|s| !s.is_empty()).map(str::to_owned);
+            Some(crate::ngui::ButtonVisual { target: (hit.scene, target), color: color.try_into().ok()?, sprite })
+        });
         if !down {
             self.drag = None;
         }
@@ -861,6 +893,11 @@ impl Game {
                 for h in crate::uiev::delegates(&level.scene, f.array("onChange")) {
                     self.events.push((si, node, h));
                 }
+            }
+        }
+        if self.input.buttons_pressed & b::ESCAPE != 0 {
+            if let Some((_, _, h)) = self.input_focus.take() {
+                host.release_text_input_session(client,h)?;
             }
         }
         Ok(())
@@ -1039,6 +1076,8 @@ impl Cm3d2Vm {
             camera_offset: 0.,
             motion_kags: std::collections::BTreeMap::new(),
             events: Vec::new(),
+            ui_presses: [None; 2],
+            right_click: None,
             pending_textures: Vec::new(),
             drag: None,
             input_focus: None,
@@ -1296,6 +1335,17 @@ impl VmAdapter for Cm3d2Vm {
         serde_json::to_vec(&json!({
             "scene": g.level.as_ref().map(|l| l.name.clone()),
             "active": format!("{:?}", g.active),
+            "schedule": if g.level.as_ref().is_some_and(|level| level.name == "SceneDaily") {
+                g.adv.tjs.lock().ok().map(|mut tjs| {
+                    let state = &tjs.runtime.host_mut().state;
+                    json!({"day": state.player.days, "slots": (0..crate::params::SCHEDULE_SLOTS).map(|slot| {
+                        let maid = state.schedule_slot(slot)?;
+                        let status = state.maids.get(&maid)?;
+                        Some(json!({"maid":maid, "day_work":status.noon_work_id, "night_work":status.night_work_id,
+                            "day_work_plays":status.work_data.get(&status.noon_work_id).map_or(0, |work| work.play_count)}))
+                    }).collect::<Vec<_>>()})
+                })
+            } else { None },
             "kag": g.adv.position(),
             "kag_wait": g.adv.wait_state(),
             "yotogi": match &g.active { scenes::Active::Yotogi(y) => json!(y.diagnostics()), _ => json!(null) },
@@ -1323,6 +1373,7 @@ impl VmAdapter for Cm3d2Vm {
 
 #[cfg(feature = "runtime")]
 pub fn register(registry: &mut crysirror_runtime::AdapterRegistry) -> Result<()> {
+    registry.register("com3d2", Arc::new(crate::com3d2::Factory))?;
     registry.register(ENGINE_ID, Arc::new(Factory))
 }
 #[cfg(feature = "runtime")]

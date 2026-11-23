@@ -77,6 +77,20 @@ impl Game {
         Ok(())
     }
 
+    /// ConfigCtrl.SetButtonActive changes both buttons' default tint; hover is transient.
+    fn shortcut_button_colors(&mut self) -> Result<()> {
+        let on = self.config_node("System/SysButtonShowAlways/On")?;
+        let off = self.config_node("System/SysButtonShowAlways/Off")?;
+        let default = self.main.scene.script(on, "UISprite").and_then(|s| s.floats("mColor"))
+            .and_then(|c| <[f32; 4]>::try_from(c).ok()).context("shortcut button color")?;
+        for (node, selected) in [(on, self.cm_system.sys_button_show_always), (off, !self.cm_system.sys_button_show_always)] {
+            let mut tint = default;
+            if selected { tint[3] = 1.; }
+            self.main.states.entry(node).or_default().color = Some(tint);
+        }
+        Ok(())
+    }
+
     /// `ConfigMgr.OpenConfigPanel`: `LoadConfigData`, OK active, 0.5 s fade in.
     pub fn open_config(&mut self) -> Result<()> {
         if self.cm_system.open {
@@ -91,6 +105,15 @@ impl Game {
         let ok = self.config_node("OK")?;
         self.main.states.entry(ok).or_default().click = Some("ConfigMgr.CloseConfigPanel".into());
         self.main.states.entry(ok).or_default().active = Some(true);
+        // LoadConfigData sets each UIPopupList value, whose serialized
+        // onChange calls UILabel.SetCurrentSelection on the child Label.
+        self.shortcut_button_colors()?;
+        let resolution = format!("{}x{}", crate::ngui::WIDTH, crate::ngui::HEIGHT);
+        for (name, value) in [("Resolution", resolution.as_str()), ("AntiAlias", "X2"),
+            ("ShadowQuality", "Medium"), ("TextureQuality", "High"), ("CaptureMagnification", "X1")] {
+            let label = self.config_node(&format!("Screen/{name}/PopupList/Label"))?;
+            self.main.states.entry(label).or_default().text = Some(value.to_owned());
+        }
         let v = self.sound.volumes;
         let values = [
             self.man_alpha as f32,
@@ -154,8 +177,10 @@ impl Game {
             "ConfigMgr.OnVoiceVolumeChange" => self.sound_ops.push(crate::sound::SoundOp::Volume { kind: Some(Kind::Voice), value: num }),
             "ConfigMgr.OnSoundEffectVolumeChange" => self.sound_ops.push(crate::sound::SoundOp::Volume { kind: Some(Kind::Se), value: num }),
             "ConfigMgr.OnSoundEnvironmentVolumeChange" => self.sound_ops.push(crate::sound::SoundOp::Volume { kind: Some(Kind::Env), value: num }),
-            "ConfigMgr.OnSysButtonShowAlwaysEnabled" => self.cm_system.sys_button_show_always = true,
-            "ConfigMgr.OnSysButtonShowAlwaysDisabled" => self.cm_system.sys_button_show_always = false,
+            "ConfigMgr.OnSysButtonShowAlwaysEnabled" | "ConfigMgr.OnSysButtonShowAlwaysDisabled" => {
+                self.cm_system.sys_button_show_always = handler == "ConfigMgr.OnSysButtonShowAlwaysEnabled";
+                self.shortcut_button_colors()?;
+            }
             other => self.log.push(format!("{other}: no host setting in this port (SATD-cm3d2-game-logic)")),
         }
         Ok(())

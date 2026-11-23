@@ -8,7 +8,7 @@ use jni::{
 // Application context (not Activity) is retained for this library's process lifetime.
 // CPAL's device enumeration uses ndk-context even with a Java-owned SurfaceView.
 static CONTEXT: Mutex<Option<jni::objects::GlobalRef>> = Mutex::new(None);
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_org_crysirror_player_Native_initialize(
     mut env: JNIEnv,
     _class: JClass,
@@ -67,7 +67,7 @@ fn reply(env: &mut JNIEnv, ptr: *mut c_char) -> jstring {
         .map(|s| s.into_raw())
         .unwrap_or(std::ptr::null_mut())
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_org_crysirror_player_Native_probe(
     mut env: JNIEnv,
     _class: JClass,
@@ -79,7 +79,7 @@ pub extern "system" fn Java_org_crysirror_player_Native_probe(
     });
     reply(&mut env, ptr)
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_org_crysirror_player_Native_start(
     mut env: JNIEnv,
     _class: JClass,
@@ -104,7 +104,7 @@ pub extern "system" fn Java_org_crysirror_player_Native_start(
     });
     reply(&mut env, ptr)
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_org_crysirror_player_Native_command(
     mut env: JNIEnv,
     _class: JClass,
@@ -120,7 +120,7 @@ pub extern "system" fn Java_org_crysirror_player_Native_command(
     });
     reply(&mut env, ptr)
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_org_crysirror_player_Native_attach(
     mut env: JNIEnv,
     _class: JClass,
@@ -139,7 +139,7 @@ pub extern "system" fn Java_org_crysirror_player_Native_attach(
     });
     reply(&mut env, ptr)
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_org_crysirror_player_Native_detach(
     mut env: JNIEnv,
     _class: JClass,
@@ -149,7 +149,7 @@ pub extern "system" fn Java_org_crysirror_player_Native_detach(
     let ptr = crysirror_detach(id as u64, generation as u64);
     reply(&mut env, ptr)
 }
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_org_crysirror_player_Native_destroy(
     _env: JNIEnv,
     _class: JClass,

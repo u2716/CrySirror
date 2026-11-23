@@ -182,6 +182,7 @@ pub fn expression_list(unity: &mut Unity, personality: i64) -> Result<std::colle
 /// `EyeLookCalc.EyeTypeState`: the bending limits of one look pattern.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EyeTypeState {
+    pub look_type: i64,
     pub up: f32,
     pub down: f32,
     pub min: f32,
@@ -199,16 +200,14 @@ pub fn eye_type_states(unity: &mut Unity) -> Result<Vec<EyeTypeState>> {
     let root = *all.by_game_object.get(&go).context("head bone root")?;
     let scene = all.subtree(root);
     let states = scene.nodes.iter().flat_map(|n| &n.components).find_map(|c| c.fields.array("EyeTypeStates")).context("EyeLookCalc")?;
-    Ok(states
+    states
         .iter()
-        .filter_map(|v| match v {
-            Value::Struct(f) => {
-                let g = |k: &str| f.float(k).unwrap_or(0.) as f32;
-                Some(EyeTypeState { up: g("UpBendingAngle"), down: g("DownBendingAngle"), min: g("MinBendingAngle"), max: g("MaxBendingAngle"), h_limit: g("HAngleLimit"), v_limit: g("VAngleLimit") })
-            }
-            _ => None,
+        .map(|v| {
+            let Value::Struct(f) = v else { anyhow::bail!("invalid EyeTypeStates entry") };
+            let g = |k: &str| f.float(k).map(|x| x as f32).with_context(|| format!("missing eye state field {k}"));
+            Ok(EyeTypeState { look_type: f.int("LookType").context("eye LookType")?, up: g("UpBendingAngle")?, down: g("DownBendingAngle")?, min: g("MinBendingAngle")?, max: g("MaxBendingAngle")?, h_limit: g("HAngleLimit")?, v_limit: g("VAngleLimit")? })
         })
-        .collect())
+        .collect()
 }
 
 /// The rest eye positions and forwards (`EyeTargetL`/`EyeTargetR`, the
@@ -262,7 +261,7 @@ pub fn eye_uv_offsets(offsets: &[[f32; 2]; 2]) -> BTreeMap<String, [f32; 2]> {
 mod eye_tests {
     use super::*;
 
-    const STATE: EyeTypeState = EyeTypeState { up: -66., down: 25., min: -21.5, max: 25.5, h_limit: 110., v_limit: 80. };
+    const STATE: EyeTypeState = EyeTypeState { look_type: 1, up: -66., down: 25., min: -21.5, max: 25.5, h_limit: 110., v_limit: 80. };
 
     #[test]
     fn straight_look_is_neutral_and_sides_saturate() {

@@ -31,6 +31,7 @@ pub mod timeline;
 pub mod typetree;
 pub mod ugui;
 pub mod unity6;
+pub mod navmesh;
 pub mod world6;
 
 use anyhow::{bail, ensure, Context, Result};
@@ -81,7 +82,7 @@ impl PPtr {
 pub struct SerializedFile {
     pub unity_version: String,
     pub platform: i32,
-    /// Serialized file format (9 for Unity 4, 22 for Unity 2020+).
+    /// Serialized file format (9 for Unity 4, 17 for Unity 5.6, 22 for Unity 2020+).
     pub format: u32,
     pub types: Vec<SerializedType>,
     /// Format ≥ 20 reference types (`[SerializeReference]` classes).
@@ -114,6 +115,14 @@ impl SerializedFile {
         let format = be(&header, 8);
         match format {
             9 => Self::open_9(source, length, &header),
+            17 => {
+                let (size, offset) = (be(&header, 0) as u64, be(&header, 12) as u64);
+                ensure!(header[16] == 0 && be(&header, 4) as u64 == length, "invalid Unity 17 header");
+                ensure!(size <= MAX_METADATA_BYTES && 20 + size <= offset && offset <= length, "Unity 17 metadata extent");
+                let mut meta = vec![0; size as usize];
+                read_exact(source.as_ref(), 20, &mut meta)?;
+                Self::metadata(source, length, offset, &meta, format)
+            }
             22 => {
                 read_exact(source.as_ref(), 0, &mut header)?;
                 let be64 = |at: usize| u64::from_be_bytes(header[at..at + 8].try_into().unwrap());
@@ -124,7 +133,7 @@ impl SerializedFile {
                 ensure!(data_offset <= length, "Unity data offset");
                 let mut meta = vec![0u8; metadata_size as usize];
                 read_exact(source.as_ref(), 48, &mut meta)?;
-                Self::metadata_22(source, length, data_offset, &meta)
+                Self::metadata(source, length, data_offset, &meta, format)
             }
             other => bail!("unsupported Unity serialized format {other}"),
         }
@@ -132,8 +141,7 @@ impl SerializedFile {
 
     /// Format 22 metadata (Unity 2020.1+): type tree types, 64-bit object
     /// offsets, script types, externals, reference types, user information.
-    fn metadata_22(source: Arc<dyn AssetReader>, length: u64, data_offset: u64, meta: &[u8]) -> Result<Self> {
-        const FORMAT: u32 = 22;
+    fn metadata(source: Arc<dyn AssetReader>, length: u64, data_offset: u64, meta: &[u8], format: u32) -> Result<Self> {
         let mut r = Reader::new(meta);
         let unity_version = r.cstring()?;
         let platform = r.i32()?;
@@ -141,7 +149,7 @@ impl SerializedFile {
         let type_count = r.count(23)?;
         let mut types = Vec::with_capacity(type_count);
         for _ in 0..type_count {
-            types.push(read_type(&mut r, type_trees, false)?);
+            types.push(read_type(&mut r, type_trees, format)?);
         }
         let count = r.count(20)?;
         ensure!(count <= MAX_OBJECTS, "Unity object limit");
@@ -152,11 +160,12 @@ impl SerializedFile {
             // (the metadata itself starts 4-aligned at 48).
             r.align()?;
             let path_id = r.i64()?;
-            let offset = r.i64()? as u64 + data_offset;
+            let relative = if format == 17 { u64::from(r.u32()?) } else { u64::try_from(r.i64()?).context("negative Unity object offset")? };
+            let offset = data_offset.checked_add(relative).context("Unity object offset overflow")?;
             let size = r.u32()?;
             let type_index = r.i32()?;
             let ti = usize::try_from(type_index).ok().filter(|t| *t < types.len()).with_context(|| format!("Unity object {path_id} type index {type_index}"))?;
-            ensure!(u64::from(size) <= MAX_OBJECT_BYTES && offset + u64::from(size) <= length, "Unity object {path_id} outside the file");
+            ensure!(u64::from(size) <= MAX_OBJECT_BYTES && offset <= length && u64::from(size) <= length - offset, "Unity object {path_id} outside the file");
             ensure!(by_path.insert(path_id, i).is_none(), "duplicate Unity path id {path_id}");
             objects.push(ObjectInfo { path_id, offset, size, type_id: type_index, class_id: types[ti].class_id, type_index: Some(ti) });
         }
@@ -174,7 +183,7 @@ impl SerializedFile {
             let _kind = r.i32()?;
             externals.push(r.cstring()?);
         }
-        let ref_count = r.count(23)?;
+        let ref_count = if format == 17 { 0 } else { r.count(23)? };
         let mut ref_types = Vec::with_capacity(ref_count);
         for _ in 0..ref_count {
             let (t, names) = read_ref_type(&mut r, type_trees)?;
@@ -182,7 +191,7 @@ impl SerializedFile {
                 ref_types.push(typetree::RefType { class, namespace, assembly, tree });
             }
         }
-        Ok(Self { unity_version, platform, format: FORMAT, types, ref_types, objects, externals, by_path, source })
+        Ok(Self { unity_version, platform, format, types, ref_types, objects, externals, by_path, source })
     }
 
     fn open_9(source: Arc<dyn AssetReader>, length: u64, header: &[u8]) -> Result<Self> {
@@ -216,7 +225,7 @@ impl SerializedFile {
             let class_id = i32::from(r.i16()?);
             let _destroyed = r.i16()?;
             ensure!(
-                u64::from(size) <= MAX_OBJECT_BYTES && offset + u64::from(size) <= length,
+                u64::from(size) <= MAX_OBJECT_BYTES && offset <= length && u64::from(size) <= length - offset,
                 "Unity object {path_id} outside the file"
             );
             ensure!(by_path.insert(path_id, i).is_none(), "duplicate Unity path id {path_id}");
@@ -334,22 +343,16 @@ impl TreeRegistry {
 }
 
 /// A format-22 `SerializedType` (reference types carry class names).
-fn read_type(r: &mut Reader, type_trees: bool, is_ref: bool) -> Result<SerializedType> {
-    debug_assert!(!is_ref);
+fn read_type(r: &mut Reader, type_trees: bool, format: u32) -> Result<SerializedType> {
     let class_id = r.i32()?;
     let _stripped = r.u8()?;
     let script_type_index = r.i16()?;
-    let mut script_id = None;
-    if (is_ref && script_type_index >= 0) || class_id == class_id::MONO_BEHAVIOUR {
-        script_id = Some(r.take(16)?.try_into()?);
-    }
+    let script_id = if class_id == class_id::MONO_BEHAVIOUR { Some(r.take(16)?.try_into()?) } else { None };
     let _old_type_hash = r.take(16)?;
     let mut tree = None;
     if type_trees {
-        tree = Some(std::sync::Arc::new(typetree::TypeTree::read_blob(r, 22)?));
-        if is_ref {
-            unreachable!("reference types read through read_ref_type");
-        } else {
+        tree = Some(std::sync::Arc::new(typetree::TypeTree::read_blob(r, format)?));
+        if format >= 21 {
             let deps = r.count(4)?;
             r.take(deps * 4)?;
         }

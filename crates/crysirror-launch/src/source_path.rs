@@ -278,6 +278,10 @@ pub struct SourceFile {
     position: u64,
 }
 impl SourceFile {
+    pub(crate) fn into_reader(self) -> Arc<dyn AssetReader> {
+        self.source
+    }
+
     pub fn open(path: impl AsRef<SourcePath>) -> io::Result<Self> {
         let path = path.as_ref();
         let source: Arc<dyn AssetReader> = if let Some(remote) = &path.remote {

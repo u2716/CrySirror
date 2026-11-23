@@ -53,6 +53,58 @@ impl AlphaMode {
         }
     }
 }
+/// Base shade of the `ToonShading::shadow_light` model.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToonShadeKind {
+    /// HSV of the linear base: hue kept, saturation `√S · min(10√V, 1)`,
+    /// value `0.5√V + 0.5`.
+    #[default]
+    BaseHsv,
+    /// `mix((0.4508, 0.6061, 1), base, max(√S · min(10V, 1), 1 − V))`:
+    /// pale colours shade toward blue, saturated ones keep their colour.
+    Cloth,
+    /// `shade_color`.
+    Fixed,
+}
+
+/// Surface-line composition from raw mask channels.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ToonLineModel {
+    /// R gates, G covers; colour range capped to 0.95.
+    #[default]
+    Gated,
+    /// R tints the lit surface with nose_color, max(G,B) covers the face
+    /// line, and A attenuates its view-dependent shadow tint.
+    Face { nose_color: [f32; 4] },
+    /// R modulates edge width, G is the painted detail line. The base
+    /// alpha and its eight neighbours determine distance-dependent coverage.
+    Cloth { width: f32, edge_alpha: f32, mip_bias: f32, alpha_dither: f32, opacity: f32, clip: f32, clip_force: f32 },
+}
+impl ToonLineModel {
+    pub fn uniforms(self) -> [[f32; 4]; 2] {
+        match self {
+            Self::Gated => [[0.; 4]; 2],
+            Self::Face { nose_color } => [[1., 0., 0., 0.], nose_color],
+            Self::Cloth { width, edge_alpha, mip_bias, alpha_dither, opacity, clip, clip_force } =>
+                [[2., width, edge_alpha, mip_bias], [alpha_dither, opacity, clip, clip_force]],
+        }
+    }
+    fn validate(self) -> Result<()> {
+        let unit = |v: f32| (0. ..=1.).contains(&v);
+        let valid = match self {
+            Self::Gated => true,
+            Self::Face { nose_color } => nose_color.into_iter().all(unit),
+            Self::Cloth { width, edge_alpha, mip_bias, alpha_dither, opacity, clip, clip_force } =>
+                (0. ..=8.).contains(&width) && (-16. ..=16.).contains(&mip_bias)
+                    && [edge_alpha, alpha_dither, opacity, clip, clip_force].into_iter().all(unit),
+        };
+        ensure!(valid, "invalid toon line parameter");
+        Ok(())
+    }
+}
+
 /// Cel ("toon") shading, evaluated on display-referred (gamma) values like
 /// the forward toon shaders of Unity-era games:
 ///
@@ -71,21 +123,6 @@ impl AlphaMode {
 /// sampled raw (no sRGB decode). Toon materials bind these three textures in
 /// place of the metallic-roughness, occlusion and specular slots, which must
 /// be empty, and take no shader effect.
-/// Base shade of the `ToonShading::shadow_light` model.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ToonShadeKind {
-    /// HSV of the linear base: hue kept, saturation `√S · min(10√V, 1)`,
-    /// value `0.5√V + 0.5`.
-    #[default]
-    BaseHsv,
-    /// `mix((0.4508, 0.6061, 1), base, max(√S · min(10V, 1), 1 − V))`:
-    /// pale colours shade toward blue, saturated ones keep their colour.
-    Cloth,
-    /// `shade_color`.
-    Fixed,
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ToonShading<T = String> {
@@ -149,6 +186,15 @@ pub struct ToonShading<T = String> {
     pub shade_kind: ToonShadeKind,
     /// Linear shade colour of `ToonShadeKind::Fixed`.
     pub shade_color: [f32; 3],
+    /// Linear override RGB and blend weight for the completed shadow tone,
+    /// after ambient/key grading and before the light ramp. Zero weight keeps the grade.
+    pub shadow_tone_override: [f32; 4],
+    /// Linear RGBA mask interpreted according to `line_model`. The default
+    /// uses R as a gate and G as coverage over the lit surface.
+    pub surface_line_texture: Option<T>,
+    /// Selects the mask channels and whether the line affects alpha coverage.
+    pub line_model: ToonLineModel,
+    pub line_color: [f32; 4],
     pub shininess: f32,
     pub highlight_rate: f32,
     pub highlight_power: f32,
@@ -181,6 +227,10 @@ impl<T> Default for ToonShading<T> {
             shadow_light: [0.; 4],
             shade_kind: ToonShadeKind::BaseHsv,
             shade_color: [0.5; 3],
+            shadow_tone_override: [0.; 4],
+            surface_line_texture: None,
+            line_model: ToonLineModel::default(),
+            line_color: [0.; 4],
             shininess: 0.,
             highlight_rate: 0.,
             highlight_power: 1.,
@@ -190,8 +240,8 @@ impl<T> Default for ToonShading<T> {
     }
 }
 impl<T> ToonShading<T> {
-    pub fn textures(&self) -> [Option<&T>; 6] {
-        [self.lookup_texture.as_ref(), self.shadow_texture.as_ref(), self.highlight_texture.as_ref(), self.blend_texture.as_ref(), self.liquid_blobs.as_ref(), self.liquid_regions.as_ref()]
+    pub fn textures(&self) -> [Option<&T>; 7] {
+        [self.lookup_texture.as_ref(), self.shadow_texture.as_ref(), self.highlight_texture.as_ref(), self.blend_texture.as_ref(), self.liquid_blobs.as_ref(), self.liquid_regions.as_ref(), self.surface_line_texture.as_ref()]
     }
     pub fn validate(&self) -> Result<()> {
         let range = |x: f32, a: f32, b: f32| x.is_finite() && (a..=b).contains(&x);
@@ -207,16 +257,32 @@ impl<T> ToonShading<T> {
                 && range(self.light_limit, 0., 16.)
                 && self.shadow_rim.iter().all(|x| range(*x, 0., 1.))
                 && self.shadow_light.iter().all(|x| range(*x, 0., 1.))
+                && self.shadow_tone_override.iter().all(|x| range(*x, 0., 1.))
+                && self.line_color.iter().all(|x| range(*x, 0., 1.))
                 && self.shade_color.iter().all(|x| range(*x, 0., 1.))
                 && self.liquid_tiling.iter().all(|x| range(*x, -1000., 1000.))
                 && self.liquid_color.iter().all(|x| range(*x, 0., 16.)),
             "toon shading parameter range"
         );
+        self.line_model.validate()?;
+        ensure!(matches!(self.line_model, ToonLineModel::Gated) || self.surface_line_texture.is_some(), "toon line model needs a texture");
         ensure!(!self.color_table || self.lookup_texture.is_some(), "toon colour table needs the lookup texture");
         Ok(())
     }
 }
 
+/// Authored draw order and Forward depth state. Queues through 2500 use
+/// the geometry stage and depth/normal prepass. Higher values draw in order
+/// in the transparent stage. Both submit to raster shadow maps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RasterQueue {
+    pub order: u16,
+    pub depth_write: bool,
+    /// Cull front-facing fragments, including in raster shadow draws.
+    #[serde(default)]
+    pub cull_front: bool,
+}
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Material<T = String> {
@@ -240,6 +306,8 @@ pub struct Material<T = String> {
     pub specular_factor: f32,
     /// Opaque, mask (cutout) or one of the transparent blend modes.
     pub alpha_mode: AlphaMode,
+    /// Explicit raster queue and forward depth state. Omission keeps the alpha mode's default passes.
+    pub raster_queue: Option<RasterQueue>,
     /// Alpha threshold for `mask`.
     pub alpha_cutoff: f32,
     /// Disable back-face culling.
@@ -289,6 +357,7 @@ impl<T> Default for Material<T> {
             occlusion_strength: 1.,
             specular_factor: 1.,
             alpha_mode: AlphaMode::Opaque,
+            raster_queue: None,
             alpha_cutoff: 0.5,
             double_sided: false,
             unlit: false,
@@ -326,8 +395,12 @@ impl<T> Material<T> {
         self.textures().into_iter().chain(toon).flatten().collect()
     }
     pub fn validate(&self) -> Result<()> {
+        if let Some(queue) = self.raster_queue {
+            ensure!(queue.order <= 5000 && (self.alpha_mode == AlphaMode::Blend || (queue.order <= 2500 && !self.alpha_mode.transparent())), "invalid material raster queue");
+        }
         if let Some(t) = &self.toon {
             t.validate()?;
+            ensure!(t.surface_line_texture.is_none() || self.normal_texture.is_none(), "toon surface lines require the free normal texture slot");
             ensure!(
                 self.effect.is_none()
                     && !self.unlit
@@ -347,6 +420,14 @@ impl<T> Material<T> {
                 crate::effect::ShaderEffect::Dissolve { .. } => ensure!(
                     self.alpha_mode != AlphaMode::Opaque,
                     "dissolve requires mask or transparency"
+                ),
+                crate::effect::ShaderEffect::DirectionalLightmap { .. } => ensure!(
+                    !self.unlit && self.occlusion_texture.is_some() && self.metallic_roughness_texture.is_some(),
+                    "directional lightmaps require a lit material with radiance and direction textures"
+                ),
+                crate::effect::ShaderEffect::NormalShell { .. } => ensure!(
+                    self.unlit && self.double_sided && self.alpha_mode == AlphaMode::Opaque,
+                    "normal shells require opaque double-sided drawing with the shell lighting model"
                 ),
                 crate::effect::ShaderEffect::BlockNoise { .. } => ensure!(self.unlit, "block noise requires an unlit material"),
                 _ => {}

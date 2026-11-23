@@ -12,6 +12,7 @@ pub mod chara;
 pub mod charaselect;
 pub mod commands;
 pub mod config;
+pub mod custom;
 pub mod face;
 pub mod h;
 pub mod hui;
@@ -23,6 +24,7 @@ pub mod memory;
 pub mod oil;
 pub mod params;
 pub mod save;
+pub mod siru;
 pub mod sm;
 pub mod saveload;
 pub mod scenes;
@@ -31,6 +33,8 @@ pub mod tables;
 pub mod talk;
 pub mod ui;
 pub mod unity;
+mod yuragi;
+pub mod watergun;
 
 pub use adapter::{AmanatsuVm, Config, ENGINE_ID};
 #[cfg(feature = "runtime")]

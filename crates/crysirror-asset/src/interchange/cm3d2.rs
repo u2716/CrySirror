@@ -209,6 +209,8 @@ pub struct Bone {
     pub name: String,
     /// Creates the `<name>_SCL_` child that skinning binds to.
     pub scale_node: bool,
+    /// Optional authored local scale, introduced in mesh version 2001.
+    pub scale: [f32; 3],
     pub parent: Option<usize>,
     pub translation: [f32; 3],
     pub rotation: [f32; 4],
@@ -275,6 +277,7 @@ impl Mesh {
             bones.push(Bone {
                 name: r.string()?,
                 scale_node: r.bool()?,
+                scale: [1.; 3],
                 parent: None,
                 translation: [0.; 3],
                 rotation: [0., 0., 0., 1.],
@@ -292,6 +295,9 @@ impl Mesh {
         for bone in &mut bones {
             bone.translation = r.f32s()?;
             bone.rotation = r.f32s()?;
+            if version >= 2001 && r.bool()? {
+                bone.scale = r.f32s()?;
+            }
         }
         // Reject parent cycles before anything walks the hierarchy.
         for start in 0..count {
@@ -588,6 +594,10 @@ pub fn toon_parameters(
         shadow_light: [0.; 4],
         shade_kind: Default::default(),
         shade_color: [0.5; 3],
+        shadow_tone_override: [0.; 4],
+        surface_line_texture: None,
+        line_model: Default::default(),
+        line_color: [0.; 4],
         shininess: f("_Shininess", 0.).clamp(0., 16.),
         highlight_rate: if hair { f("_HiRate", 0.).clamp(0., 16.) } else { 0. },
         highlight_power: if hair { f("_HiPow", 0.).clamp(0., 256.) } else { 1. },
@@ -888,6 +898,7 @@ pub fn convert_parsed(
         .map(|b| glb::Node {
             translation: mirror_point(b.translation),
             rotation: mirror_quat(b.rotation),
+            scale: b.scale,
             ..glb::Node::named(&b.name)
         })
         .collect();

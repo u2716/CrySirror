@@ -279,6 +279,35 @@ pub struct Controller {
 }
 
 impl Controller {
+    /// Direct two-clip linear blend nodes driven by the named controller parameter.
+    /// Returned clip slots refer to the controller's own motion clips.
+    pub fn linear_clip_pairs(f: &Fields, parameter: &str) -> Vec<[usize; 2]> {
+        let Some(controller) = f.fields("m_Controller") else { return Vec::new() };
+        let id = crc32(parameter);
+        let mut pairs = Vec::new();
+        for state in items(controller, "m_StateMachineArray").flat_map(|m| items(m, "m_StateConstantArray")) {
+            for tree in items(state, "m_BlendTreeConstantArray") {
+                let nodes: Vec<_> = items(tree, "m_NodeArray").collect();
+                for node in &nodes {
+                    if node.int("m_BlendType") != Some(0) || node.int("m_BlendEventID") != Some(i64::from(id)) { continue; }
+                    let thresholds = node.fields("m_Blend1dData").map(|v| v.fields("data").unwrap_or(v)).and_then(|v| v.floats("m_ChildThresholdArray"));
+                    if thresholds != Some(&[0., 1.][..]) { continue; }
+                    let children = u32s(node, "m_ChildIndices");
+                    let [a, b] = children.as_slice() else { continue };
+                    let clip = |child: u32| {
+                        let leaf = nodes.get(child as usize)?;
+                        if !leaf.array("m_ChildIndices")?.is_empty() { return None; }
+                        usize::try_from(leaf.int("m_ClipID")?).ok().filter(|&n| n < u32::MAX as usize)
+                    };
+                    if let (Some(a), Some(b)) = (clip(*a), clip(*b)) { pairs.push([a,b]); }
+                }
+            }
+        }
+        pairs.sort_unstable();
+        pairs.dedup();
+        pairs
+    }
+
     pub fn decode(f: &Fields) -> Result<Self> {
         let c = f.fields("m_Controller").context("m_Controller")?;
         let machines: Vec<&Fields> = items(c, "m_StateMachineArray").collect();

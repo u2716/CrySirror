@@ -29,7 +29,10 @@ fn root() -> Option<PathBuf> {
 }
 
 fn open(name: &str, cx: &DecodeContext) -> Box<dyn Archive> {
-    let path = root().unwrap().join("GameData").join(name);
+    open_path(root().unwrap().join("GameData").join(name), cx)
+}
+
+fn open_path(path: PathBuf, cx: &DecodeContext) -> Box<dyn Archive> {
     let mut registry = FormatRegistry::default();
     crysirror_formats_arc::register(&mut registry).unwrap();
     let reader = Arc::new(File(Mutex::new(std::fs::File::open(&path).unwrap())));
@@ -402,4 +405,144 @@ fn game_tables_build_and_a_new_maid_initializes() {
     assert!(mp.st.maid_class[0].is_have);
     assert!(mp.st.skill_data.len() > 0);
     eprintln!("skills at start {} classes {:?}", mp.st.skill_data.len(), mp.st.current_maid_class);
+}
+
+/// Boot the installed title and drive its actual colliders, with writable state outside the install.
+#[test]
+#[cfg(feature = "runtime")]
+#[ignore = "needs CM3D2_ROOT"]
+fn title_settings_and_load_cancel() {
+    use crysirror_core::service::{buttons, InputFrame};
+    use crysirror_runtime::{AdapterRegistry, Runtime};
+    use serde_json::{json, Value};
+
+    fn state(rt: &Runtime) -> Value { rt.inspect()["sessions"][0]["native"].clone() }
+    fn hit(rt: &Runtime, path: &str) -> Option<[i32; 2]> {
+        let state = state(rt);
+        let matches = state["hits"].as_array()?.iter().find(|h| h["path"].as_str().is_some_and(|s| s.ends_with(path)))?;
+        let rect = matches["rect"].as_array()?;
+        Some([((rect[0].as_f64()? + rect[2].as_f64()?) * 0.5) as i32,
+              ((rect[1].as_f64()? + rect[3].as_f64()?) * 0.5) as i32])
+    }
+    fn tick(rt: &mut Runtime, position: [i32; 2], pressed: u64, held: u64) {
+        rt.tick(16, InputFrame {pointer_x: position[0], pointer_y: position[1], buttons_pressed: pressed, buttons_down: held}).unwrap();
+    }
+    fn idle(rt: &mut Runtime, count: usize) {
+        for _ in 0..count { tick(rt, [960,540], 0, 0); }
+    }
+
+    let install = root().expect("CM3D2_ROOT");
+    let mut names: Vec<_> = std::fs::read_dir(install.join("GameData")).unwrap().flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|name| name.ends_with(".arc")).collect();
+    names.sort();
+    let mounts: Vec<_> = names.iter().map(|name| format!("__cm3d2/{}", name.trim_end_matches(".arc"))).collect();
+    let project = serde_json::from_value(json!({"schema":2, "name":"cm3d2-ui", "content_revision":"1",
+        "canvas":[1920,1080], "assets":"game","clients":[{"name":"game","game":"local-installed",
+        "adapter":"cm3d2","config":{"data_dir":"CM3D2x64_Data","archives":mounts}}]})).unwrap();
+    let mut registry = AdapterRegistry::default();
+    crysirror_cm3d2::register(&mut registry).unwrap();
+    let writable = tempfile::tempdir().unwrap();
+    let mut rt = Runtime::with_asset_root(project, &install, writable.path(), registry).unwrap();
+    for (name, mount) in names.iter().zip(&mounts) {
+        let mut cx = context();
+        cx.limits.max_entry_size = 1024 * 1024 * 1024;
+        let archive = crysirror_resource::ArchiveMount::new(open(name, &cx), cx).unwrap();
+        rt.mount_provider(ClientId(1), mount, Arc::new(archive)).unwrap();
+    }
+    for frame in 0..640 {
+        tick(&mut rt, [960,540], if frame == 90 || frame == 260 { buttons::MOUSE_LEFT } else {0}, 0);
+    }
+    let blank = [960, 540];
+    for (key, selected) in [(buttons::UP, 3), (buttons::DOWN, 0), (buttons::DOWN, 1),
+                            (buttons::DOWN, 2), (buttons::DOWN, 3)] {
+        tick(&mut rt, blank, key, key);
+        for _ in 0..10 { tick(&mut rt, blank, 0, key); }
+        assert!(state(&rt)["active"].as_str().unwrap().contains(&format!("active: {selected},")));
+        tick(&mut rt, blank, 0, 0);
+    }
+    // The physical cursor can retake focus, and keyboard focus survives a stationary cursor.
+    let start = hit(&rt, "/StartGroup/Start").unwrap();
+    tick(&mut rt, start, 0, 0);
+    assert!(state(&rt)["active"].as_str().unwrap().contains("active: 0,"));
+    tick(&mut rt, start, buttons::DOWN, 0);
+    tick(&mut rt, start, 0, 0);
+    assert!(state(&rt)["active"].as_str().unwrap().contains("active: 1,"));
+    tick(&mut rt, [start[0]+1, start[1]], 0, 0);
+    assert!(state(&rt)["active"].as_str().unwrap().contains("active: 0,"));
+    let config = hit(&rt, "/ButtonGroup/ConfigGroup/Config").expect("title Config");
+    tick(&mut rt, config, 0, 0);
+    assert!(state(&rt)["active"].as_str().unwrap().contains("active: 2"));
+    let ok = "/ConfigPanel/OK";
+    tick(&mut rt, config, buttons::MOUSE_LEFT, buttons::MOUSE_LEFT);
+    assert!(hit(&rt, ok).is_none(), "press alone opened settings");
+    tick(&mut rt, [960,540], 0, buttons::MOUSE_LEFT);
+    tick(&mut rt, config, 0, 0);
+    assert!(hit(&rt, ok).is_none(), "drag activated settings");
+    tick(&mut rt, config, buttons::MOUSE_LEFT, buttons::MOUSE_LEFT);
+    tick(&mut rt, config, 0, 0);
+    idle(&mut rt, 40);
+    let close = hit(&rt, ok).expect("settings OK");
+    tick(&mut rt, blank, buttons::DOWN | buttons::ENTER, 0);
+    assert!(state(&rt)["active"].as_str().unwrap().contains("active: 2,"));
+    assert_eq!(hit(&rt, ok), Some(close));
+    // ConfigPanel/BG overlaps the title Start collider on this original layout.
+    let behind_settings = hit(&rt, "/StartGroup/Start").expect("covered Start");
+    tick(&mut rt, behind_settings, buttons::MOUSE_LEFT, 0);
+    idle(&mut rt, 5);
+    assert!(state(&rt)["active"].as_str().unwrap().contains("closing: None"));
+    assert_eq!(hit(&rt, ok), Some(close));
+    tick(&mut rt, close, buttons::ESCAPE, buttons::ESCAPE);
+    tick(&mut rt, close, 0, 0);
+    assert_eq!(hit(&rt, ok), Some(close));
+    tick(&mut rt, close, buttons::MOUSE_LEFT, 0);
+    idle(&mut rt, 65);
+    assert!(hit(&rt, ok).is_none());
+    let load = hit(&rt, "/ButtonGroup/ContinueGroup/Continue").expect("title Continue");
+    tick(&mut rt, load, 0, 0);
+    tick(&mut rt, load, buttons::ENTER, buttons::ENTER);
+    tick(&mut rt, load, 0, 0);
+    idle(&mut rt, 100);
+    let cancel = hit(&rt, "/SaveAndLoadPanel/Cancel").expect("load Cancel");
+    tick(&mut rt, cancel, buttons::MOUSE_LEFT, 0);
+    idle(&mut rt, 100);
+    assert!(hit(&rt, "/SaveAndLoadPanel/Cancel").is_none());
+    assert!(state(&rt)["active"].as_str().unwrap().contains("panel: Shown"));
+}
+
+#[test]
+#[ignore = "needs COM3D2_ROOT"]
+fn com3d2_parts_use_shared_kiss_formats() {
+    use crysirror_asset::interchange::cm3d2::{Animation, Material, Mesh};
+    let root = PathBuf::from(std::env::var_os("COM3D2_ROOT").expect("COM3D2_ROOT"));
+    let cx = context();
+    let parts = open_path(root.join("GameData/parts.arc"), &cx);
+    let names = by_name(parts.as_ref());
+    let read = |name: &str| {
+        read_all(parts.open(names[name], &cx).unwrap().as_ref(), cx.limits.max_entry_size).unwrap()
+    };
+    let mesh = Mesh::parse(&read("dress237_shoe.model")).unwrap();
+    assert_eq!(mesh.name, "dress237_shoe");
+    assert!(!mesh.positions.is_empty() && !mesh.skin_bones.is_empty());
+    let material = Material::parse_file(&read("dress237_z2_shoe.mate")).unwrap();
+    assert!(!material.shader.is_empty() && !material.properties.is_empty());
+    let menu = crysirror_cm3d2::menu::MenuFile::parse(&read("dress237_accsenaka_i_.menu")).unwrap();
+    assert_eq!(menu.first("icons"), Some("Dress237_accSenaka_I_.tex"));
+    let motion = Animation::parse(&read("accsenaka004.anm")).unwrap();
+    assert!(motion.tracks.iter().any(|track| track.curves.iter().flatten().any(|c| !c.keys.is_empty())));
+    for archive_name in ["parts.arc", "parts2.arc"] {
+        let archive = open_path(root.join("GameData").join(archive_name), &cx);
+        let mut revisions = std::collections::BTreeMap::new();
+        for entry in archive.entries().iter().filter(|e| e.path.to_ascii_lowercase().ends_with(".model")) {
+            let data = read_all(archive.open(entry.id, &cx).unwrap().as_ref(), cx.limits.max_entry_size).unwrap();
+            let mesh = Mesh::parse(&data).unwrap_or_else(|e| panic!("{}: {e:#}", entry.path));
+            assert!(mesh.bones.iter().all(|b| b.scale.iter().all(|n| n.is_finite())));
+            *revisions.entry(mesh.version).or_insert(0usize) += 1;
+        }
+        assert!(revisions.contains_key(&2001));
+        eprintln!("{archive_name} parsed mesh revisions {revisions:?}");
+    }
+    let tex = read("dress237_z4_accude_shadow.tex");
+    let image = crysirror_image::decode_standard(crysirror_image::kiss_tex::payload(&tex).unwrap()).unwrap();
+    assert_eq!((image.width, image.height), (512, 1024));
 }

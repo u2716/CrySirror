@@ -78,7 +78,14 @@ Malie, N2System and codeX RScript were requested in
 | [Malie / MalieSystem](crates/crysirror-malie/README.md) | EXEC scenarios, LIBP resources, MGF/DZI graphics, SVG/Squirrel UI |
 | [WillPlus / AdvHD](crates/crysirror-willplus/README.md) | WS2 V3 scenarios, Will/Pulltop ARC archives, PNA graphics |
 | [CMVS](crates/crysirror-cmvs/README.md) | PS2A scenarios, CPZ6/CPZ7 archives and PB3 graphics for the 2016 and 2021 Windows x64 profiles |
+| [ExHibit](crates/crysirror-exhibit/README.md) | RLD v1 and selected 2011 v3 commands, GYU images, loose voice and AiFS voice banks. Release playback reaches title button setup in Famisupi. |
+| [minori](crates/crysirror-minori/README.md) | SC scenarios and PAZ archives, verified through the title screen on ten Windows releases including eden* |
 | [CVNS](crates/crysirror-cmvs/README.md#cvns) | PSS0 scenarios and CPZ1 archives, with startup support for the 2004 Windows i386 profile |
+| [CM3D2 / Custom Maid 3D 2](crates/crysirror-cm3d2/README.md) | KISS ARC archives, KAG scenarios, TEX textures, MODEL meshes and ANM animations |
+| [COM3D2 / Custom Order Maid 3D 2](crates/crysirror-cm3d2/README.md#custom-order-maid-3d-2) | Unity 5.6 standalone profile, KISS archives and startup through the retail title menu |
+| [AmanatsuLocation / 甘夏ろけーしょん](crates/crysirror-amanatsu/README.md) | UnityFS bundles and ILLGAMES ADV scenarios from the Unity 6 release |
+
+The [Uncharted 2 resource reader](crates/crysirror-naughty-dog/README.md) inspects the PS3 disc's PSARC archives, level manifests, package directories and localization tables. Gameplay support is pending.
 
 ## Try CrySirror
 

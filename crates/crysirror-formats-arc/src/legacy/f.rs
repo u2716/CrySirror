@@ -172,6 +172,11 @@ pub(crate) static FORMATS: &[Legacy] = &[
         open: crypt::cpz1,
     },
     Legacy {
+        id: "purple-software/cpz3",
+        probe: Some(|s| magic(s, 0, b"CPZ3")),
+        open: crypt::cpz3::open,
+    },
+    Legacy {
         id: "purple-software/cpz5",
         probe: Some(|s| magic(s, 0, b"CPZ5")),
         open: |s, c| crypt::cpz(s, c, 5),

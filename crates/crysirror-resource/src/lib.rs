@@ -7,6 +7,8 @@ pub mod capability_lookup;
 pub mod capability_tree;
 pub mod circus_pck;
 pub mod circus_voice;
+pub mod exhibit_voice;
+pub mod exhibit_pcm;
 pub mod circus_crm;
 pub mod circus_frames;
 pub mod cg_catalog;

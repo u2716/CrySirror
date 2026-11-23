@@ -84,6 +84,8 @@ pub struct NodeState {
     pub value: Option<f32>,
     /// `BoxCollider.enabled` set at run time.
     pub collider: Option<bool>,
+    /// Runtime BoxCollider.center in widget-local coordinates.
+    pub collider_center: [f32; 2],
     /// `Transform.localScale` set at run time (gauges).
     pub scale: Option<[f32; 3]>,
     /// `UIWidget.SetDimensions` / `width` set at run time.
@@ -110,6 +112,12 @@ pub struct Hit {
     pub order: [i32; 2],
 }
 
+pub struct ButtonVisual {
+    pub target: (usize, usize),
+    pub color: [f32; 4],
+    pub sprite: Option<String>,
+}
+
 #[derive(Default)]
 pub struct Ui {
     textures: HashMap<ObjectKey, Option<Texture>>,
@@ -122,6 +130,8 @@ pub struct Ui {
     pub rects: HashMap<(usize, usize), Rect2>,
     /// Clickable widgets of the last layout, in draw order.
     pub hits: Vec<Hit>,
+    /// Transient UIButtonColor on its tweenTarget; normal tint remains widget-owned.
+    pub button_visual: Option<ButtonVisual>,
     /// `UIScrollView` content offsets (root units) and the reset request
     /// they answer, per (scene, node).
     scroll: HashMap<(usize, usize), ([f32; 2], Option<u32>)>,
@@ -567,7 +577,10 @@ impl Ui {
                 let disabled = state.and_then(|s| s.enabled) == Some(false);
                 let collider = state.and_then(|s| s.collider).unwrap_or(true) && !disabled;
                 // UICamera skips touches outside the clipping panels.
-                let hit_rect = w.clip.map_or(rect, |c| intersect(c, rect));
+                let [cx, cy] = state.map_or([0.; 2], |s| s.collider_center);
+                let (dx, dy) = (cx * w.scale[0], -cy * w.scale[1]);
+                let collider_rect = Rect2 { x0: rect.x0 + dx, x1: rect.x1 + dx, y0: rect.y0 + dy, y1: rect.y1 + dy };
+                let hit_rect = w.clip.map_or(collider_rect, |c| intersect(c, collider_rect));
                 if collider && alpha > 0.001 && hit_rect.x1 > hit_rect.x0 && hit_rect.y1 > hit_rect.y0 && n.components.iter().any(|(_, c)| matches!(c, Component::Other { class_id: 65 })) {
                     self.hits.push(Hit { scene: si, node, rect: hit_rect, order });
                 }
@@ -575,6 +588,11 @@ impl Ui {
                     continue;
                 }
                 let mut tint = state.and_then(|s| s.color).unwrap_or_else(|| color(fields, "mColor"));
+                let button = self.button_visual.as_ref().filter(|button| button.target == (si, node) && !disabled);
+                let button_sprite = button.and_then(|b| b.sprite.clone());
+                if let Some(button) = button {
+                    tint = button.color;
+                }
                 // UIButtonColor: the disabled state tints the target widget.
                 if disabled {
                     if let Some(c) = scene.script(node, "UIButton").and_then(|b| b.floats("disabledColor")) {
@@ -587,7 +605,7 @@ impl Ui {
                 let layers = &mut own;
                 let order = [w.panel_depth, fields.int("mDepth").unwrap_or(0) as i32];
                 let drawn = match class.as_str() {
-                    "UISprite" => self.sprite(data, opener, up, &n.key.file, fields, state, rect, tint, order, id, layers)?,
+                    "UISprite" => self.sprite(data, opener, up, &n.key.file, fields, state, button_sprite.as_deref(), rect, tint, order, id, layers)?,
                     "UI2DSprite" => match state.and_then(|s| s.sprite2d.clone()) {
                         Some(Some(tex)) => {
                             layers.insert(id, image(id, rect, &tex.asset, [0., 0., 1., 1.], tint, order));
@@ -760,6 +778,7 @@ impl Ui {
         file: &str,
         f: &Fields,
         state: Option<&NodeState>,
+        button_sprite: Option<&str>,
         rect: Rect2,
         tint: [f32; 4],
         order: [i32; 2],
@@ -774,8 +793,8 @@ impl Ui {
             return Ok(false);
         };
         let Some(atlas) = self.atlas(data, opener, &atlas_key, 0)? else { return Ok(false) };
-        let name = state.and_then(|s| s.sprite.clone()).unwrap_or_else(|| f.string("mSpriteName").unwrap_or("").to_owned());
-        let Some(s) = atlas.sprites.get(&name) else { return Ok(false) };
+        let name = button_sprite.or_else(|| state.and_then(|s| s.sprite.as_deref())).or_else(|| f.string("mSpriteName")).unwrap_or("");
+        let Some(s) = atlas.sprites.get(name) else { return Ok(false) };
         let Some(tk) = atlas.texture.clone() else { return Ok(false) };
         let Some(tex) = self.texture(data, opener, up, &tk)? else { return Ok(false) };
         // Trimmed sprites keep their padding as transparent margins;

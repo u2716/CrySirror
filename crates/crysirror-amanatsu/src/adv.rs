@@ -10,6 +10,10 @@
 //! follow, < 0 UTF-8 of `~header` bytes preceded by an i32 UTF-16 length.
 use anyhow::{bail, ensure, Context, Result};
 
+mod timing;
+mod values;
+pub(crate) mod actor;
+
 /// `ILLGAMES.ADV.Command` names in enum order.
 pub const COMMANDS: [&str; 258] = [
     "None", "VAR", "RandomVar", "Calc", "Clamp", "Min", "Max", "Lerp", "LerpAngle", "InverseLerp",
@@ -180,7 +184,7 @@ impl Var {
         match self {
             Var::Int(i) => i.to_string(),
             Var::Float(f) => f.to_string(),
-            Var::Bool(b) => if *b { "TRUE".into() } else { "FALSE".into() },
+            Var::Bool(b) => if *b { "True".into() } else { "False".into() },
             Var::Str(s) => s.clone(),
         }
     }
@@ -196,9 +200,18 @@ pub enum Wait {
     /// Wait `seconds`.
     Time(f32),
     /// Wait for the actor's voice to end.
-    Voice,
+    Voice(i32),
+    /// Game.CharaChange requests SetADV on this registered actor before
+    /// the next instruction can see its parameters and replacements.
+    BindActor(i32),
     /// `Open`: continue with another scenario (bundle key, name).
     Open(String, String),
+    /// Wait for the shared scene fade canvas to finish.
+    SceneFade,
+    /// Wait for the current or background CommandList to empty.
+    Tasks { background: bool },
+    /// A native command could not run with these arguments.
+    Fault(String),
     /// The scenario ended (`Close` or the end of the list).
     End,
 }
@@ -216,7 +229,8 @@ pub enum Effect {
     /// (empty: unchanged).
     Face { actor: String, values: [Option<f32>; 6] },
     /// `SceneFade`/`Fade`: covering (`in`) or revealing over seconds.
-    Fade { cover: bool, seconds: f32, color: Option<String> },
+    Fade { cover: bool, seconds: Option<f32> },
+    SceneColor(Option<[f32; 4]>),
     /// `EventCGSetting` (bundle, prefab): the event's character root
     /// (`chaPos`) and camera (`camPos`).
     EventCg { bundle: String, asset: String },
@@ -227,13 +241,23 @@ pub enum Effect {
     StandFind { actor: String, child: String },
     /// `CharaMotion` [actor, motion id].
     Motion { actor: String, id: i32 },
-    /// `CharaVisible` [actor, `All`/`Head`/`Son`, flag]; `CharaDitherIn`
-    /// shows and `CharaDitherOut` hides the whole actor.
+    /// CharaLookEyes sets both HumanDataStatus.eyesLookPtn and the eye
+    /// controller's active PtnNo on the addressed actor.
+    EyePattern { actor: i32, pattern: i32 },
+    /// `CharaVisible` [actor, `All`/`Head`/`Son`, flag].
     Visible { actor: String, part: String, on: bool },
+    /// Human.Dithering writes the clamped material value for this actor.
+    Dither { actor: i32, value: f32 },
     /// `CharaCoordinate` [actor, type name] (`Swimsuit`, `AfterBath`).
     Coordinate { actor: String, kind: String },
     /// `CharaClothState` [actor, part, state] (0 dressed, 1 half, 2 off).
     ClothState { actor: String, part: String, state: usize },
+    ClothHideClear(i32),
+    ClearText,
+    CanvasAlpha { front: bool, alpha: f32 },
+    CanvasColor { front: bool, color: Option<[f32; 4]> },
+    /// Sampled translation in the actor’s initial local axes.
+    MoveOffset { id: u64, actor: String, offset: [f32; 3], done: bool },
     /// A command whose semantics are not ported (name, arguments).
     Unported(String, Vec<String>),
 }
@@ -246,9 +270,13 @@ pub struct Program {
     commands: Vec<ScenarioCommand>,
     pub pc: usize,
     pub vars: std::collections::HashMap<String, Var>,
+    /// CommandController.V3Dic, shared by called scenarios.
+    pub vectors: std::collections::HashMap<String, [f32; 3]>,
     pub replace: std::collections::HashMap<String, String>,
     /// `[H]`-style speaker/text tokens → names.
     pub names: std::collections::HashMap<String, String>,
+    timeline: timing::Timeline,
+    pub(crate) regulate: u8,
     rng: u64,
     /// Callers of `Open` (name, commands, resume pc): an opened scenario
     /// returns to the command after its `Open`.
@@ -257,7 +285,7 @@ pub struct Program {
 
 impl Program {
     pub fn new(name: &str, commands: Vec<ScenarioCommand>, seed: u64) -> Self {
-        Self { name: name.to_owned(), commands, pc: 0, vars: Default::default(), replace: Default::default(), names: Default::default(), rng: seed | 1, stack: Vec::new() }
+        Self { name: name.to_owned(), commands, pc: 0, vars: Default::default(), vectors: Default::default(), replace: Default::default(), names: Default::default(), timeline: Default::default(), regulate: 0, rng: seed | 1, stack: Vec::new() }
     }
 
     /// Continue with another command list (a queued scenario), keeping
@@ -313,7 +341,7 @@ impl Program {
     pub fn run(&mut self, effects: &mut Vec<Effect>) -> Wait {
         let mut guard = 0;
         loop {
-            let Some(c) = self.commands.get(self.pc).cloned() else {
+            let Some(mut c) = self.commands.get(self.pc).cloned() else {
                 // The end of an opened scenario returns to its caller.
                 match self.stack.pop() {
                     Some((name, commands, pc)) => {
@@ -331,12 +359,30 @@ impl Program {
                 return Wait::End;
             }
             self.pc += 1;
+            let command = c.name();
+            // CommandList.Add (9BE020) runs ConvertBeforeArgsProc before
+            // calling TextScenario.ReplaceVars (9D5FD0) once per argument.
+            // These three handlers operate on fields captured before replacement.
+            if !matches!(command.as_str(), "VAR" | "Format" | "Switch") {
+                for arg in &mut c.args {
+                    if let Some(value) = self.vars.get(arg) {
+                        *arg = value.as_text();
+                    }
+                }
+            }
             let a = |i: usize| c.args.get(i).cloned().unwrap_or_default();
-            match c.name().as_str() {
+            let actor_number = || {
+                let argument = a(0);
+                if argument == "NowID" { Ok(0) } else { argument.trim().parse::<i32>() }
+            };
+            match command.as_str() {
                 "Text" => return Wait::Text { speaker: self.substitute(&a(0)), text: self.substitute(&a(1)) },
                 "Voice" | "CharaVoicePlay" => effects.push(Effect::Voice { actor: a(0), bundle: a(1), asset: a(2) }),
                 "CharaVoiceStop" => effects.push(Effect::VoiceStop(a(0))),
-                "CharaVoiceWait" => return Wait::Voice,
+                "CharaVoiceWait" => return match actor_number() {
+                    Ok(actor) => Wait::Voice(actor),
+                    Err(e) => Wait::Fault(format!("{} row {} voice actor: {e}", self.name, self.pc)),
+                },
                 // [chara, id] (a preset of the personality's expression
                 // list), or in full: [chara, -, eyebrow, eyes, mouth,
                 // eyebrowOpen, eyesOpen, mouthOpenMax, mouthOpenMin, …].
@@ -358,25 +404,93 @@ impl Program {
                     }
                 }
                 "Switch" => {
-                    // [variable, "value,tag", …]
-                    let v = self.vars.get(&a(0)).map(Var::as_text).unwrap_or_default();
-                    let target = c.args.iter().skip(1).filter_map(|e| e.split_once(',')).find(|(k, _)| *k == v).map(|(_, t)| t.to_owned());
-                    if let Some(t) = target {
-                        self.jump(&t);
+                    let key = a(0);
+                    let Some(value) = self.vars.get(&key).map(Var::as_text) else {
+                        return Wait::Fault(format!("Switch variable {key:?} is missing"));
+                    };
+                    // The last duplicate wins. A single token defines the
+                    // default label; native ignores fields after the label.
+                    let mut answers = std::collections::HashMap::new();
+                    for entry in &c.args[1..] {
+                        let mut fields = entry.split(',');
+                        let first = fields.next().unwrap_or_default();
+                        let (key, target) = fields.next().map_or(("default", first), |target| (first, target));
+                        answers.insert(key, target);
                     }
+                    let Some(target) = answers.get(value.as_str()).or_else(|| answers.get("default")) else {
+                        return Wait::Fault(format!("Switch has no matching case or default for {value:?}"));
+                    };
+                    if let Some((bundle, asset)) = target.split_once(':') {
+                        if asset.contains(':') {
+                            return Wait::Fault(format!("unhandled Switch Open flags in {target:?}"));
+                        }
+                        let resolve = |arg: &str| self.vars.get(arg).map(Var::as_text).unwrap_or_else(|| arg.to_owned());
+                        return Wait::Open(resolve(bundle), resolve(asset));
+                    }
+                    self.jump(target);
                 }
                 "Choice" => {
                     let items = c.args.iter().skip(1).filter_map(|e| e.split_once(',')).map(|(label, tag)| (self.substitute(label), tag.to_owned())).collect();
                     return Wait::Choice(items);
                 }
                 "VAR" => {
-                    self.vars.insert(a(1), Var::parse(&a(0), &a(2)));
+                    if let Err(error) = self.assign_variable(&c.args) {
+                        return Wait::Fault(format!("{} row {} VAR: {error:#}", self.name, self.pc));
+                    }
+                }
+                "Vector" | "Format" => {
+                    let result = if c.name() == "Vector" { self.vector(&c.args) } else { self.format(&c.args) };
+                    if let Err(error) = result {
+                        return Wait::Fault(format!("{} row {} {}: {error:#}", self.name, self.pc, c.name()));
+                    }
                 }
                 "ReplaceLanguage" => {
                     self.replace.insert(a(0), a(1));
                 }
-                "SceneFade" | "Fade" => effects.push(Effect::Fade { cover: a(0) == "in", seconds: a(1).parse().unwrap_or(0.), color: None }),
-                "SceneFadeColor" | "FadeColor" => effects.push(Effect::Fade { cover: false, seconds: 0., color: Some(a(0)) }),
+                "CharaChange" => {
+                    let Ok(no) = a(0).trim().parse::<i32>() else { return Wait::Fault(format!("invalid CharaChange actor {:?}", a(0))) };
+                    if let Some(id) = self.vars.get_mut("NowID") { *id = Var::Int(no.into()); }
+                    match a(1).trim().to_ascii_lowercase().as_str() {
+                        "true" => return Wait::BindActor(no),
+                        "false" => {}
+                        _ => return Wait::Fault(format!("invalid CharaChange refresh flag {:?}", a(1))),
+                    }
+                }
+                "Task" => match a(0).trim_matches(|c: char| c.is_whitespace() || c == '\0').to_ascii_lowercase().as_str() {
+                    "true" => self.timeline.background = true,
+                    "false" => self.timeline.background = false,
+                    other => return Wait::Fault(format!("invalid Task boolean {other:?}")),
+                },
+                "TaskWait" if self.has_work(true) => return Wait::Tasks { background: true },
+                "TaskWait" => {}
+                "TaskEnd" => self.timeline.end_background(effects),
+                "Regulate" => {
+                    let name = a(1);
+                    let Some(index) = ["Next", "ClickNext", "Skip", "Auto", "AutoForce", "Log"].iter().position(|flag| name.eq_ignore_ascii_case(flag)) else {
+                        return Wait::Fault(format!("unknown Regulate flag {name:?}"));
+                    };
+                    let bit = 1 << index;
+                    match a(0).to_ascii_lowercase().as_str() {
+                        "set" => self.regulate = bit,
+                        "add" => self.regulate |= bit,
+                        "sub" => self.regulate &= !bit,
+                        _ => {} // Native switch falls through for an unknown operation.
+                    }
+                }
+                "Fade" | "FadeDelay" | "CharaLerpVectorMove" | "CharaDitherIn" | "CharaDitherOut" | "CharaSetDither" | "WaitAbs" if c.name() != "WaitAbs" || self.timeline.background => {
+                    if let Err(error) = self.schedule(&c.name(), &c.args, effects) {
+                        return Wait::Fault(format!("{} row {} {}: {error:#}", self.name, self.pc, c.name()));
+                    }
+                    if !self.timeline.background && self.has_work(false) && !c.multi { return Wait::Tasks { background: false }; }
+                }
+                "FadeColor" => effects.push(Effect::CanvasColor {
+                    front: a(1).eq_ignore_ascii_case("front"), color: values::fade_color(&a(0)),
+                }),
+                "SceneFade" => {
+                    effects.push(Effect::Fade { cover: a(0).eq_ignore_ascii_case("in"), seconds: a(1).parse().ok() });
+                    if !c.multi { return Wait::SceneFade; }
+                }
+                "SceneFadeColor" => effects.push(Effect::SceneColor(values::fade_color(&a(0)))),
                 "WaitAbs" => return Wait::Time(a(0).parse().unwrap_or(0.)),
                 "Open" => return Wait::Open(a(0), a(1)),
                 "Close" => {
@@ -384,15 +498,22 @@ impl Program {
                     self.stack.clear();
                     return Wait::End;
                 }
-                "TextClear" => {}
+                "TextClear" => effects.push(Effect::ClearText),
                 "EventCGSetting" => effects.push(Effect::EventCg { bundle: a(0), asset: a(1) }),
                 "EventCGRelease" => effects.push(Effect::EventCgRelease),
                 "CharaStandFind" if a(1) == "EventCG" => effects.push(Effect::StandFind { actor: a(0), child: a(3) }),
                 "CharaMotion" => effects.push(Effect::Motion { actor: a(0), id: a(1).trim().parse().unwrap_or(-1) }),
+                "CharaLookEyes" => match (actor_number(), a(1).trim().parse()) {
+                    (Ok(actor), Ok(pattern)) => effects.push(Effect::EyePattern { actor, pattern }),
+                    _ => return Wait::Fault(format!("invalid CharaLookEyes arguments {:?}", c.args)),
+                },
                 "CharaCoordinate" => effects.push(Effect::Coordinate { actor: a(0), kind: a(1) }),
                 "CharaVisible" => effects.push(Effect::Visible { actor: a(0), part: a(1), on: a(2).eq_ignore_ascii_case("TRUE") }),
-                "CharaDitherIn" | "CharaDitherOut" => effects.push(Effect::Visible { actor: a(0), part: "All".into(), on: c.name() == "CharaDitherIn" }),
                 "CharaClothState" => effects.push(Effect::ClothState { actor: a(0), part: a(1), state: a(2).trim().parse().unwrap_or(0) }),
+                "ClothHideClear" => match actor_number() {
+                    Ok(actor) => effects.push(Effect::ClothHideClear(actor)),
+                    Err(e) => return Wait::Fault(format!("invalid ClothHideClear actor: {e}")),
+                },
                 // Censor overlay visibility: the engine draws no overlay.
                 "MozVisible" => effects.push(Effect::Moz { actor: a(0), on: a(1).eq_ignore_ascii_case("TRUE") }),
                 other => effects.push(Effect::Unported(other.to_owned(), c.args.clone())),
@@ -407,6 +528,177 @@ mod tests {
 
     fn cmd(name: &str, args: &[&str]) -> ScenarioCommand {
         ScenarioCommand { hash: 0, version: 0, multi: false, command: COMMANDS.iter().position(|c| *c == name).unwrap() as i32, args: args.iter().map(|s| (*s).to_owned()).collect() }
+    }
+
+    #[test]
+    fn rest_format_resolves_the_event_prefab() {
+        let mut p = Program::new("rest", vec![
+            cmd("Format", &["file", "EventCG_ChairTalk_{0:000}_00", "G_MapID"]),
+            cmd("EventCGSetting", &["adv/evcg/000_00.unity3d", "file"]),
+            cmd("Format", &["out", "{{{1,4:00}:{0}}}", "literal,G_MapID"]),
+        ], 1);
+        p.vars.insert("G_MapID".into(), Var::Int(4));
+        let mut effects = vec![];
+        assert_eq!(p.run(&mut effects), Wait::End);
+        assert_eq!(p.vars["out"], Var::Str("{  04:literal}".into()));
+        assert_eq!(effects, [Effect::EventCg { bundle: "adv/evcg/000_00.unity3d".into(), asset: "EventCG_ChairTalk_004_00".into() }]);
+    }
+
+    #[test]
+    fn command_arguments_capture_once_before_later_variable_writes() {
+        let mut p = Program::new("binding", vec![
+            cmd("VAR", &["System.String", "dest", "actor"]),
+            cmd("VAR", &["System.Int32", "actor", "-1"]),
+            cmd("VAR", &["System.Int32", "copy", "**dest"]),
+            cmd("CharaVoicePlay", &["actor", "dest", "line"]),
+            cmd("VAR", &["System.Int32", "actor", "4"]),
+            cmd("CharaVoiceWait", &["actor"]),
+        ], 1);
+        let mut fx = vec![];
+        assert_eq!(p.run(&mut fx), Wait::Voice(4));
+        assert_eq!(p.vars["copy"], Var::Int(-1));
+        assert_eq!(fx, [Effect::Voice { actor: "-1".into(), bundle: "actor".into(), asset: "line".into() }]);
+    }
+
+    #[test]
+    fn switch_uses_last_case_and_its_default_destination() {
+        let mut p = Program::new("branch", vec![
+            cmd("VAR", &["System.Boolean", "flag", "TRUE"]),
+            cmd("Switch", &["flag", "True,missing", "True,matched", "fallback"]),
+            cmd("Tag", &["fallback"]),
+            cmd("Text", &["", "default"]),
+            cmd("Tag", &["matched"]),
+            cmd("Text", &["", "case"]),
+            cmd("VAR", &["System.Boolean", "flag", "FALSE"]),
+            cmd("Switch", &["flag", "True,matched", "fallback"]),
+        ], 1);
+        assert!(matches!(p.run(&mut vec![]), Wait::Text { text, .. } if text == "case"));
+        assert!(matches!(p.run(&mut vec![]), Wait::Text { text, .. } if text == "default"));
+    }
+
+    #[test]
+    fn vector_assignment_copy_and_arithmetic() {
+        let mut p = Program::new("vectors", vec![
+            cmd("Vector", &["pos1", "=", "0", "0", "-16"]),
+            cmd("Vector", &["pos2", "=", "pos1"]),
+            cmd("Vector", &["pos1", "+=", "1", "", "16"]),
+            cmd("Vector", &["pos2", "-=", "pos1"]),
+            cmd("Vector", &["uninitialized", "+=", "1", "2", "3"]),
+            cmd("Vector", &["odd", "unknown", "99"]),
+        ], 1);
+        assert_eq!(p.run(&mut vec![]), Wait::End);
+        assert_eq!(p.vectors["pos1"], [1., 0., 0.]);
+        assert_eq!(p.vectors["pos2"], [-1., 0., -16.]);
+        assert_eq!(p.vectors["uninitialized"], [0.; 3]);
+        assert_eq!(p.vectors["odd"], [0.; 3]);
+    }
+
+    #[test]
+    fn malformed_format_does_not_overwrite_or_dispatch_following_commands() {
+        let mut p = Program::new("invalid", vec![
+            cmd("VAR", &["System.String", "file", "original"]),
+            cmd("Format", &["file", "{2}", "arg"]),
+            cmd("EventCGSetting", &["bundle", "file"]),
+        ], 1);
+        let mut effects = vec![];
+        assert!(matches!(p.run(&mut effects), Wait::Fault(message) if message.contains("index out of range")));
+        assert_eq!(p.vars["file"], Var::Str("original".into()));
+        assert!(effects.is_empty());
+    }
+
+    #[test]
+    fn task_end_finishes_a_move_and_releases_task_wait() {
+        let mut p = Program::new("stop", vec![
+            cmd("Vector", &["a", "=", "0", "0", "-16"]),
+            cmd("Vector", &["b", "=", "0", "0", "0"]),
+            cmd("Task", &["TRUE"]),
+            cmd("CharaLerpVectorMove", &["NowID", "5", "a", "b", "TRUE"]),
+            cmd("Task", &["FALSE"]),
+            cmd("Text", &["", "running"]),
+            cmd("TaskEnd", &[]),
+            cmd("TaskWait", &[]),
+            cmd("Text", &["", "stopped"]),
+        ], 1);
+        let mut fx = vec![];
+        p.poll(500, &mut fx);
+        assert!(matches!(p.run(&mut fx), Wait::Text { text, .. } if text == "running"));
+        assert!(matches!(fx.last(), Some(Effect::MoveOffset { offset, done: false, .. }) if offset[2] == -16.));
+        p.poll(3000, &mut fx);
+        assert!(matches!(fx.last(), Some(Effect::MoveOffset { offset, done: false, .. }) if offset[2] == -8.));
+        assert!(matches!(p.run(&mut fx), Wait::Text { text, .. } if text == "stopped"));
+        assert!(matches!(fx.last(), Some(Effect::MoveOffset { offset, done: true, .. }) if offset[2] == 0.));
+        assert!(!p.has_work(true));
+    }
+
+    #[test]
+    fn dither_samples_linear_material_coverage_and_runs_native_result() {
+        let mut p = Program::new("dither", vec![
+            cmd("CharaSetDither", &["NowID", "-2"]),
+            cmd("CharaDitherIn", &["0", "1"]),
+            cmd("CharaDitherOut", &["NowID", "1"]),
+            cmd("CharaDitherIn", &["-1", "3"]),
+            cmd("Close", &[]),
+        ], 1);
+        let mut fx = vec![];
+        let sample = |value| Effect::Dither { actor: 0, value };
+        assert_eq!(p.run(&mut fx), Wait::Tasks { background: false });
+        assert_eq!(fx, [sample(0.)]);
+        fx.clear();
+        p.poll(500, &mut fx);
+        p.poll(1000, &mut fx);
+        assert_eq!(p.run(&mut fx), Wait::Tasks { background: false });
+        p.poll(1500, &mut fx);
+        p.poll(2000, &mut fx);
+        assert_eq!(p.run(&mut fx), Wait::End);
+        assert_eq!(fx, [sample(0.5), sample(1.), sample(0.5), sample(0.), sample(1.)]);
+    }
+
+    #[test]
+    fn ending_background_command_releases_wait_without_cancelling_litmotion() {
+        let mut p = Program::new("dither task", vec![
+            cmd("Task", &["true"]),
+            cmd("CharaDitherOut", &["-1", "1"]),
+            cmd("Task", &["false"]),
+            cmd("Text", &["", "moving"]),
+            cmd("TaskEnd", &[]),
+            cmd("TaskWait", &[]),
+            cmd("Text", &["", "released"]),
+        ], 1);
+        let sample = |value| Effect::Dither { actor: -1, value };
+        let mut fx = vec![];
+        p.inherit_dither(-1, 0.5);
+        assert!(matches!(p.run(&mut fx), Wait::Text { text, .. } if text == "moving"));
+        p.poll(500, &mut fx);
+        assert_eq!(fx, [sample(0.25)]);
+        assert!(matches!(p.run(&mut fx), Wait::Text { text, .. } if text == "released"));
+        assert!(!p.has_work(true));
+        p.poll(750, &mut fx);
+        p.poll(1000, &mut fx);
+        assert_eq!(fx, [sample(0.25), sample(1.), sample(0.125), sample(0.)]);
+    }
+
+    #[test]
+    fn regulate_set_add_sub_write_only_the_selected_bits() {
+        let mut p = Program::new("mask", vec![
+            cmd("Regulate", &["set", "Skip"]),
+            cmd("Regulate", &["ADD", "ClickNext"]),
+            cmd("Regulate", &["sub", "Skip"]),
+            cmd("Text", &["", "wait"]),
+            cmd("Regulate", &["Set", "Log"]),
+        ], 1);
+        assert!(matches!(p.run(&mut vec![]), Wait::Text { .. }));
+        assert_eq!(p.regulate, 2);
+        assert_eq!(p.run(&mut vec![]), Wait::End);
+        assert_eq!(p.regulate, 32);
+    }
+
+    #[test]
+    fn native_canvas_colors_accept_packed_and_mixed_range_values_or_restore() {
+        assert_eq!(values::fade_color("darkblue"), Some([0., 0., 139. / 255., 1.]));
+        assert_eq!(values::fade_color("transparent"), Some([0.; 4]));
+        assert_eq!(values::fade_color("#18f8"), Some([17. / 255., 136. / 255., 1., 136. / 255.]));
+        assert_eq!(values::fade_color("255,0.25,128"), Some([1., 0.25, 128. / 255., 1.]));
+        assert_eq!(values::fade_color("invalid"), None);
     }
 
     #[test]
@@ -460,7 +752,6 @@ mod tests {
                 Effect::ClothState { actor: "-1".into(), part: "Bot".into(), state: 2 },
                 Effect::EventCg { bundle: "adv/evcg/000_00.unity3d".into(), asset: "EventCG_BedIns_000_00".into() },
                 Effect::StandFind { actor: "-1".into(), child: "chaPos".into() },
-                Effect::Visible { actor: "-1".into(), part: "All".into(), on: true },
                 Effect::Motion { actor: "NowID".into(), id: 2004 },
                 Effect::Visible { actor: "-1".into(), part: "Head".into(), on: false },
                 Effect::EventCgRelease,

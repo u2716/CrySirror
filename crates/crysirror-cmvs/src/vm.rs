@@ -56,6 +56,8 @@ const MAX_EXPRESSION_TERMS: usize = 4096;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VmProfile {
     Cvns20040515X86,
+    // SATD-cmvs-20070119-profile covers behavior beyond the verified startup path.
+    Pc20070119X86,
     Pc20160201X64,
     Pc20211007X64,
 }
@@ -74,20 +76,21 @@ impl VmProfile {
                     kind: InstructionKind::Simple,
                 })
             }
-            Self::Cvns20040515X86 | Self::Pc20160201X64 | Self::Pc20211007X64 => decode_at(code, pc),
+            Self::Cvns20040515X86 | Self::Pc20070119X86 | Self::Pc20160201X64 | Self::Pc20211007X64 => decode_at(code, pc),
         }
     }
 
     fn script_format(self) -> crate::script::ScriptFormat {
         match self {
             Self::Cvns20040515X86 => crate::script::ScriptFormat::Pss0,
-            Self::Pc20160201X64 | Self::Pc20211007X64 => crate::script::ScriptFormat::Ps2a,
+            Self::Pc20070119X86 | Self::Pc20160201X64 | Self::Pc20211007X64 => crate::script::ScriptFormat::Ps2a,
         }
     }
 
     fn archive_table_rva(self) -> u32 {
         match self {
             Self::Cvns20040515X86 => 0x0005_dd80,
+            Self::Pc20070119X86 => 0x0009_0760,
             Self::Pc20160201X64 => 0x000d_9c40,
             Self::Pc20211007X64 => 0x000e_1be0,
         }

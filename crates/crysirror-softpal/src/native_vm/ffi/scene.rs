@@ -86,7 +86,7 @@ impl NativeScene {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_host_set_scene_rendering(handle: *mut c_void, enabled: i32) {
     if let Some(host) = host_from_handle(handle) {
         host.scene_rendering = enabled != 0;
@@ -95,21 +95,21 @@ pub extern "C" fn sena_host_set_scene_rendering(handle: *mut c_void, enabled: i3
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_host_scene_texture_count(handle: *mut c_void) -> usize {
     host_from_handle(handle)
         .and_then(|host| host.native_scene.as_ref())
         .map_or(0, |frame| frame.scene.textures.len())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_host_scene_draw_count(handle: *mut c_void) -> usize {
     host_from_handle(handle)
         .and_then(|host| host.native_scene.as_ref())
         .map_or(0, |frame| frame.draws.len())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_host_scene_texture(
     handle: *mut c_void,
     index: usize,
@@ -137,7 +137,7 @@ pub extern "C" fn sena_host_scene_texture(
     1
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_host_scene_draw(
     handle: *mut c_void,
     index: usize,
@@ -158,7 +158,7 @@ pub extern "C" fn sena_host_scene_draw(
     1
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_host_scene_clear_color(handle: *mut c_void) -> *const f32 {
     host_from_handle(handle)
         .and_then(|host| host.native_scene.as_ref())
@@ -167,7 +167,7 @@ pub extern "C" fn sena_host_scene_clear_color(handle: *mut c_void) -> *const f32
 
 /// Render the current scene on demand without advancing the VM. Native hosts
 /// use this for effects unsupported by their precompiled GPU programs.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn sena_host_scene_rasterize(handle: *mut c_void) -> *const u8 {
     let Some(host) = host_from_handle(handle) else {
         return ptr::null();

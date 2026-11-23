@@ -51,6 +51,10 @@ pub struct ScheduleUi {
     rows: Vec<(usize, usize, usize)>,
     /// List plates: (button node, character).
     plates: Vec<(usize, usize)>,
+    plate_curve: Option<[Vec<[f32; 4]>; 3]>,
+    /// (button, animated LeftPlate, current clip time in seconds).
+    plate_times: Vec<(usize, usize, f32)>,
+    last_update: u64,
     /// Task buttons of the open viewer: (node, work id, enabled).
     tasks: Vec<(usize, i32, bool)>,
     /// Slot waiting for the delete dialog's OK.
@@ -97,7 +101,7 @@ fn sign(v: i64, grouped: bool) -> String {
 
 /// `ScheduleMgr.OpenPanel` (after `BaseOpenPanel` shows the panel).
 pub fn open(game: &mut Game, opener: &mut Opener) -> Result<ScheduleUi> {
-    let mut s = ScheduleUi { step: Step::FadeIn(game.now), active: None, viewer: Viewer::None, rows: Vec::new(), plates: Vec::new(), tasks: Vec::new(), delete: None };
+    let mut s = ScheduleUi { step: Step::FadeIn(game.now), active: None, viewer: Viewer::None, rows: Vec::new(), plates: Vec::new(), plate_curve: None, plate_times: Vec::new(), last_update: game.now, tasks: Vec::new(), delete: None };
     wf::set_active(game, PANEL, true)?;
     let n = wf::node(game, PANEL)?;
     wf::state(game, n).alpha = Some(0.);
@@ -203,6 +207,7 @@ fn create_list(game: &mut Game, opener: &mut Opener, s: &mut ScheduleUi) -> Resu
     let grid = wf::node(game, &format!("{LIST}/Contents/MaidSkillUnitParent"))?;
     wf::clear_children(game, grid);
     s.plates.clear();
+    s.plate_times.clear();
     let rows = lock(game, |t| {
         let mut list = t.stock.clone();
         t.sort_maid_standard(&mut list);
@@ -213,6 +218,19 @@ fn create_list(game: &mut Game, opener: &mut Opener, s: &mut ScheduleUi) -> Resu
         let plate = wf::create_prefab(game, opener, grid, "CharacterSelect/Prefab/MaidPlate")?;
         crate::charselect::fill_plate(game, plate, &st)?;
         let button = wf::child(game, plate, "Button")?;
+        // MaidPlate.SetRightPlateVisible(false), called by CharacterSelectManager.
+        let left = wf::child(game, plate, "LeftPlate")?;
+        set_active(game, plate, "RightPlate", false)?;
+        let button_state = wf::state(game, button);
+        button_state.size = Some([419., 111.]);
+        button_state.collider_center = [-140., 0.];
+        if s.plate_curve.is_none() {
+            let animation = game.level.as_ref().context("schedule")?.scene.nodes[left].components.iter()
+                .find(|(_, c)| matches!(c, crate::unity_scene::Component::Other { class_id: 111 }))
+                .map(|(key, _)| key.clone()).context("LeftPlate Animation")?;
+            s.plate_curve = Some(game.unity.root_scale_clip(opener, &animation)?);
+        }
+        s.plate_times.push((button, left, 0.));
         wf::state(game, button).click = Some("CharacterSelectManager.OnSelect".into());
         s.plates.push((button, m));
     }
@@ -361,6 +379,18 @@ pub enum Outcome {
 pub fn update(game: &mut Game, opener: &mut Opener, s: &mut ScheduleUi) -> Result<Outcome> {
     let now = game.now;
     let panel = wf::node(game, PANEL)?;
+    let elapsed = now.saturating_sub(s.last_update) as f32 / 1000.;
+    s.last_update = now;
+    if let Some(curve) = &s.plate_curve {
+        let hit = crate::uiev::pick(&game.ui.hits, game.input.pointer_x as f32, game.input.pointer_y as f32);
+        let end = curve[0].last().map_or(0., |key| key[0]);
+        for (button, left, time) in &mut s.plate_times {
+            let over = s.viewer == Viewer::MaidList && hit.is_some_and(|h| h.scene == 1 && h.node == *button);
+            *time = (*time + if over { elapsed } else { -elapsed }).clamp(0., end);
+            wf::state(game, *left).scale = Some(curve.each_ref().map(|keys|
+                crysirror_asset::interchange::cm3d2::evaluate(keys, *time)));
+        }
+    }
     match s.step.clone() {
         Step::FadeIn(t) => {
             let f = ((now - t) as f32 / FADE_MS as f32).min(1.);
@@ -378,8 +408,11 @@ pub fn update(game: &mut Game, opener: &mut Opener, s: &mut ScheduleUi) -> Resul
             }
         }
         Step::Open => {
-            let right = game.input.buttons_pressed & crysirror_core::service::buttons::MOUSE_RIGHT != 0;
-            for (_, node, handler) in std::mem::take(&mut game.events) {
+            for (scene, node, handler) in std::mem::take(&mut game.events) {
+                let right = game.right_click == Some((scene, node));
+                if s.delete.is_some() && !matches!(handler.as_str(), "ScheduleCtrl.DeleteMaidAndReDraw" | "ScheduleCtrl.CloseDialog") {
+                    continue;
+                }
                 let (method, arg) = handler.split_once(':').map_or((handler.as_str(), None), |(m, a)| (m, Some(a)));
                 let slot: Option<usize> = arg.and_then(|a| a.parse().ok());
                 match method {

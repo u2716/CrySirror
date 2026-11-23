@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // No file/system libraries or bytecode loader are exposed. Squirrel owns only
 // logical values; the host retains all device and storage authority.
+#include <cstdlib>
 #include "sqpcheader.h"
 #include "sqvm.h"
 #include "sqstate.h"

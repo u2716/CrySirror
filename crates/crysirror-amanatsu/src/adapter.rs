@@ -1,6 +1,13 @@
 // SPDX-License-Identifier: MPL-2.0
 //! The 甘夏ろけーしょん VM session: the installed Unity data, the active
 //! build scene and its uGUI presentation through shared layer services.
+#[path = "map/walk_runtime.rs"]
+mod walk_runtime;
+#[path = "map/item_return.rs"]
+mod item_return;
+#[path = "watergun/runtime.rs"]
+mod water_runtime;
+
 use crate::{
     actionmap::{self, ActionMap},
     level::{Fade, Level},
@@ -117,10 +124,15 @@ struct HRun {
     event_point: Option<&'static str>,
 }
 
+#[cfg(test)]
+#[path = "adv/cloth_tests.rs"]
+mod adv_cloth_tests;
+
 /// `HumanCloth` states of a character spawned with every clothing variant.
 struct ClothRun {
     parts: Vec<crate::chara::ClothPart>,
     states: Vec<usize>,
+    underwater: bool,
     accessories: Vec<String>,
     accessories_hidden: bool,
     /// `Status.showAccessory` per slot with the slot's part name (when one
@@ -146,7 +158,7 @@ struct ClothRun {
 impl ClothRun {
     /// `AnimationState.hidden`.
     fn hidden(&self) -> Vec<String> {
-        let mut out: Vec<String> = self.parts.iter().zip(&self.states).flat_map(|(p, s)| p.hidden(*s)).collect();
+        let mut out: Vec<String> = self.parts.iter().zip(&self.states).flat_map(|(p, s)| p.hidden(p.visible_state(*s, self.underwater))).collect();
         out.extend(self.hidden_nodes.iter().cloned());
         if self.accessories_hidden {
             out.extend(self.accessories.iter().cloned());
@@ -155,7 +167,7 @@ impl ClothRun {
         // The male part shows with the config flag when the status asks for
         // it or neither bottoms nor shorts are worn; the censor plane unless
         // `HideMoz`.
-        let wearing = |list: &str| self.parts.iter().zip(&self.states).any(|(p, s)| p.list == list && *s == 0);
+        let wearing = |list: &str| self.parts.iter().zip(&self.states).any(|(p, s)| p.list == list && p.visible_state(*s, self.underwater) == 0);
         let bottoms_off = !wearing("co_bot") && !wearing("co_shorts");
         if !(self.male && self.son_config && (self.son || bottoms_off)) {
             out.push(crate::chara::SON.to_owned());
@@ -270,7 +282,7 @@ const H_MOTIONS: [&str; 53] = [
 ];
 
 /// The player's card.
-const MALE_CARD: &str = "DefaultData/0/chara/male/AL_M_00.png";
+pub(crate) const MALE_CARD: &str = "DefaultData/0/chara/male/AL_M_00.png";
 
 /// How an H finish ends (`GaugeController` buttons, `Solo` items).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -419,6 +431,7 @@ pub struct Game {
     /// H clothing states by card: parts, their states, accessories and
     /// whether the accessories are hidden.
     cloth: std::collections::HashMap<String, ClothRun>,
+    underwater_cloth: std::collections::HashSet<String>,
     /// The character the H clothes menu edits.
     cloth_card: Option<String>,
     /// The command camera table (`AngleData` prefab).
@@ -433,6 +446,13 @@ pub struct Game {
     /// Heroines to spawn on the map (card, transform, position, sun).
     pending_heroines: Vec<(String, serde_json::Value, [f32; 3], f32, Vec<i32>)>,
     /// `al_next_action` (loaded on first use).
+    zone_motions: Vec<[i32; 4]>,
+    item_return_motions: Option<item_return::Motions>,
+    walk_rules: map::wandering::Rules,
+    water_standby: crate::watergun::Standby,
+    water_params: crysirror_unity::managed::Fields,
+    water: Option<crate::watergun::Jet>,
+    walks: Option<map::wandering::Population>,
     next_actions: Option<std::collections::HashMap<i32, Vec<(i32, f32)>>>,
     /// `Human.SetSiruFlags` levels (face, front up, front down, back up,
     /// back down; 0–2) by card.
@@ -443,12 +463,19 @@ pub struct Game {
     h_placement: Option<glam::Mat4>,
     /// Female hit volumes with their paste places (loaded on first use).
     h_hits: Option<(Vec<crate::oil::HitVolume>, std::collections::HashMap<String, Vec<u8>>)>,
+    /// The posture's emitters (`(sex, emitter, bone)`), the scene's inside
+    /// flag and the shots due (when, sex, bone, `OffsetRot`, state).
+    h_emitters: Vec<(i32, crate::siru::Emitter, String)>,
+    h_inside: bool,
+    h_shots: Vec<(u64, i32, String, [f32; 3], &'static str)>,
     /// The card of the heroine in the current conversation.
     talk_card: Option<String>,
     /// The H place kind (`HPoint._placeType`) of the H scene.
     h_place: i32,
     /// `PostureSelect` of the H scene.
     h_ui: Option<crate::hui::PostureUi>,
+    yuragi: Option<crate::yuragi::Yuragi>,
+    motion_blends: Vec<crate::yuragi::Actor>,
     /// The states the last character baked (`spawn_character_states`).
     baked_states: Vec<String>,
     /// Clip lengths (seconds) of the baked states.
@@ -484,6 +511,7 @@ pub struct Game {
     /// `Manager.Scene.SceneFadeCanvas` and its `_time`.
     pub fade: Fade,
     pub fade_seconds: f32,
+    initial_fade_color: [f32; 3],
     /// A `SceneSettings.Load` waiting for its fade-in.
     pub pending: Option<(i32, u64)>,
     pub now: u64,
@@ -510,6 +538,9 @@ pub struct Game {
     /// A short movie started from the `Memory` scene (its time zone):
     /// the scene returns after it.
     memory_play: Option<i32>,
+    custom_female: bool,
+    custom_ui: Option<crate::custom::Categories>,
+    editor_camera: Option<(crate::custom::CameraPanel, crate::custom::QuickPages)>,
     /// The ADV event CG in place (`EventCGSetting`).
     event_cg: Option<EventCgRun>,
     /// `CharaClothState` of ADV actors not spawned with their variants yet:
@@ -527,6 +558,8 @@ pub struct Game {
     eye_offsets: std::collections::HashMap<String, [[f32; 2]; 2]>,
     /// `EyeLookCalc.EyeTypeStates` of the head bone prefab.
     eye_states: Option<Vec<crate::face::EyeTypeState>>,
+    adv_eye_patterns: std::collections::HashMap<String, usize>,
+    adv_dither: std::collections::HashMap<String, f32>,
     /// The head renderer node names of characters spawned with variants.
     heads: std::collections::HashMap<String, Vec<String>>,
     /// Uploaded particle textures by (file, path id) key.
@@ -615,6 +648,9 @@ impl Game {
                 self.log.push("SATD-amanatsu-port: ActionMap tutorial ConfirmDialog, player card and ActionMapUI not ported".into());
                 Controller::ActionMap(c)
             }
+            // The editor and memory controllers finish installing their bundle
+            // UI after the scene replacement has committed.
+            "CustomScene" | "Memory" => Controller::Static,
             _ => {
                 self.log.push(format!("SATD-amanatsu-port: {name} scene controller not ported"));
                 Controller::Static
@@ -632,6 +668,10 @@ impl Game {
     /// Unload the presentation of the previous scene: its layers, overlays
     /// and map entities (models are released by the next step).
     fn unload(&mut self) {
+        self.custom_ui = None;
+        self.editor_camera = None;
+        self.yuragi = None;
+        self.motion_blends.clear();
         let mut removed = self.ui.clear();
         self.ui = Ui::default();
         for (_, mut ui) in std::mem::take(&mut self.overlays) {
@@ -664,7 +704,7 @@ impl Game {
         let t = std::time::Instant::now();
         // An H scene spawns two characters next to the map.
         let budget = if self.h.is_some() { 64 << 20 } else { map::MAP_TEXTURE_BUDGET };
-        let world = map::load_with_budget(&mut self.unity, &info, time_zone, budget)?;
+        let mut world = map::load_with_budget(&mut self.unity, &info, time_zone, budget)?;
         {
             let a = world.settings.ambient_linear();
             self.sky_ambient = 0.2126 * a[0] + 0.7152 * a[1] + 0.0722 * a[2];
@@ -698,9 +738,7 @@ impl Game {
             self.world.push(spawn);
         }
         self.spawn_particles(host, client, &world.particles);
-        // Registered heroines at the map's standing action points
-        // with an activity of the point (`point_activity`;
-        // SATD-amanatsu-port: `ActionPoint` choice and NavMesh wandering).
+        // Assign registered heroines to maps before selecting their wandering points.
         self.place_heroines(false);
         // The H place: `H/H00`, or `NightEventH00` for a night event H
         // (`MovePointInfo.GetNightEventHPoint`).
@@ -753,18 +791,34 @@ impl Game {
             m.base = world.short_movies.iter().find(|p| p.0 == m.movie.id).map(|p| (p.1, p.2));
         }
         let heroines: Vec<String> = if self.massage.is_some() || self.h.is_some() || self.night.is_some() || self.movie.is_some() { Vec::new() } else { self.heroines.iter().filter(|h| self.placement.get(*h) == Some(&id)).cloned().collect() };
-        for (card, point) in heroines.iter().zip(world.points.iter().filter(|p| p.0.contains("tati"))) {
-            let (_, pos, rot) = point;
+        let mut order = map::wandering::PointOrder::new(world.wander_points.len(), |n| self.random(n));
+        let mut occupied = std::collections::HashSet::new();
+        let mut actors = std::collections::BTreeMap::new();
+        for card in &heroines {
+            let Some(index) = order.next(&world.wander_points, &occupied) else { break };
+            let point = &world.wander_points[index];
+            occupied.insert(point.id);
+            self.set_cloth_underwater(card, point.area != 0);
+            let wait = self.walk_rules.wait(false, |n| game_random(&mut self.rng, n));
+            actors.insert(card.clone(), map::wandering::Actor { point: index, phase: map::wandering::Phase::Action(wait) });
+            self.log.push(format!("wandering point {} {}: {card}", point.id, point.name));
+            let (pos, rot) = (&point.position, &point.rotation);
             let q = glam::Quat::from_array(crysirror_unity::gltf::mirror_quat(*rot));
             let (x, y, z) = q.to_euler(glam::EulerRot::XYZ);
             let t = json!({"translation": crysirror_unity::gltf::mirror_point(*pos), "rotation_degrees": [x.to_degrees(), y.to_degrees(), z.to_degrees()], "scale": [1.0, 1.0, 1.0]});
             let sun = world.chara_key();
             // One heroine per step after the map: a step's generated
             // uploads are bounded.
-            let anims = world.point_anims.get(&point.0).cloned().unwrap_or_default();
+            let anims = point.motions.clone();
             self.pending_heroines.push((card.clone(), t, crysirror_unity::gltf::mirror_point(*pos), sun, anims));
             self.standing.insert(card.clone(), (*pos, *rot, 0.5));
             self.chara_roots.insert(card.clone(), (*pos, *rot));
+        }
+        if !actors.is_empty() {
+            match map::wandering::Navigation::load(&mut self.unity, &world.info) {
+                Ok(nav) => self.walks = Some(map::wandering::Population { points: std::mem::take(&mut world.wander_points), order, nav, actors }),
+                Err(e) => self.log.push(format!("map navigation: {e:#}")),
+            }
         }
         if let Some(v) = world.camera() {
             let shown: Vec<String> = world.items.iter().map(|(n, p)| format!("{n} {:?}", project(v, crysirror_unity::gltf::mirror_point(*p)).map(|s| [s[0].round(), s[1].round()]))).collect();
@@ -865,14 +919,18 @@ impl Game {
     /// `spawn_character` with a controller state (bundle, controller,
     /// state) instead of the idle action motion; returns the GLB chunks.
     fn spawn_character_motion(&mut self, host: &mut dyn HostServices, client: ClientId, card_path: &str, transform: Option<serde_json::Value>, sun: f32, motion: Option<(&str, &str, &str)>) -> Result<Vec<Vec<u8>>> {
-        let idle: &str = motion.map_or("Pose_D_00_Loop", |m| m.2);
         let card = crate::card::Card::parse(&self.unity.read_all(card_path)?)?;
+        self.spawn_card_motion(host, client, card_path, &card, !card_path.contains("/male/"), transform, sun, motion)
+    }
+
+    fn spawn_card_motion(&mut self, host: &mut dyn HostServices, client: ClientId, card_path: &str, card: &crate::card::Card, female: bool, transform: Option<serde_json::Value>, sun: f32, motion: Option<(&str, &str, &str)>) -> Result<Vec<Vec<u8>>> {
+        let idle = motion.map_or("Pose_D_00_Loop", |m| m.2);
         if self.lists.is_none() {
             self.lists = Some(crate::chara::Lists::load(&mut self.unity)?);
         }
         let lists = self.lists.take().context("lists")?;
         let coordinate = self.coordinates.get(card_path).copied().unwrap_or(0);
-        let human = crate::chara::Human::from_card_coordinate(&mut self.unity, &lists, &card, !card_path.contains("/male/"), coordinate);
+        let human = crate::chara::Human::from_card_coordinate(&mut self.unity, &lists, card, female, coordinate);
         self.lists = Some(lists);
         let human = human?;
         self.log.extend(human.log.iter().cloned());
@@ -926,7 +984,7 @@ impl Game {
 
     /// A character with several exact states of one controller baked as
     /// named clips (H postures), playing `play`; returns its entities.
-    fn spawn_character_states(&mut self, host: &mut dyn HostServices, client: ClientId, card_path: &str, transform: serde_json::Value, sun: f32, bundle: &str, controller: &str, states: &[&str], play: &str) -> Result<Vec<u32>> {
+    fn spawn_character_states(&mut self, host: &mut dyn HostServices, client: ClientId, card_path: &str, transform: serde_json::Value, sun: f32, bundle: &str, controller: &str, states: &[&str], play: &str, attachment_names: &[&str]) -> Result<Vec<u32>> {
         let card = crate::card::Card::parse(&self.unity.read_all(card_path)?)?;
         if self.lists.is_none() {
             self.lists = Some(crate::chara::Lists::load(&mut self.unity)?);
@@ -937,6 +995,9 @@ impl Game {
         self.lists = Some(lists);
         let mut human = human?;
         human.undress_all();
+        if !attachment_names.is_empty() {
+            crate::siru::attach_hit_objects(&mut self.unity, &mut human)?;
+        }
         let suffix = human.height_suffix();
         self.last_height_pick = match suffix {
             "S" => 0,
@@ -964,7 +1025,16 @@ impl Game {
         // Two characters share the H map's budget: 512 px, 16 MiB each.
         let options = crysirror_unity::world6::GlbOptions { max_texture: 512, texture_budget: 16 << 20, spring_unit: CHARACTER_UNIT, morph_targets: true };
         let mut assets = crate::chara::CharaAssets { unity: &mut self.unity, human: &human, light: chara_light(sun, self.sky_ambient), ambient: self.sky_ambient };
-        let (chunks, _) = crysirror_unity::world6::scene_glb_animated(&human.scene, &human.key, &[0], &mut assets, &options, "CrySirror AmanatsuLocation character importer", &clips)?;
+        let mut attachments = Vec::new();
+        for name in attachment_names {
+            // Body nodes precede grafted parts in the assembled hierarchy.
+            if let Some(node) = human.scene.nodes.iter().position(|n| n.name == *name) {
+                attachments.push(node);
+            } else {
+                self.log.push(format!("missing character attachment {name}"));
+            }
+        }
+        let (chunks, _) = crysirror_unity::world6::scene_glb_animated_with_nodes(&human.scene, &human.key, &[0], &mut assets, &options, "CrySirror AmanatsuLocation character importer", &clips, &attachments)?;
         self.log.push(format!("H character GLB {} bytes", chunks.iter().map(Vec::len).sum::<usize>()));
         let first = self.map_entities.len();
         self.spawn_models(host, client, "hchara", &chunks)?;
@@ -983,7 +1053,7 @@ impl Game {
         if let Some(e) = crate::face::eye_rest(&human.scene) {
             self.eye_rest.insert(card_path.to_owned(), e);
         }
-        self.cloth.insert(card_path.to_owned(), ClothRun { states: vec![0; human.clothes.len()], parts: human.clothes.clone(), accessories: human.accessories.clone(), accessories_hidden: false, acs_slots: human.accessory_slots.iter().map(|n| (n.clone(), true)).collect(), male: card_path == MALE_CARD, son_config: self.config.flag("HScene", "Son", true) && self.adult_content(), son: self.h.is_some(), hide_moz: false, gomu: false, body_nodes: human.body_nodes.clone(), entities: ids.clone(), hidden_nodes: Vec::new(), layers: layers.clone() });
+        self.cloth.insert(card_path.to_owned(), ClothRun { underwater: self.underwater_cloth.contains(card_path), states: vec![0; human.clothes.len()], parts: human.clothes.clone(), accessories: human.accessories.clone(), accessories_hidden: false, acs_slots: human.accessory_slots.iter().map(|n| (n.clone(), true)).collect(), male: card_path == MALE_CARD, son_config: self.config.flag("HScene", "Son", true) && self.adult_content(), son: self.h.is_some(), hide_moz: false, gomu: false, body_nodes: human.body_nodes.clone(), entities: ids.clone(), hidden_nodes: Vec::new(), layers: layers.clone() });
         self.heads.insert(card_path.to_owned(), human.head.clone());
         match crate::face::Face::from_scene(&mut self.unity, &human.scene, &human.key) {
             Ok(Some(face)) => {
@@ -1034,13 +1104,15 @@ impl Game {
         Ok(())
     }
 
-    /// `CustomScene` start: the default heroine (`HumanData` preset) in
-    /// front of the main camera.
+    /// HumanCustom.LoadChara starts with the selected sex's preset, ID zero
+    /// on title entry where there is no incoming HumanData.
     fn custom_scene(&mut self, host: &mut dyn HostServices, client: ClientId) -> Result<()> {
-        // SATD-amanatsu-port: the scene's own default (`HumanData`
-        // preset for the chosen sex) is approximated by the first default
-        // female card.
-        self.spawn_character(host, client, DEFAULT_FEMALE_CARD, None, 0.7)?;
+        if self.lists.is_none() {
+            self.lists = Some(crate::chara::Lists::load(&mut self.unity)?);
+        }
+        let female = self.custom_female;
+        let (name, card) = crate::custom::preset(&mut self.unity, self.lists.as_ref().context("character lists")?, female)?;
+        let chunks = self.spawn_card_motion(host, client, &name, &card, female, None, 0.7, None)?;
         // The main camera's authored transform frames the character
         // (characters are about 16 units tall). SATD-amanatsu-port:
         // `CameraController` orbit/zoom input is not ported.
@@ -1063,6 +1135,18 @@ impl Game {
                 Err(e) => self.log.push(format!("custom background: {e:#}")),
             }
         }
+        let mature = self.adult_content();
+        let (mut level, categories) = crate::custom::Categories::load(&mut self.unity, &self.level, female, mature)?;
+        let english = self.unity.read_all("UserData/setup.xml").ok().is_some_and(|data| {
+            std::str::from_utf8(&data).ok().and_then(|xml| xml.split_once("<Language>"))
+                .and_then(|(_, rest)| rest.split_once("</Language>")).is_some_and(|(value, _)| value.trim() == "1")
+        });
+        crate::custom::Categories::show_name(&mut level, &card, english);
+        self.overlays.push((level, Ui::new(1)));
+        self.custom_ui = Some(categories);
+        let (controls, camera, quick) = crate::custom::CameraPanel::load(&mut self.unity, &self.level, &card, chunks.first().context("editor character model")?, self.now)?;
+        self.overlays.push((controls, Ui::new(2)));
+        self.editor_camera = Some((camera, quick));
         // The canvases themselves are not drawn over the world.
         // `SaveFrame` canvases belong to the card-capture cameras.
         for path in ["CustomScene/UI/Cvs_BackGround", "CustomScene/UI/Root/Cvs_BackGround_Cover", "CustomScene/UI/Root/SaveFrame"] {
@@ -1153,36 +1237,10 @@ impl Game {
         best.map(|b| b.1)
     }
 
-    /// `ActionPoint.GetAnimationID(-1, timezone)` at placement: the
-    /// point's `_animIDList` entries weighted by the `al_next_action` row
-    /// −1, the first entry when none is weighted; the id's state in the
-    /// heroine's motion list (`anim_f_{personality}`).
-    /// SATD-amanatsu-port: the time-zone variant of the chosen id, the
-    /// follow-up actions over time and NavMesh movement between points.
-    fn point_activity(&mut self, personality: i64, anims: &[i32]) -> Option<(i32, String)> {
-        if anims.is_empty() {
-            return None;
-        }
-        if self.next_actions.is_none() {
-            match crate::tables::next_actions(&mut self.unity) {
-                Ok(t) => self.next_actions = Some(t),
-                Err(e) => {
-                    self.log.push(format!("al_next_action: {e:#}"));
-                    self.next_actions = Some(Default::default());
-                }
-            }
-        }
-        let weights: Vec<(i32, f32)> = self.next_actions.as_ref().and_then(|t| t.get(&-1)).map(|row| row.iter().filter(|(id, w)| *w > 0. && anims.contains(id)).copied().collect()).unwrap_or_default();
-        let id = if weights.is_empty() {
-            anims[0]
-        } else {
-            let total: f32 = weights.iter().map(|w| w.1).sum();
-            let mut x = self.random(10_000) as f32 / 10_000. * total;
-            weights.iter().find(|(_, w)| {
-                x -= w;
-                x < 0.
-            }).map_or(weights[weights.len() - 1].0, |w| w.0)
-        };
+    /// Resolve the point's next animation from the current ID (−1 at
+    /// placement), the active time zone and the personality's motion list.
+    fn point_activity(&mut self, personality: i64, anims: &[i32], current: i32) -> Option<(i32, String)> {
+        let id = self.point_motion_id(anims, current)?;
         let list = format!("anim_f_{personality:03}");
         match crate::tables::motion_state(&mut self.unity, &list, id) {
             Ok(Some(state)) => Some((id, state)),
@@ -1195,6 +1253,24 @@ impl Game {
                 None
             }
         }
+    }
+
+    fn point_motion_id(&mut self, anims: &[i32], current: i32) -> Option<i32> {
+        if anims.is_empty() {
+            return None;
+        }
+        if self.next_actions.is_none() {
+            match crate::tables::next_actions(&mut self.unity) {
+                Ok(t) => self.next_actions = Some(t),
+                Err(e) => {
+                    self.log.push(format!("al_next_action: {e:#}"));
+                    self.next_actions = Some(Default::default());
+                }
+            }
+        }
+        let zone = match &self.controller { Controller::ActionMap(map) => map.time_zone, _ => 0 };
+        let row = self.next_actions.as_ref().and_then(|t| t.get(&current)).map(Vec::as_slice).unwrap_or_default();
+        map::wandering::activity(anims, row, &self.zone_motions, zone, |n| game_random(&mut self.rng, n))
     }
 
     /// `GameSystem._pornStatus.Active` (`AppStatus.CheckUnlocked`): the
@@ -1267,11 +1343,20 @@ impl Game {
     /// `CommandUI.SetParameter`: gauges (`ImgGauge.fillAmount` = Point /
     /// LVPoint) and level toggles (`TglLVs[i].isOn` for i < LV).
     fn show_parameters(&mut self, card: &str) {
+        let pose=self.extra(card).action_motion_id;
+        let water_enabled=self.walks.as_ref().and_then(|pop| {
+            let point=&pop.points[pop.actors.get(card)?.point];
+            let tutorial=self.level.name=="TutorialScene" || self.overlays.iter().any(|(l,_)|l.name=="TutorialScene");
+            self.water_standby.enabled(pose,point.area,tutorial)
+        });
         let gp = self.npc(card).0.clone();
         let Some((_, ci)) = self.command else { return };
         let points = self.param_table.points.clone();
         let Some((level, _)) = self.overlays.get_mut(ci) else { return };
         let Some(ui) = level.scene.nodes.iter().flat_map(|n| &n.components).find(|c| c.script == "AL.CommandUI").map(|c| c.fields.clone()) else { return };
+        if let Some((node,enabled)) = ui.pptr("_btnWaterGun").and_then(|p|level.owner(p.path_id)).zip(water_enabled) {
+            level.set_interactable(node,enabled);
+        }
         // `SetCost`: commands need cost; H also favourability LV > 0, its
         // lock cover shows below that.
         let can = gp.cost > 0;
@@ -1464,14 +1549,23 @@ impl Game {
         let t = json!({"translation": tr.to_array(), "rotation_degrees": [x.to_degrees(), y.to_degrees(), z.to_degrees()], "scale": [1.0, 1.0, 1.0]});
         self.h_placement = Some(glam::Mat4::from_rotation_translation(q, tr));
         let mut entities = Vec::new();
+        let mut motion_blends = Vec::new();
         let mut finishes = Vec::new();
+        let emitters = crate::siru::load(&mut self.unity, &format!("{}_{:02}", posture.file, posture.id)).unwrap_or_else(|e| {
+            self.log.push(format!("HScene emitters: {e:#}"));
+            Vec::new()
+        });
         for c in &posture.charas {
             if c.info.bundle.is_empty() {
                 continue;
             }
             let who = if c.is_male() { MALE_CARD.to_owned() } else { card.to_owned() };
             let bundle = format!("lib/{}", c.info.bundle);
-            let ids = self.spawn_character_states(host, client, &who, t.clone(), sun, &bundle, &c.info.asset, &H_MOTIONS, "Idle")?;
+            let sex = i32::from(!c.is_male());
+            let attachment_names: Vec<&str> = emitters.iter().filter(|(s, _, _)| *s == sex).map(|(_, _, name)| name.as_str()).collect();
+            let ids = self.spawn_character_states(host, client, &who, t.clone(), sun, &bundle, &c.info.asset, &H_MOTIONS, "Idle", &attachment_names)?;
+            let size = ["S", "M", "L"][self.last_height_pick];
+            motion_blends.push(crate::yuragi::Actor::bind(&mut self.unity, &c.base, size, &self.state_seconds, ids.clone())?);
             // Config `HScene/Visible`: the player can be hidden.
             if c.is_male() && !self.config.flag("HScene", "Visible", true) {
                 for &id in &ids {
@@ -1524,6 +1618,12 @@ impl Game {
             self.view = Some(v);
         }
         self.log.push(format!("HScene: {} ({}{})", posture.name, posture.file, posture.id));
+        self.motion_blends = motion_blends;
+        if let Some(yuragi) = &mut self.yuragi {
+            yuragi.reset(&mut || game_random(&mut self.rng, 1 << 24) as f32 / ((1 << 24) - 1) as f32);
+        }
+        self.h_emitters = emitters;
+        self.h_shots.clear();
         if let Some(h) = self.h.as_mut() {
             h.posture = Some(posture);
             h.entities = entities;
@@ -1535,6 +1635,9 @@ impl Game {
     /// `HScene.Create`: the H UI; play starts in `Idle`.
     fn enter_h_scene(&mut self, now: u64) -> Result<()> {
         let mut level = Level::prefab(&mut self.unity, crate::h::SCENE_BUNDLE, crate::h::SCENE_PREFAB)?;
+        let fields = level.scene.nodes.iter().flat_map(|n| &n.components)
+            .find(|c| c.script == "AL.H.HScene").and_then(|c| c.fields.fields("_yuragiCtrl")).context("HScene.YuragiCtrl")?;
+        self.yuragi = Some(crate::yuragi::Yuragi::new(fields, &mut || game_random(&mut self.rng, 1 << 24) as f32 / ((1 << 24) - 1) as f32)?);
         self.h_ui = None;
         self.h_ui_place = None;
         self.h_point_ui = None;
@@ -1554,9 +1657,31 @@ impl Game {
 
     fn h_play(&mut self, motion: &'static str, looping: bool) {
         let Some(h) = self.h.as_mut() else { return };
+        if !h.motion.contains("Loop") || !motion.contains("Loop") {
+            for actor in &mut self.motion_blends { actor.reset_phase(); }
+        }
         h.motion = motion;
         let entities = h.entities.clone();
         self.play_layers(&entities, json!([{"clip": motion, "looping": looping}]));
+        // `ObiCtrl.Proc`: shots of this state, due at their normalized time.
+        let hash = crysirror_unity::animator::crc32(motion);
+        let seconds = self.state_seconds.get(motion).copied().unwrap_or(1.).max(0.);
+        for (sex, e, bone) in &self.h_emitters {
+            for shot in e.shoots.iter().filter(|s| s.state_hash == hash && (!s.inside || self.h_inside)) {
+                let due = self.now + (f64::from(shot.time.clamp(0., 1.) * seconds) * 1000.) as u64;
+                self.h_shots.push((due, *sex, bone.clone(), e.offset_rot, motion));
+            }
+        }
+    }
+
+    /// Due emitter shots.
+    fn h_fire_shots(&mut self, now: u64) {
+        let Some(card) = self.h.as_ref().map(|h| h.card.clone()) else { return };
+        let (due, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut self.h_shots).into_iter().partition(|s| s.0 <= now);
+        self.h_shots = rest;
+        for (_, sex, bone, rot, state) in due {
+            self.h_paste(&card, sex, &bone, rot, state);
+        }
     }
 
     /// Animation layers on entities; characters with a face keep their
@@ -1698,8 +1823,19 @@ impl Game {
     /// 8/s strong, 10/s SP; IK not ported); finishes play their state
     /// sequence (`h_finish`).
     fn h_update(&mut self, clicked: bool, wheel: i32, now: u64) {
+        self.h_fire_shots(now);
+        let dt = self.h.as_ref().filter(|h| h.phase == MassagePhase::Play)
+            .map_or(0., |h| now.saturating_sub(h.last_ms) as f32 / 1000.);
         let mut breath_face = None;
         self.h_update_state(clicked, wheel, now, &mut breath_face);
+        if let (Some(h), Some(yuragi)) = (self.h.as_ref().filter(|h| h.phase == MassagePhase::Play), self.yuragi.as_mut()) {
+            yuragi.advance(dt, h.motion.starts_with("WLoop"), &mut || game_random(&mut self.rng, 1 << 24) as f32 / ((1 << 24) - 1) as f32);
+            let updates: Vec<_> = self.motion_blends.iter_mut().filter_map(|actor| {
+                let layers = actor.layers(h.motion, yuragi.value, dt)?;
+                Some((actor.entities.clone(), layers))
+            }).collect();
+            for (entities, layers) in updates { self.play_layers(&entities, layers); }
+        }
         if let Some((card, face, until)) = breath_face {
             self.h_breath_face(&card, face, now, until);
         }
@@ -1817,16 +1953,17 @@ impl Game {
         self.h_gauges();
     }
 
-    /// The loop to play: weak/strong by the strength, `Loop2` past half
-    /// the female gauge, the `SP` loops once a finish is ready
-    /// (SATD-amanatsu-port: `YuragiCtrl` blending and the loop timing are
-    /// not ported).
+    /// Select the weak/strong loop and its finish-ready variant. Controllers
+    /// with a Motion blend keep one logical state as the gauge crosses 50.
     fn h_loop(&self) -> Option<&'static str> {
         let h = self.h.as_ref()?;
         let has = |n: &str| h.finishes.iter().any(|f| f == n);
         let ws = if h.strong { "S" } else { "W" };
-        let variant = if h.gauge >= 50. { 2 } else { 1 };
         let sp = h.gauge >= 70. || h.male_gauge >= 70.;
+        let prefix = if sp && has(&format!("{ws}SPLoop1")) { "SPLoop" } else { "Loop" };
+        let first_loop = format!("{ws}{prefix}1");
+        let has_blend = self.motion_blends.iter().any(|actor| actor.has_motion(&first_loop));
+        let variant = if !has_blend && h.gauge >= 50. { 2 } else { 1 };
         let candidates = [
             sp.then(|| format!("{ws}SPLoop{variant}")),
             sp.then(|| format!("{ws}SPLoop1")),
@@ -2024,22 +2161,23 @@ impl Game {
             self.h_voice = Some((b.bundle.clone(), b.asset.clone()));
             self.h_breath_face(&card, b.faces.first().copied(), now, now + 4000);
         }
-        self.h_play(first, false);
-        if kind == HFinish::Outside {
-            self.h_paste(&card, first);
+        // The scene's inside flag (`Inside` shots, the later pour).
+        if kind != HFinish::Female {
+            self.h_inside = kind != HFinish::Outside;
         }
+        self.h_play(first, false);
         self.log.push(format!("HScene finish {kind:?}: {first}"));
     }
 
-    /// `SiruPasteCtrl.Paste` for an outside finish: the original's Obi
-    /// particles from the male part hit the female's `SiruPasteInfo`
-    /// colliders and each hit part's level rises by one (`SetSiruFlags`,
-    /// at most `Many`). Here a fan of rays from the male part's tip
-    /// (`cf_j_dan109_00`, along `cf_j_dan101_00` → tip) as ballistic arcs
-    /// against the posed hit volumes at the finish state's midpoint.
-    /// SATD-amanatsu-port: the particle simulation (flight, gravity,
-    /// spread), pour drips and the service finishes.
-    fn h_paste(&mut self, card: &str, state: &str) {
+    /// `SiruPasteCtrl.Paste` for one emitter shot: the original's Obi
+    /// particles hit the female's `SiruPasteInfo` colliders and each hit
+    /// part's level rises by one (`SetSiruFlags`, at most `Many`). Here a
+    /// fan of ballistic arcs from the emitter bone against the posed hit
+    /// volumes at the shot.
+    /// SATD-amanatsu-port: the Obi particle simulation (emitter speed and
+    /// shape, droplet flight and contact), the `OffsetPos` and lerped
+    /// emitter values.
+    fn h_paste(&mut self, card: &str, sex: i32, emitter_bone: &str, offset_rot: [f32; 3], state: &str) {
         if self.h_hits.is_none() {
             let hits = crate::oil::hit_volumes(&mut self.unity).and_then(|v| Ok((v, crate::oil::siru_places(&mut self.unity)?)));
             match hits {
@@ -2054,29 +2192,44 @@ impl Game {
         let pose = |model: &crysirror_asset::pbr::PbrModel| -> Option<Vec<glam::Mat4>> {
             let clip = model.animations.iter().find(|c| c.name == state).or(model.animations.first())?;
             let mut local: Vec<crysirror_asset::pbr::Trs> = model.nodes.iter().map(|n| n.rest).collect();
-            crysirror_asset::anim::sample_clip(model, clip, clip.duration * 0.5, &mut local);
+            crysirror_asset::anim::sample_clip(model, clip, clip.duration * 0.999, &mut local);
             Some(crysirror_asset::anim::global_pose(model, &local))
         };
         let (Some(fg), Some(mg)) = (pose(female), pose(male)) else { return };
         let bone_of = |model: &crysirror_asset::pbr::PbrModel, g: &[glam::Mat4], name: &str| model.nodes.iter().position(|n| n.name == name).map(|i| placement * g[i]);
-        let (Some(tip), Some(base)) = (bone_of(male, &mg, "cf_j_dan109_00"), bone_of(male, &mg, "cf_j_dan101_00")) else {
-            self.log.push("SiruPaste: male part bones not found".into());
+        let (model, g) = if sex == 0 { (male, &mg) } else { (female, &fg) };
+        let Some(at) = bone_of(model, g, emitter_bone) else {
+            self.log.push(format!("SiruPaste: emitter bone {emitter_bone} not found"));
             return;
         };
-        let origin = tip.w_axis.truncate();
-        let dir = (origin - base.w_axis.truncate()).normalize_or_zero();
+        let origin = at.w_axis.truncate();
+        // The emitter's forward: the male part's axis (root → tip) for the
+        // male target, else the bone's +Z; then `OffsetRot` (Unity Euler
+        // ZXY, mirrored into engine space with the bone frame).
+        let rot = glam::Quat::from_euler(glam::EulerRot::YXZ, offset_rot[1].to_radians(), offset_rot[0].to_radians(), offset_rot[2].to_radians());
+        let local = rot * glam::Vec3::Z;
+        let local = glam::Vec3::new(-local.x, local.y, local.z);
+        let dir = match bone_of(model, g, "cf_j_dan101_00").filter(|_| sex == 0) {
+            Some(base) => {
+                let axis = (origin - base.w_axis.truncate()).normalize_or_zero();
+                glam::Quat::from_rotation_arc(glam::Vec3::Z, axis) * local
+            }
+            None => at.transform_vector3(local),
+        }
+        .normalize_or_zero();
         if dir == glam::Vec3::ZERO {
             return;
         }
         // Ballistic arcs (engine units are 10 per metre): launch speeds
-        // 1.5–3.5 m/s over a ±20° cone, gravity 9.8 m/s², traced as 20 ms
-        // segments for 0.6 s.
+        // 1.5–3.5 m/s over a ±20° cone (a female emitter's pour 0.2–0.6
+        // m/s), gravity 9.8 m/s², traced as 20 ms segments for 0.6 s.
+        let speeds: [f32; 3] = if sex == 0 { [15., 25., 35.] } else { [2., 4., 6.] };
         let side = dir.cross(glam::Vec3::Y).normalize_or(glam::Vec3::X);
         let up = side.cross(dir).normalize_or(glam::Vec3::Y);
         let bone = |name: &str| bone_of(female, &fg, name);
         let gravity = glam::Vec3::new(0., -98., 0.);
         let mut parts: Vec<u8> = Vec::new();
-        for speed in [15f32, 25., 35.] {
+        for speed in speeds {
             for i in -2..=2 {
                 for j in -2..=2 {
                     let d = (dir + side * (i as f32 * 0.18) + up * (j as f32 * 0.18)).normalize();
@@ -2310,6 +2463,24 @@ impl Game {
         self.refresh_cloth(&card);
     }
 
+    /// HideStateSetting.Hide/Restore keeps the last requested state while
+    /// forcing the underwater parts off. A dry slot is never overwritten.
+    pub(crate) fn set_cloth_underwater(&mut self, card: &str, underwater: bool) {
+        if underwater {
+            self.underwater_cloth.insert(card.to_owned());
+        } else {
+            self.underwater_cloth.remove(card);
+        }
+        if let Some(cloth) = self.cloth.get_mut(card) {
+            if cloth.underwater == underwater { return; }
+            let changed = cloth.parts.iter().zip(&cloth.states).any(|(part, state)| {
+                part.visible_state(*state, cloth.underwater) != part.visible_state(*state, underwater)
+            });
+            cloth.underwater = underwater;
+            if changed { self.refresh_cloth(card); }
+        }
+    }
+
     /// Re-send a character's animation with its clothing state.
     fn refresh_cloth(&mut self, card: &str) {
         if self.faces.contains_key(card) {
@@ -2327,7 +2498,7 @@ impl Game {
     /// An ADV actor: `NowID` the talking heroine, `-1` the player.
     fn adv_actor(&self, actor: &str) -> Option<String> {
         match actor {
-            "NowID" => self.talk_card.clone(),
+            "NowID" | "0" => self.talk_card.clone(),
             "-1" => Some(MALE_CARD.to_owned()),
             _ => None,
         }
@@ -2371,6 +2542,42 @@ impl Game {
     fn adv_chara(&mut self, host: &mut dyn HostServices, client: ClientId, effect: crate::adv::Effect) -> Result<()> {
         use crate::adv::Effect as E;
         match effect {
+            E::Dither { actor, value } => {
+                let card = self.adv_actor(&actor.to_string()).with_context(|| format!("unknown ADV dither actor {actor}"))?;
+                if value == 1. {
+                    self.adv_dither.remove(&card);
+                } else {
+                    self.adv_dither.insert(card.clone(), value);
+                }
+                self.refresh_cloth(&card);
+            }
+            E::ClothHideClear(actor) => {
+                let card = self.adv_actor(&actor.to_string()).with_context(|| format!("unknown ClothHideClear actor {actor}"))?;
+                self.set_cloth_underwater(&card, false);
+            }
+            E::EyePattern { actor, pattern } => {
+                let card = self.adv_actor(&actor.to_string()).with_context(|| format!("unknown ADV eye actor {actor}"))?;
+                // HumanFace.ChangeLookEyesPtn only updates a live controller.
+                if self.eye_rest.contains_key(&card) {
+                    if self.eye_states.is_none() {
+                        self.eye_states = Some(crate::face::eye_type_states(&mut self.unity)?);
+                    }
+                    let pattern = usize::try_from(pattern).context("negative ADV eye pattern")?;
+                    let state = self.eye_states.as_ref().and_then(|s| s.get(pattern)).context("ADV eye pattern out of range")?;
+                    self.adv_eye_patterns.insert(card, pattern);
+                    ensure!(matches!(state.look_type, 0 | 1), "unported ADV EyeLookCalc look type {} at pattern {pattern}", state.look_type);
+                }
+            }
+            E::SceneColor(color) => {
+                self.fade.color = color.map(|[r, g, b, _]| [r, g, b]).unwrap_or(self.initial_fade_color);
+            }
+            E::Fade { cover, seconds } => {
+                let target = f32::from(cover);
+                let distance = (target - self.fade.alpha(self.now)).abs();
+                let seconds = seconds.unwrap_or(self.fade_seconds);
+                let remaining = if seconds > 0. { 0.01 + (seconds - 0.01) * distance } else { 0. };
+                self.fade.start(self.now, cover, remaining);
+            }
             E::EventCg { bundle, asset } => {
                 // `CreateEventCG`: the prefab; `set_CamRoot` moves the camera
                 // to `camPos` (`CameraData.FieldOfView`); `SetChaRoot` stands
@@ -2404,14 +2611,7 @@ impl Game {
                     }
                 }
             }
-            E::EventCgRelease => {
-                if let Some(e) = self.event_cg.take() {
-                    self.view = e.view_return;
-                    if let Some(v) = &self.view {
-                        self.world.push(v.command());
-                    }
-                }
-            }
+            E::EventCgRelease => self.release_event_camera(),
             E::StandFind { actor, child } => {
                 let (Some(card), Some((pos, rot))) = (self.adv_actor(&actor), self.event_cg.as_ref().map(|e| e.cha)) else { return Ok(()) };
                 if child != "chaPos" {
@@ -2419,9 +2619,23 @@ impl Game {
                 }
                 // An actor not on the map yet spawns there with its
                 // `CharaMotion` (the event motions place both at the root).
+                self.chara_roots.insert(card.clone(), (pos, rot));
                 let t = unity_transform(pos, rot);
                 for e in self.character_entities(&card) {
                     self.world.push(json!({"op": "set_transform", "id": e, "transform": t}));
+                }
+            }
+            E::MoveOffset { id, actor, offset, done } => {
+                let card = self.adv_actor(&actor).with_context(|| format!("CharaLerpVectorMove actor {actor}"))?;
+                let root = self.chara_roots.get(&card).copied().context("CharaLerpVectorMove actor transform")?;
+                let (talk, _) = self.talk.as_mut().context("CharaLerpVectorMove outside ADV")?;
+                let (pos, rot) = *talk.move_origins.entry(id).or_insert(root);
+                let p = glam::Vec3::from_array(pos) + glam::Quat::from_array(rot) * glam::Vec3::from_array(offset);
+                if done { talk.move_origins.remove(&id); }
+                self.chara_roots.insert(card.clone(), (p.to_array(), rot));
+                let transform = unity_transform(p.to_array(), rot);
+                for entity in self.character_entities(&card) {
+                    self.world.push(json!({"op": "set_transform", "id": entity, "transform": transform}));
                 }
             }
             E::Motion { actor, id } => {
@@ -2540,7 +2754,7 @@ impl Game {
         self.despawn_character(host, client, card)?;
         let (bundle, controller) = crate::chara::motion_controller(card != MALE_CARD);
         let sun = self.map_sun;
-        self.spawn_character_states(host, client, card, transform, sun, &bundle, controller, &[state], state)?;
+        self.spawn_character_states(host, client, card, transform, sun, &bundle, controller, &[state], state, &[])?;
         if let Some(c) = self.cloth.get_mut(card) {
             c.hidden_nodes = hidden_nodes;
         }
@@ -3321,16 +3535,13 @@ impl Game {
     /// `Before_Item` (`rest`) with `Judge`.
     fn item_clicked(&mut self, item: usize) -> Result<()> {
         let name = self.map_items.get(item).map(|i| i.0.clone()).unwrap_or_default();
-        let mut cands = Vec::new();
-        for h in self.heroines.clone() {
-            if self.npc(&h).0.favorability.lv >= 2 {
-                cands.push(h);
-            }
+        let mut candidates = Vec::new();
+        for card in self.heroines.clone() {
+            let level = self.npc(&card).0.favorability.lv;
+            let commands = self.extra(&card).time_zone_play_command;
+            candidates.push((card, level, commands));
         }
-        let card = (!cands.is_empty()).then(|| {
-            let i = self.random(cands.len());
-            cands.swap_remove(i)
-        });
+        let card = item_return::choose_heroine(candidates, |n| self.random(n));
         let judge = match &card {
             None => 2,
             Some(c) => {
@@ -3353,24 +3564,33 @@ impl Game {
         let list: Vec<String> = self.adv_assets.event("Before_Item").into_iter().collect();
         self.item = Some(ItemRun { card: card.clone(), judge });
         self.set_hud_visible(false);
-        // SATD-amanatsu-port: the event CGs (`EventCG_Chair*`) and the
-        // heroine's placement at the item are not ported; she is addressed
-        // where she stands.
+        // The rest scenario chooses the map-specific EventCG prefab and
+        // positions the speakers after the player confirms the choice.
         let who = card.clone().unwrap_or_else(|| self.heroines.first().cloned().unwrap_or_default());
         let vars = [("Judge", crate::adv::Var::Int(judge as i64)), ("G_MapID", crate::adv::Var::Int(self.current_map() as i64))];
         self.night_talk(&who, list, &vars)
+    }
+
+    fn release_event_camera(&mut self) {
+        if let Some(e) = self.event_cg.take() {
+            self.view = e.view_return;
+            if let Some(v) = &self.view {
+                self.world.push(v.command());
+            }
+        }
     }
 
     /// `EventManager.Item` after `rest`: 休まない (`SelectNum` 1) or no event
     /// ends it; the H variant (`IsHScene`) is an H at the map's item event
     /// H point; the talk variant adds `QuestionsFromNPC` points by
     /// `ItemSelectNum`. `ItemEventEnd` returns to the action map.
-    fn item_talk_ended(&mut self, now: u64) {
-        let Some(item) = self.item.take() else { return };
+    fn item_talk_ended(&mut self, host: &mut dyn HostServices, client: ClientId, now: u64) -> Result<()> {
+        let Some(item) = self.item.take() else { return Ok(()) };
         let (selected, is_h_scene) = self.last_talk;
         let end = |game: &mut Self| {
             game.set_hud_visible(true);
             game.log.push("ItemEventEnd".into());
+            Ok(())
         };
         if selected == Some(1) || item.judge == 2 {
             return end(self);
@@ -3384,17 +3604,23 @@ impl Game {
             self.fade.start(now, true, self.fade_seconds);
             self.pending_map = Some((map, zone));
             self.log.push(format!("EventManager.Item: H at {point}"));
-            return;
+            return Ok(());
         }
         if item.judge == 1 {
+            // ItemEventEnd(true, heroine) restores the action-map camera
+            // and runs SceneFade(Out) after ActionMapUI.Open (C02A60).
+            self.adv_eye_patterns.remove(&card);
+            self.release_event_camera();
             if let Some(n) = self.item_select.take() {
                 if n >= 0 {
-                    self.apply_points(card, "QuestionsFromNPC", Some(n as usize));
+                    self.apply_points(card.clone(), "QuestionsFromNPC", Some(n as usize));
                 }
             }
             self.is_item_event = true;
+            self.resume_item_heroine(host, client, &card)?;
+            self.fade.start(now, false, self.fade_seconds);
         }
-        end(self);
+        end(self)
     }
 
     /// The face's morph weights with the character's animation layers.
@@ -3437,20 +3663,21 @@ impl Game {
     }
 
     /// `EyeLookController`/`CmpEyeLookMaterial`: the eyes of placed
-    /// characters follow the camera (`EyeTypeStates` pattern 1, the
-    /// camera look). SATD-amanatsu-port: the eye bones' animated pose,
-    /// `LeapSpeed` easing, micro saccades and the other look patterns
-    /// (`ChangeLookEyesPtn`) are not ported; the rest pose under the
-    /// character root stands in for the animated head.
+    /// characters follow the camera with their selected TARGET pattern's
+    /// limits. SATD-amanatsu-port: animated eye bones, LeapSpeed easing,
+    /// micro saccades and CONTROL, AWAY and FORWARD target construction.
     fn eye_look(&mut self) {
         let Some(view) = self.view.clone() else { return };
         if self.eye_states.is_none() {
             self.eye_states = Some(crate::face::eye_type_states(&mut self.unity).unwrap_or_default());
         }
-        let Some(state) = self.eye_states.as_ref().and_then(|s| s.get(1).or(s.first())).copied() else { return };
         let camera = glam::Vec3::from_array(crysirror_unity::gltf::mirror_point(view.eye));
         let cards: Vec<String> = self.faces.keys().cloned().collect();
         for card in cards {
+            let pattern = self.adv_eye_patterns.get(&card).copied().unwrap_or(1);
+            let Some(state) = self.eye_states.as_ref().and_then(|s| s.get(pattern)).copied() else { continue };
+            // NO_LOOK leaves the last calculated eye angles and rates intact.
+            if state.look_type != 1 { continue; }
             let (Some(&(pos, rot)), Some(rest)) = (self.chara_roots.get(&card), self.eye_rest.get(&card)) else { continue };
             let root = glam::Mat4::from_rotation_translation(glam::Quat::from_array(rot), glam::Vec3::from_array(pos));
             let offsets = [0, 1].map(|i| {
@@ -3567,7 +3794,7 @@ impl Game {
         let refs: Vec<&str> = states.iter().map(String::as_str).collect();
         let first = refs.first().copied().unwrap_or("Idle");
         let sun = self.map_sun;
-        let entities = self.spawn_character_states(host, client, &card, t, sun, crate::sm::ANIMATORS, &format!("stm_f_{id:02}"), &refs, first)?;
+        let entities = self.spawn_character_states(host, client, &card, t, sun, crate::sm::ANIMATORS, &format!("stm_f_{id:02}"), &refs, first, &[])?;
         let pick = self.last_height_pick;
         let cameras = match self.movie.as_ref().map(|m| m.movie.clone()) {
             Some(m) => m.camera_clips(&mut self.unity, pick).unwrap_or_default(),
@@ -3738,7 +3965,7 @@ impl Game {
             let (gp, count, _) = self.npc(&card).clone();
             !gp.favorability.is_max_lv && gp.favorability.point >= lv_point && crate::params::favorability_gate(&gp.favorability, &count)
         };
-        let hidden: &[&str] = if with_ready { &["Command/Canvas/Hide", "Command/Canvas/Panel/WaterGun"] } else { &["Command/Canvas/Hide", "Command/Canvas/Panel/WaterGun", "Command/Canvas/Panel/Command/WithPlay"] };
+        let hidden: &[&str] = if with_ready { &["Command/Canvas/Hide"] } else { &["Command/Canvas/Hide", "Command/Canvas/Panel/Command/WithPlay"] };
         for path in hidden.iter().copied() {
             if let Some(n) = level.find(path) {
                 level.set_active(n, false);
@@ -3778,6 +4005,12 @@ impl Game {
         let key = self.unity.bundle_files().into_iter().find(|k| k.starts_with(&format!("bundle:{}#", crate::talk::ADV_BUNDLE)) && !k.ends_with(".resS")).context("ADV bundle")?;
         let mut level = Level::root_of(&mut self.unity, &key, "ADVCore")?;
         let mut talk = crate::talk::Talk::start(&mut self.unity, &mut level, personality, &name, self.now, scenarios)?;
+        talk.heroine_card.clone_from(&self.talk_card);
+        for (actor, card) in [(0, self.talk_card.as_deref()), (-1, Some(MALE_CARD))] {
+            if let Some(value) = card.and_then(|card| self.adv_dither.get(card)) {
+                talk.program.inherit_dither(actor, *value);
+            }
+        }
         talk.chars_per_sec = self.config.number("Text", "FontSpeed", 40.);
         talk.set_window_alpha(&mut level, self.config.number("Text", "WindowAlpha", 1.));
         for (k, v) in vars {
@@ -3793,6 +4026,9 @@ impl Game {
     }
 
     fn release_map(&mut self, host: &mut dyn HostServices, client: ClientId) -> Result<()> {
+        self.underwater_cloth.clear();
+        self.adv_dither.clear();
+        self.walks = None;
         for id in std::mem::take(&mut self.map_lights) {
             self.world.push(json!({"op": "despawn", "id": id}));
         }
@@ -3882,6 +4118,7 @@ impl AmanatsuVm {
         let color = [rgba & 0xFF, (rgba >> 8) & 0xFF, (rgba >> 16) & 0xFF].map(|c| c as f32 / 255.);
         let load = f.int("_loadLevel").unwrap_or(1) as usize;
         let sound = Sound::load(&mut unity)?;
+        let water_standby = crate::watergun::Standby::load(&mut unity)?;
         let pd = unity.find_script_object("StreamingAssets/aa", "AL.PropertyData")?.context("AL.PropertyData")?;
         let sse = pd.fields("_sseID").cloned().unwrap_or_default();
         let sound_ids = scenes::SoundIds {
@@ -3928,11 +4165,21 @@ impl AmanatsuVm {
             h_place: 0,
             talk_card: None,
             pending_heroines: Vec::new(),
+            zone_motions: map::wandering::zone_motions(&pd)?,
+            item_return_motions: None,
+            walk_rules: map::wandering::Rules::read(&pd)?,
+            water_standby,
+            water_params: pd.fields("_wgParam").cloned().context("AL.PropertyData._wgParam")?,
+            water: None,
+            walks: None,
             next_actions: None,
             siru: Default::default(),
             h_models: Default::default(),
             h_placement: None,
             h_hits: None,
+            h_emitters: Vec::new(),
+            h_inside: false,
+            h_shots: Vec::new(),
             heroine_wait: 0,
             standing: std::collections::HashMap::new(),
             command_view_return: None,
@@ -3944,6 +4191,7 @@ impl AmanatsuVm {
             config_dirty: false,
             exit_dialog: false,
             cloth: std::collections::HashMap::new(),
+            underwater_cloth: Default::default(),
             cloth_card: None,
             expressions: std::collections::HashMap::new(),
             blinking: std::collections::HashSet::new(),
@@ -3951,6 +4199,8 @@ impl AmanatsuVm {
             no_blink: std::collections::HashSet::new(),
             h_mouth: None,
             h_ui: None,
+            yuragi: None,
+            motion_blends: Vec::new(),
             h_change: None,
             h_points: Vec::new(),
             h_ui_place: None,
@@ -3997,6 +4247,7 @@ impl AmanatsuVm {
             fade: Fade::covered(color),
             // SceneFadeCanvas prefab `_time` (Addressables manager bundle).
             fade_seconds: 1.0,
+            initial_fade_color: color,
             pending: None,
             now: host.now_ms(),
             last: host.now_ms(),
@@ -4013,6 +4264,9 @@ impl AmanatsuVm {
             global_loaded: false,
             global_dirty: false,
             memory_play: None,
+            custom_female: true,
+            custom_ui: None,
+            editor_camera: None,
             adv_cloth: std::collections::HashMap::new(),
             coordinates: std::collections::HashMap::new(),
             heads: std::collections::HashMap::new(),
@@ -4020,6 +4274,8 @@ impl AmanatsuVm {
             eye_rest: std::collections::HashMap::new(),
             eye_offsets: std::collections::HashMap::new(),
             eye_states: None,
+            adv_eye_patterns: std::collections::HashMap::new(),
+            adv_dither: std::collections::HashMap::new(),
             sky: None,
             next_model: 0,
             view: None,
@@ -4146,10 +4402,11 @@ impl AmanatsuVm {
         } else if game.pending_map.is_none() && !game.pending_heroines.is_empty() {
             let (card, t, pos, sun, anims) = game.pending_heroines.remove(0);
             let (personality, name) = game.unity.read_all(&card).ok().and_then(|b| crate::card::Card::parse(&b).ok()).and_then(|c| c.parameter()).map_or((0, String::new()), |p| (p.0, p.1));
-            let state = game.point_activity(personality, &anims);
+            let state = game.point_activity(personality, &anims, -1);
             let spawned = match &state {
                 Some((id, state)) => {
                     let (bundle, controller) = crate::chara::motion_controller(true);
+                    game.extra(&card).action_motion_id = *id;
                     game.log.push(format!("ActionPoint activity {card}: {id} {state}"));
                     game.spawn_character_motion(host, client, &card, Some(t), sun, Some((&bundle, controller, state))).map(|_| ())
                 }
@@ -4162,6 +4419,7 @@ impl AmanatsuVm {
                 Err(e) => game.log.push(format!("heroine {card}: {e:#}")),
             }
         }
+        game.update_map_walks(host, self.client, dt);
         if let Some(card) = game.pending_night.take() {
             game.night_spawn_heroine(host, client, &card)?;
             let cottage = game.night.as_ref().is_some_and(|n| n.cottage);
@@ -4242,19 +4500,50 @@ impl AmanatsuVm {
         let a = game.fade.alpha(now);
         let c = game.fade.color.map(|v| (v * 255. + 0.5) as u8);
         ops.push(json!({"op": "put", "layer": {"id": FADE_LAYER, "rect": [0., 0., WIDTH, HEIGHT], "paint": {"kind": "solid", "color": [c[0], c[1], c[2], (a.clamp(0., 1.) * 255. + 0.5) as u8]}, "order": [i32::MAX / 2, 0]}}));
-        let world = std::mem::take(&mut game.world);
+        let mut world = std::mem::take(&mut game.world);
+        if !world.is_empty() {
+            for (card, &value) in &game.adv_dither {
+                apply_actor_dither(&mut world, &game.character_entities(card), value);
+            }
+        }
         host.submit_engine(client, 1, &serde_json::to_vec(&json!({"layers": ops, "world": world}))?)?;
 
         // Input: a Button click is a press and release on the same handler;
         // the topmost hierarchy with a hit receives it.
         let fading = game.fade.fading(now) || game.pending.is_some() || game.pending_map.is_some();
         let (x, y) = (input.pointer_x as f32, input.pointer_y as f32);
+        let water_modal = game.water.is_some();
+        let title_confirm = game.overlays.last().is_some_and(|(level, _)| level.name == "ConfirmDialog");
         let mut handler = None;
         for (h, layout) in layouts.iter().enumerate().rev() {
+            if (water_modal || title_confirm) && h != game.overlays.len() {
+                break;
+            }
             let level = if h == 0 { &game.level } else { &game.overlays[h - 1].0 };
             if let Some(n) = layout.hits.iter().rev().find(|(_, r)| r.contains(x, y)).map(|(n, _)| *n) {
                 handler = level.click_handler(n).filter(|&n| level.selectable_interactable(n) && !layout.non_interactable.contains(&n)).map(|n| (h, n));
                 break;
+            }
+        }
+        if let Some((camera, _)) = &game.editor_camera {
+            if let Some((index, (panel, _))) = game.overlays.iter_mut().enumerate().find(|(_, (l, _))| l.name == "ControlPanel") {
+                camera.hover(panel, handler.filter(|(h, _)| *h == index + 1 && !fading).map(|(_, n)| n));
+            }
+        }
+        let wheel_steps = i32::from(input.buttons_pressed & b::WHEEL_DOWN != 0) - i32::from(input.buttons_pressed & b::WHEEL_UP != 0);
+        if let Controller::Memory(memory) = &mut game.controller {
+            let active = !fading && game.overlays.is_empty();
+            memory.hover(&mut game.level, handler.filter(|(h, _)| active && *h == 0).map(|(_, n)| n));
+            if active && wheel_steps != 0 && memory.scroll(&mut game.level, &layouts[0], x, y, wheel_steps as f32) {
+                game.pressed = None;
+                handler = None;
+            }
+        } else if !fading && wheel_steps != 0 && game.chara_select.is_some() && game.overlays.len() == 2 {
+            if let (Some(cs), Some((level, _)), Some(layout)) = (&mut game.chara_select, game.overlays.last_mut(), layouts.last()) {
+                if cs.scroll(level, layout, x, y, wheel_steps as f32) {
+                    game.pressed = None;
+                    handler = None;
+                }
             }
         }
         // An open `ConfigWindow` takes the input.
@@ -4303,6 +4592,12 @@ impl AmanatsuVm {
                 }
             }
         }
+        let cancel_confirm = title_confirm && input.buttons_pressed & (b::ESCAPE | b::MOUSE_RIGHT) != 0;
+        if water_modal { game.water_input(input.buttons_down, now); }
+        if title_confirm || water_modal {
+            input.buttons_pressed = 0;
+            input.buttons_down = 0;
+        }
         if game.movie.is_some() {
             game.movie_update(now);
         }
@@ -4342,6 +4637,10 @@ impl AmanatsuVm {
         // A conversation takes the clicks; timed waits run every frame.
         if let Some((talk, oi)) = game.talk.as_mut() {
             let level = &mut game.overlays[*oi].0;
+            talk.scene_fading = game.fade.fading(now);
+            if let crate::adv::Wait::Voice(actor) = talk.wait {
+                talk.waiting_voice_playing = game.sound.voice_playing(host, client, actor)?;
+            }
             let mut steps = talk.tick(&mut game.unity, level, now);
             if input.buttons_pressed & b::MOUSE_LEFT != 0 && !fading {
                 let node = handler.filter(|(h, _)| *h == *oi + 1).map(|(_, n)| n);
@@ -4370,13 +4669,13 @@ impl AmanatsuVm {
         let mut movie_start: Option<(String, i32, Vec<String>)> = None;
         for step in std::mem::take(&mut game.pending_steps) {
             match step {
-                crate::talk::Step::Voice(bundle, asset) => {
-                    let personality = game.talk_card.as_ref().and_then(|c| game.spots.iter().find(|s| &s.0 == c)).map(|s| s.2);
-                    match game.sound.play_voice(host, client, &mut game.unity, &bundle, &asset, personality) {
+                crate::talk::Step::Voice(actor, bundle, asset) => {
+                    let speaker = game.adv_actor(&actor.to_string());
+                    let personality = speaker.as_ref().and_then(|c| game.spots.iter().find(|s| &s.0 == c)).map(|s| s.2);
+                    match game.sound.play_adv_voice(host, client, &mut game.unity, actor, &bundle, &asset, personality) {
                         Ok(()) => {
-                            // The talking heroine's mouth follows the line.
                             let len = sound::Sound::clip_length(&mut game.unity, &bundle, &asset).unwrap_or(0.);
-                            if let Some(card) = game.talk_card.clone().filter(|c| game.faces.contains_key(c) && len > 0.) {
+                            if let Some(card) = speaker.filter(|c| game.faces.contains_key(c) && len > 0.) {
                                 let base = game.faces[&card].3.mouth_open;
                                 game.h_mouth = Some((card, (base, base.max(0.8)), now, now + (len * 1000.) as u64));
                             }
@@ -4384,8 +4683,11 @@ impl AmanatsuVm {
                         Err(e) => game.log.push(format!("voice {asset}: {e:#}")),
                     }
                 }
-                crate::talk::Step::StopVoice => {
-                    if let Some(m) = game.h_mouth.as_mut().filter(|m| game.talk_card.as_ref() == Some(&m.0)) {
+                crate::talk::Step::Fault(error) => anyhow::bail!("{error}"),
+                crate::talk::Step::StopVoice(actor) => {
+                    game.sound.stop_voice(host, client, actor)?;
+                    let speaker = game.adv_actor(&actor.to_string());
+                    if let Some(m) = game.h_mouth.as_mut().filter(|m| speaker.as_ref() == Some(&m.0)) {
                         m.3 = now;
                     }
                 }
@@ -4428,6 +4730,8 @@ impl AmanatsuVm {
                         item_talk_ended = game.item.is_some();
                         night_talk_ended = game.night.is_some();
                         if let Some((card, kind)) = game.pending_points.take() {
+                            let flag = match kind { "Talk" => 1, "Listen" => 2, "HTopic" => 4, _ => 0 };
+                            game.extra(&card).time_zone_play_command |= flag;
                             game.apply_points(card, kind, talk.selected);
                         }
                         massage_talk_ended = true;
@@ -4472,6 +4776,28 @@ impl AmanatsuVm {
         let mut save_load_action: Option<crate::saveload::Action> = None;
         let mut h_point_action: Option<crate::hui::PointAction> = None;
         let mut open_save_load: Option<bool> = None;
+        if water_modal {
+            if let Some((_, button)) = click.take() { game.water_click(host,button)?; }
+        }
+        if title_confirm {
+            let answer = click.take().and_then(|(h, node)| {
+                let level = &game.overlays.get(h.checked_sub(1)?)?.0;
+                match level.scene.nodes[node].name.as_str() {
+                    "btnEnter" => Some(true),
+                    "btnCancel" | "btnClose" => Some(false),
+                    _ => None,
+                }
+            }).or_else(|| cancel_confirm.then_some(false));
+            if let Some(yes) = answer {
+                let (_, mut ui) = game.overlays.pop().context("missing title confirm dialog")?;
+                game.removed.extend(ui.clear());
+                game.pressed = None;
+                game.level.sounds.push(sound::Call::SystemSe(if yes { game.sound_ids.ok_s } else { game.sound_ids.cancel }));
+                if yes {
+                    request = scenes::Request::Load(scenes::scene_id::TITLE);
+                }
+            }
+        }
         if let Some((h, button)) = click {
             if h > 0 && game.overlays[h - 1].0.name == "ExitDialog" {
                 let name = game.overlays[h - 1].0.scene.nodes[button].name.clone();
@@ -4485,6 +4811,21 @@ impl AmanatsuVm {
                 game.log.push(format!("click {}", level.scene.path(button)));
                 let calls = level.on_click(button);
                 let script = level.invoke(&calls);
+                if level.name == "ControlPanel" {
+                    if let Some((_, quick)) = &mut game.editor_camera { quick.click(level, button); }
+                    if game.editor_camera.as_ref().is_some_and(|(camera, _)| button == camera.exit_button) {
+                        request = scenes::Request::ConfirmTitle;
+                    }
+                    if let Some(view) = game.editor_camera.as_ref().zip(game.view.as_ref())
+                        .and_then(|((camera, _), lens)| camera.click(button, now, lens)) {
+                        game.log.push(format!("editor camera {} at {:?}", level.scene.nodes[button].name, view.eye));
+                        game.world.push(view.command());
+                        game.view = Some(view);
+                    }
+                }
+                if level.name == "CategoryTop" {
+                    if let Some(categories) = &mut game.custom_ui { request = categories.click(level, button); }
+                }
                 if game.massage.is_some() && level.name == crate::oil::SCENE_PREFAB && level.scene.nodes[button].name == "Button Exit" {
                     massage_exit = true;
                 }
@@ -4541,7 +4882,10 @@ impl AmanatsuVm {
                             game.pending_map = Some((id, time_zone));
                             game.log.push(format!("MapSelectCallBack → ChangeMap({id}, {time_zone})"));
                         }
-                        actionmap::Action::Scene(r) => request = r,
+                        actionmap::Action::Scene(r) => {
+                            game.level.sounds.push(sound::Call::SystemSe(game.sound_ids.ok_s));
+                            request = r;
+                        }
                         actionmap::Action::OpenCharaSelect => open_chara_select = true,
                         actionmap::Action::OpenSaveLoad => {
                             game.level.sounds.push(sound::Call::SystemSe(game.sound_ids.ok_s));
@@ -4609,7 +4953,7 @@ impl AmanatsuVm {
             game.night_talk_ended(now)?;
         }
         if item_talk_ended {
-            game.item_talk_ended(now);
+            game.item_talk_ended(host, client, now)?;
         }
         if let Some((card, id, after)) = movie_start {
             game.start_movie(&card, id, after, now);
@@ -4770,10 +5114,14 @@ impl AmanatsuVm {
                 }
                 game.visit_played = true;
 
-            } else {
+            } else if name != "btnWaterGun" {
                 game.log.push(format!("SATD-amanatsu-port: command {name} not ported"));
             }
-            if end {
+            if name == "btnWaterGun" {
+                if let Err(e) = game.open_water_gun(host, ci) {
+                    game.log.push(format!("WaterGun: {e:#}"));
+                }
+            } else if end {
                 // `CommandSceneToMap`: the menu closes.
                 if ci < game.overlays.len() {
                     let (_, mut ui) = game.overlays.remove(ci);
@@ -4817,13 +5165,27 @@ impl AmanatsuVm {
             scenes::Request::None => {}
             // `ExitDialog`: quit after confirmation.
             scenes::Request::Quit => game.open_exit_dialog(),
-            scenes::Request::Load(id) if game.pending.is_none() => {
+            scenes::Request::ConfirmTitle => {
+                let dialog = if game.editor_camera.is_some() {
+                    crate::custom::exit_dialog(&mut game.unity, &game.level)?
+                } else {
+                    actionmap::title_dialog(&mut game.unity)?
+                };
+                game.overlays.push((dialog, Ui::new(11)));
+            }
+            scenes::Request::Load(_) | scenes::Request::Custom { .. } if game.pending.is_none() => {
+                let id = if let scenes::Request::Load(id) = request {
+                    id
+                } else {
+                    game.custom_female = matches!(request, scenes::Request::Custom { female: true });
+                    scenes::scene_id::CUSTOM
+                };
                 // SceneSettings FadeType In: cover, then load.
                 game.fade.start(now, true, game.fade_seconds);
                 game.pending = Some((id, now));
                 game.log.push(format!("SceneSettings.Load({id})"));
             }
-            scenes::Request::Load(_) => {}
+            scenes::Request::Load(_) | scenes::Request::Custom { .. } => {}
             scenes::Request::LoadSave if game.pending.is_none() => game.open_save_load(host, true)?,
             scenes::Request::LoadSave => {}
             scenes::Request::Config => game.open_config(),
@@ -4832,6 +5194,19 @@ impl AmanatsuVm {
             return Ok(VmYield::Halted);
         }
         Ok(VmYield::WaitUntil(game.now + 16))
+    }
+}
+
+/// Animation submissions replace all model properties. Preserve an actor's
+/// material coverage when blink, motion or clothing submits a fresh state.
+fn apply_actor_dither(world: &mut [serde_json::Value], entities: &[u32], value: f32) {
+    for command in world {
+        if command["op"] == "set_animation"
+            && command["id"].as_u64().is_some_and(|id| entities.iter().any(|&e| u64::from(e) == id))
+            && let Some(animation) = command["animation"].as_object_mut()
+        {
+            animation.insert("dither".into(), json!(value));
+        }
     }
 }
 
@@ -4940,6 +5315,10 @@ impl VmAdapter for AmanatsuVm {
             return serde_json::to_vec(&json!({"error": self.error})).unwrap_or_default();
         };
         serde_json::to_vec(&json!({
+            "motion_blend": g.h.as_ref().zip(g.yuragi.as_ref()).map(|(h, y)| json!({
+                "state": h.motion, "amplitude": y.value,
+                "actors": g.motion_blends.iter().filter(|a| a.has_motion(h.motion)).count()
+            })),
             "scene": g.level.name,
             "level": g.level.key,
             "fade": g.fade.alpha(g.now),

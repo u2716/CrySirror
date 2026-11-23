@@ -338,6 +338,16 @@ struct MarkUniform {
     params: [f32; 4],
     centers: [[i32; 4]; 8],
 }
+/// A change of geometry bounds, coverage or bound material invalidates
+/// the cached pages intersecting either caster footprint.
+#[derive(Clone, Copy, PartialEq)]
+struct ShadowCasterState {
+    center: Vec3,
+    radius: f32,
+    dither_step: u8,
+    distance_factor: f32,
+    material: u64,
+}
 /// GPU side of the sun's virtual shadow maps (ADR 0027).
 struct VsmGpu {
     cache: crate::vsm::PageCache,
@@ -357,7 +367,7 @@ struct VsmGpu {
     /// change the cache key).
     depth: Option<[f32; 2]>,
     /// World bounding sphere of each opaque caster last frame (static/dynamic split).
-    bounds: HashMap<u64, (Vec3, f32)>,
+    bounds: HashMap<u64, ShadowCasterState>,
 }
 impl VsmGpu {
     fn new(d: &wgpu::Device) -> Self {
@@ -509,6 +519,10 @@ struct MaterialUniform {
     toon: [f32; 4],
     toon_light: [f32; 4],
     toon_shade: [f32; 4],
+    shadow_tone_override: [f32; 4],
+    line_color: [f32; 4],
+    line_params: [[f32; 4]; 2],
+    raster: [f32; 4],
     /// Liquid layer: tiling (xy scale, zw offset) and colour (rgb linear,
     /// a 1 when the layer's textures are bound).
     liquid_tiling: [f32; 4],
@@ -681,7 +695,23 @@ pub struct LodStats {
     pub drawn_triangles: usize,
     pub clusters_drawn: usize,
 }
+#[derive(Clone, Copy, Default)]
+struct RasterPolicy {
+    queue: Option<crysirror_scene::material::RasterQueue>,
+    distance_coverage: bool,
+}
+impl RasterPolicy {
+    fn geometry(self, alpha: AlphaMode) -> bool {
+        self.queue.map_or(!alpha.transparent(), |q| q.order <= 2500)
+    }
+    fn from_material<T>(material: &crysirror_scene::material::Material<T>) -> Self {
+        let distance_coverage = material.toon.as_ref().is_some_and(|t|
+            matches!(t.line_model, crysirror_scene::material::ToonLineModel::Cloth { width, edge_alpha, .. } if width > 0. && edge_alpha > 0.));
+        Self { queue: material.raster_queue, distance_coverage }
+    }
+}
 struct GpuMaterial {
+    raster: RasterPolicy,
     shader: Option<String>,
     alpha: AlphaMode,
     bind: wgpu::BindGroup,
@@ -731,6 +761,7 @@ struct Targets {
     resolved: wgpu::TextureView,
     composite: wgpu::TextureView,
     pre_depth: wgpu::TextureView,
+    transparency_depth: Option<wgpu::TextureView>,
     normal: wgpu::TextureView,
     rt_ao: Option<wgpu::TextureView>,
     velocity: wgpu::TextureView,
@@ -1060,8 +1091,81 @@ struct SurfacePipelines {
     outline: wgpu::RenderPipeline,
     outline_skin: wgpu::RenderPipeline,
     transparent: Vec<wgpu::RenderPipeline>,
+    forward_module: wgpu::ShaderModule,
+    forward_layout: wgpu::PipelineLayout,
+    depth_blend: Vec<wgpu::RenderPipeline>,
+    geometry_blend: Vec<wgpu::RenderPipeline>,
+    geometry_no_write: Vec<wgpu::RenderPipeline>,
+    late_depth_blend: Vec<wgpu::RenderPipeline>,
 }
 impl SurfacePipelines {
+    fn forward_pipeline(d: &wgpu::Device, layout: &wgpu::PipelineLayout, module: &wgpu::ShaderModule,
+        cull: Option<wgpu::Face>, skinned: bool, alpha: AlphaMode, depth_write: bool, geometry: bool, authored: bool) -> wgpu::RenderPipeline {
+        let buffers = [Some(vertex_layout()), Some(skin_layout())];
+        d.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            cache: None,
+            label: Some("pbr forward"),
+            layout: Some(layout),
+            vertex: wgpu::VertexState {
+                module,
+                entry_point: Some(if skinned { "vs_skinned" } else { "vs_main" }),
+                buffers: &buffers[..if skinned { 2 } else { 1 }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: HDR,
+                    blend: if authored && alpha == AlphaMode::Blend {
+                        let straight = wgpu::BlendState::ALPHA_BLENDING.color;
+                        Some(wgpu::BlendState { color: straight, alpha: straight })
+                    } else { blend_state(alpha) },
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                cull_mode: cull,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH, depth_write_enabled: Some(depth_write), depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: Default::default(), bias: Default::default(),
+            }),
+            multisample: if !geometry {
+                Default::default()
+            } else {
+                wgpu::MultisampleState { count: MSAA, ..Default::default() }
+            },
+            multiview_mask: None,
+        })
+    }
+    fn prepare_raster_queues(&mut self, d: &wgpu::Device) -> Result<()> {
+        if self.depth_blend.is_empty() {
+            let error_scope = d.push_error_scope(wgpu::ErrorFilter::Validation);
+            let mut depth_blend = Vec::new();
+            let mut geometry_blend = Vec::new();
+            let mut geometry_no_write = Vec::new();
+            let mut late_depth_blend = Vec::new();
+            for skin in [false, true] {
+                for cull in [Some(wgpu::Face::Back), None] {
+                    depth_blend.push(Self::forward_pipeline(d, &self.forward_layout, &self.forward_module, cull, skin, AlphaMode::Blend, true, true, true));
+                    geometry_blend.push(Self::forward_pipeline(d, &self.forward_layout, &self.forward_module, cull, skin, AlphaMode::Blend, false, true, true));
+                    geometry_no_write.push(Self::forward_pipeline(d, &self.forward_layout, &self.forward_module, cull, skin, AlphaMode::Opaque, false, true, true));
+                    late_depth_blend.push(Self::forward_pipeline(d, &self.forward_layout, &self.forward_module, cull, skin, AlphaMode::Blend, true, false, true));
+                }
+            }
+            self.depth_blend = depth_blend;
+            self.geometry_blend = geometry_blend;
+            self.geometry_no_write = geometry_no_write;
+            self.late_depth_blend = late_depth_blend;
+            self.validation = crate::pipeline::Validation::new(error_scope.pop())?;
+        }
+        if !self.validation.ready()? { return Err(crate::pipeline::PreparationPending.into()); }
+        Ok(())
+    }
+
     fn build(
         gpu: &Gpu,
         frame_bgl: &wgpu::BindGroupLayout,
@@ -1092,44 +1196,8 @@ impl SurfacePipelines {
             count: MSAA,
             ..Default::default()
         };
-        let opaque_pipeline = |cull: Option<wgpu::Face>, skinned: bool, alpha: AlphaMode| {
-            let buffers = [Some(vertex_layout()), Some(skin_layout())];
-            d.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                cache: None,
-                label: Some("pbr opaque"),
-                layout: Some(&main_layout),
-                vertex: wgpu::VertexState {
-                    module: &pbr_sh,
-                    entry_point: Some(if skinned { "vs_skinned" } else { "vs_main" }),
-                    buffers: &buffers[..if skinned { 2 } else { 1 }],
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &pbr_sh,
-                    entry_point: Some("fs_main"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: HDR,
-                        blend: blend_state(alpha),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: Default::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    cull_mode: cull,
-                    ..Default::default()
-                },
-                depth_stencil: Some(depth_state(
-                    !alpha.transparent(),
-                    wgpu::CompareFunction::LessEqual,
-                )),
-                multisample: if alpha.transparent() {
-                    Default::default()
-                } else {
-                    msaa
-                },
-                multiview_mask: None,
-            })
-        };
+        let opaque_pipeline = |cull, skinned, alpha, depth_write, geometry, authored|
+            Self::forward_pipeline(d, &main_layout, &pbr_sh, cull, skinned, alpha, depth_write, geometry, authored);
         let outline_pipeline = |skinned: bool| {
             let buffers = [Some(vertex_layout()), Some(skin_layout())];
             d.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -1163,10 +1231,10 @@ impl SurfacePipelines {
         };
         let outline = outline_pipeline(false);
         let outline_skin = outline_pipeline(true);
-        let opaque = opaque_pipeline(Some(wgpu::Face::Back), false, AlphaMode::Opaque);
-        let opaque_double = opaque_pipeline(None, false, AlphaMode::Opaque);
-        let opaque_skin = opaque_pipeline(Some(wgpu::Face::Back), true, AlphaMode::Opaque);
-        let opaque_skin_double = opaque_pipeline(None, true, AlphaMode::Opaque);
+        let opaque = opaque_pipeline(Some(wgpu::Face::Back), false, AlphaMode::Opaque, true, true, false);
+        let opaque_double = opaque_pipeline(None, false, AlphaMode::Opaque, true, true, false);
+        let opaque_skin = opaque_pipeline(Some(wgpu::Face::Back), true, AlphaMode::Opaque, true, true, false);
+        let opaque_skin_double = opaque_pipeline(None, true, AlphaMode::Opaque, true, true, false);
         let mut transparent = Vec::new();
         for alpha in [
             AlphaMode::Blend,
@@ -1179,6 +1247,7 @@ impl SurfacePipelines {
                         if double { None } else { Some(wgpu::Face::Back) },
                         skin,
                         alpha,
+                        false, false, false,
                     ));
                 }
             }
@@ -1274,6 +1343,12 @@ impl SurfacePipelines {
             outline,
             outline_skin,
             transparent,
+            forward_module: pbr_sh,
+            forward_layout: main_layout,
+            depth_blend: Vec::new(),
+            geometry_blend: Vec::new(),
+            geometry_no_write: Vec::new(),
+            late_depth_blend: Vec::new(),
         })
     }
 }
@@ -1443,6 +1518,9 @@ impl PbrRenderer {
             mat_entries.push(float_tex(b));
         }
         mat_entries.push(sampler_entry(6, wgpu::SamplerBindingType::Filtering));
+        // The masked normal shell fetches base alpha at LOD zero in its vertex pass.
+        mat_entries[1].visibility = wgpu::ShaderStages::VERTEX_FRAGMENT;
+        mat_entries[6].visibility = wgpu::ShaderStages::VERTEX_FRAGMENT;
         mat_entries.push(float_tex(7));
         mat_entries.push(float_tex(8));
         let material_bgl = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -2415,6 +2493,10 @@ impl PbrRenderer {
             toon_light: m.toon.as_ref().map_or([0.; 4], |t| t.shadow_light),
             liquid_tiling: m.toon.as_ref().map_or([1., 1., 0., 0.], |t| t.liquid_tiling),
             liquid_color: m.toon.as_ref().map_or([0.; 4], |t| [t.liquid_color[0], t.liquid_color[1], t.liquid_color[2], if t.liquid_blobs.is_some() && t.liquid_regions.is_some() { 1. } else { 0. }]),
+            raster: [m.raster_queue.map_or(0., |q| if q.cull_front { 1. } else if !m.double_sided { 2. } else { 0. }), 0., 0., 0.],
+            line_params: m.toon.as_ref().map_or([[0.; 4]; 2], |t| t.line_model.uniforms()),
+            line_color: m.toon.as_ref().filter(|t| t.surface_line_texture.is_some()).map_or([0., 0., 0., -1.], |t| t.line_color),
+            shadow_tone_override: m.toon.as_ref().map_or([0.; 4], |t| t.shadow_tone_override),
             toon_shade: m.toon.as_ref().map_or([0.; 4], |t| {
                 let kind = match t.shade_kind {
                     crysirror_scene::material::ToonShadeKind::BaseHsv => 0.,
@@ -2613,7 +2695,10 @@ impl PbrRenderer {
         // Toon materials bind lookup/shadow/highlight in slots 1, 3 and 6, raw.
         let mut slots = m.textures();
         if let Some(t) = &m.toon {
-            let [lookup, shadow, highlight, blend, _, _] = t.textures();
+            let [lookup, shadow, highlight, blend, _, _, line] = t.textures();
+            if line.is_some() {
+                slots[2] = line;
+            }
             [slots[1], slots[3], slots[6]] = [lookup, shadow, highlight];
             if blend.is_some() {
                 slots[4] = blend;
@@ -2689,8 +2774,9 @@ impl PbrRenderer {
                     shader,
                     bind,
                     outline: m.toon.as_ref().is_some_and(|t| t.outline_width > 0.),
-                    double_sided: m.double_sided,
+                    double_sided: m.double_sided || m.raster_queue.is_some_and(|q| q.cull_front),
                     alpha: m.alpha_mode,
+                    raster: RasterPolicy::from_material(m),
                     rt: Self::rt_coverage(m),
                 },
                 _textures: textures,
@@ -2744,6 +2830,7 @@ impl PbrRenderer {
                         .unwrap_or(&self.defaults[fallback])
                 };
                 GpuMaterial {
+                    raster: RasterPolicy::from_material(m),
                     rt: Self::rt_coverage(m),
                     shader: shader_keys[index].clone(),
                     bind: self.material_bind(
@@ -2752,7 +2839,7 @@ impl PbrRenderer {
                             pick(m.base_color_texture, 0),
                             // Toon: lookup, shadow and highlight textures.
                             pick(m.toon.as_ref().map_or(m.metallic_roughness_texture, |t| t.lookup_texture), 1),
-                            pick(m.normal_texture, 2),
+                            pick(m.toon.as_ref().and_then(|t| t.surface_line_texture).or(m.normal_texture), 2),
                             pick(m.toon.as_ref().map_or(m.occlusion_texture, |t| t.shadow_texture), 1),
                             // Toon: the blend texture when present.
                             pick(m.toon.as_ref().and_then(|t| t.blend_texture).or(m.emissive_texture), 0),
@@ -2762,7 +2849,7 @@ impl PbrRenderer {
                             pick(m.toon.as_ref().map_or(m.specular_texture, |t| if t.liquid_blobs.is_some() && t.liquid_regions.is_some() { t.liquid_regions } else { t.highlight_texture }), 0),
                         ],
                     ),
-                    double_sided: m.double_sided,
+                    double_sided: m.double_sided || m.raster_queue.is_some_and(|q| q.cull_front),
                     outline: m.toon.as_ref().is_some_and(|t| t.outline_width > 0.),
                     alpha: m.alpha_mode,
                 }
@@ -2815,6 +2902,7 @@ impl PbrRenderer {
         let (tex, view) =
             Self::upload_rgba(&self.gpu, image.width, image.height, &image.levels, true);
         let mat = GpuMaterial {
+            raster: RasterPolicy::from_material(&material),
             rt: Self::rt_coverage(&material),
             outline: false,
             shader: None,
@@ -3027,7 +3115,8 @@ impl PbrRenderer {
             msaa_depth: mk("depth msaa", size, DEPTH, MSAA, ra),
             resolved: mk("hdr resolved", size, HDR, 1, rs),
             composite: mk("HDR transparency composite", size, HDR, 1, rs),
-            pre_depth: mk("prepass depth", size, DEPTH, 1, rs),
+            pre_depth: mk("prepass depth", size, DEPTH, 1, rs | wgpu::TextureUsages::COPY_SRC),
+            transparency_depth: None,
             normal: mk("view normals", size, HDR, 1, rs),
             rt_ao: self.hardware_rt.as_ref().map(|_| {
                 mk(
@@ -3297,6 +3386,7 @@ impl PbrRenderer {
         let mut flat: Vec<(GpuPrim, GpuMaterial)> = Vec::new();
         let mut flat_cpu: Vec<Arc<cpu::PbrPrimitive>> = Vec::new();
         struct DrawRef {
+            raster: RasterPolicy,
             /// Stable identity across frames (instance and primitive).
             key: u64,
             override_key: Option<String>,
@@ -3368,6 +3458,7 @@ impl PbrRenderer {
                     for (pi, p) in prims.iter().enumerate() {
                         grow(p.bounds, &mut lo, &mut hi);
                         draws.push(DrawRef {
+                            raster: RasterPolicy::default(),
                             key: draw_key(inst.key, pi as u64),
                             override_key: override_key.clone(),
                             object: obj,
@@ -3388,6 +3479,7 @@ impl PbrRenderer {
                     let p = &self.models[&key].meshes[0][0];
                     grow(p.bounds, &mut lo, &mut hi);
                     draws.push(DrawRef {
+                        raster: RasterPolicy::default(),
                         key: inst.key,
                         override_key: override_key.clone(),
                         object: obj,
@@ -3410,6 +3502,7 @@ impl PbrRenderer {
                     uv_offsets,
                     base_blend,
                     liquid_levels,
+                    dither,
                     ..
                 } => {
                     let key = format!("{client}@{}:{asset}", assets.revision(ClientId(*client)));
@@ -3468,7 +3561,8 @@ impl PbrRenderer {
                         }
                         let obj = objects.len() as u32;
                         let blend = base_blend.iter().find(|(n, _)| *n == node.name).map_or(0., |(_, w)| *w);
-                        let uv = uv_offsets.iter().find(|(n, _)| *n == node.name).map_or([0., 0., blend, 0.], |(_, o)| [o[0], o[1], blend, 0.]);
+                        let [u, v] = uv_offsets.iter().find(|(n, _)| *n == node.name).map_or([0.; 2], |(_, uv)| *uv);
+                        let uv = [u, v, blend, 1. - *dither];
                         objects.push(ObjectUniform {
                             model: wm,
                             normal: world.inverse().transpose().to_cols_array_2d(),
@@ -3516,6 +3610,7 @@ impl PbrRenderer {
                                 hi = hi.max(w);
                             }
                             draws.push(DrawRef {
+                                raster: RasterPolicy::default(),
                                 key: dk,
                                 override_key: override_key.clone(),
                                 object: obj,
@@ -3572,10 +3667,12 @@ impl PbrRenderer {
                             double_sided: false,
                             outline: false,
                             alpha: AlphaMode::Opaque,
+                            raster: RasterPolicy::default(),
                             rt: RtCoverage::default(),
                         },
                     ));
                     draws.push(DrawRef {
+                        raster: RasterPolicy::default(),
                         key: inst.key,
                         override_key: override_key.clone(),
                         object: obj,
@@ -3591,6 +3688,28 @@ impl PbrRenderer {
                     });
                 }
             }
+        }
+        let mut queued_shaders = std::collections::HashSet::new();
+        for draw in &mut draws {
+            let material = match &draw.override_key {
+                Some(k) => &self.overrides[k].material,
+                None if draw.kind == 0 => {
+                    let model = &self.models[draw.model.as_ref().unwrap()];
+                    &model.materials[model.meshes[draw.mesh as usize][draw.prim].material]
+                }
+                None => &flat[draw.flat].1,
+            };
+            draw.raster = material.raster;
+            if draw.raster.queue.is_some_and(|q| !q.depth_write || material.alpha.transparent()) {
+                queued_shaders.insert(material.shader.clone());
+            }
+        }
+        for shader in queued_shaders {
+            let pipelines = match shader {
+                Some(key) => self.custom_pipelines.get_mut(&key).context("missing queued material shader")?,
+                None => &mut self.pipelines,
+            };
+            pipelines.prepare_raster_queues(&self.gpu.device)?;
         }
         // Native RT draws reference the renderer's own GPU streams (ADR 0055).
         let rt_draws = if use_rt {
@@ -3634,7 +3753,7 @@ impl PbrRenderer {
                     Some(k) => (&self.overrides[k].material, format!("override:{k}")),
                     None => (material, material_id),
                 };
-                // Blended surfaces cast no raster shadows either.
+                // Blended coverage is not materialized for the RT path.
                 if material.alpha.transparent() {
                     continue;
                 }
@@ -4105,6 +4224,7 @@ impl PbrRenderer {
                     d.model.hash(&mut h);
                     d.override_key.hash(&mut h);
                     bytemuck::bytes_of(&objects[d.object as usize].model).hash(&mut h);
+                    objects[d.object as usize].uv[3].to_bits().hash(&mut h);
                 }
                 bytemuck::bytes_of(&[fu.sun_dir, fu.sun_color]).hash(&mut h);
                 (&e_key_for_gi, env.intensity.to_bits(), env.show_sky).hash(&mut h);
@@ -4214,7 +4334,7 @@ impl PbrRenderer {
             // Static/dynamic split: casters that appeared, vanished, moved or
             // are skinned (pose changes) dirty the pages under their old and
             // new light-space footprints; everything else stays cached.
-            let mut now: HashMap<u64, (Vec3, f32)> = HashMap::new();
+            let mut now: HashMap<u64, ShadowCasterState> = HashMap::new();
             let mut dirty: Vec<(f32, f32, f32)> = Vec::new();
             let mut mark = |c: Vec3, r: f32| {
                 let lc = light_view.transform_point3(c);
@@ -4233,23 +4353,35 @@ impl PbrRenderer {
                     .length()
                     .max(m.y_axis.truncate().length())
                     .max(m.z_axis.truncate().length());
-                let sphere = (
-                    m.transform_point3((b.0 + b.1) * 0.5),
-                    (b.1 - b.0).length() * 0.5 * scale,
-                );
+                use std::hash::{Hash, Hasher};
+                let mut material = std::collections::hash_map::DefaultHasher::new();
+                (&d.model, d.mesh, d.prim, &d.override_key).hash(&mut material);
+                if let Some(override_material) = d.override_key.as_ref().and_then(|k| self.overrides.get(k)) {
+                    override_material.live.hash(&mut material);
+                }
+                let sphere = ShadowCasterState {
+                    center: m.transform_point3((b.0 + b.1) * 0.5),
+                    radius: (b.1 - b.0).length() * 0.5 * scale,
+                    dither_step: ((1. - objects[d.object as usize].uv[3]) * 1.00001 * 16.) as u8,
+                    distance_factor: if d.raster.distance_coverage {
+                        let distance = Vec3::from_array(cam.eye).distance(m.w_axis.truncate());
+                        (1. - distance / 11.).max(0.)
+                    } else { 0. },
+                    material: material.finish(),
+                };
                 match self.vsm.bounds.get(&d.key) {
                     Some(old) if *old == sphere && !d.skinned => {}
                     Some(old) => {
-                        mark(old.0, old.1);
-                        mark(sphere.0, sphere.1);
+                        mark(old.center, old.radius);
+                        mark(sphere.center, sphere.radius);
                     }
-                    None => mark(sphere.0, sphere.1),
+                    None => mark(sphere.center, sphere.radius),
                 }
                 now.insert(d.key, sphere);
             }
             for (k, old) in &self.vsm.bounds {
                 if !now.contains_key(k) {
-                    mark(old.0, old.1);
+                    mark(old.center, old.radius);
                 }
             }
             self.vsm.bounds = now;
@@ -4494,6 +4626,20 @@ impl PbrRenderer {
         );
 
         let d = &self.gpu.device;
+        let late_writer = draws.iter().any(|r| r.raster.queue.is_some_and(|q| q.order > 2500 && q.depth_write));
+        let targets = self.targets.as_mut().unwrap();
+        if late_writer && targets.transparency_depth.is_none() {
+            let texture = d.create_texture(&wgpu::TextureDescriptor {
+                label: Some("transparent forward depth"),
+                size: targets.pre_depth.texture().size(),
+                mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+                format: DEPTH, view_formats: &[],
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST,
+            });
+            targets.transparency_depth = Some(texture.create_view(&Default::default()));
+        } else if !late_writer {
+            targets.transparency_depth = None;
+        }
         let t = self.targets.as_ref().unwrap();
         let fog = env.fog.as_ref();
         prepare_vfx(
@@ -4675,7 +4821,7 @@ impl PbrRenderer {
             mat.outline
         };
         let mut transparent_draws: Vec<_> =
-            draws.iter().filter(|r| get(r).3.transparent()).collect();
+            draws.iter().filter(|r| !r.raster.geometry(get(r).3)).collect();
         // Back to front per mesh instance (the centre of all its primitives'
         // bounds), then primitive order inside one mesh: overlapping
         // transparent submeshes (decals, eye highlights) keep their authored
@@ -4695,11 +4841,15 @@ impl PbrRenderer {
             -view.transform_point3(world).z
         };
         transparent_draws.sort_by(|a, b| {
-            depth(b)
-                .total_cmp(&depth(a))
+            a.raster.queue.map_or(3000, |q| q.order).cmp(&b.raster.queue.map_or(3000, |q| q.order))
+                .then_with(|| depth(b).total_cmp(&depth(a)))
                 .then(a.object.cmp(&b.object))
                 .then(a.prim.cmp(&b.prim))
         });
+        let mut geometry_draws: Vec<_> = draws.iter().filter(|r| r.raster.geometry(get(r).3)).collect();
+        if geometry_draws.iter().any(|r| r.raster.queue.is_some()) {
+            geometry_draws.sort_by_key(|r| r.raster.queue.map_or(2000, |q| q.order));
+        }
         let simple_pass = |enc: &mut wgpu::CommandEncoder,
                            label: &str,
                            dst: &wgpu::TextureView,
@@ -4832,7 +4982,7 @@ impl PbrRenderer {
                 pass.set_bind_group(0, &bind, &[]);
                 for r in &draws {
                     let (p, mat, _, alpha, pipelines) = get(r);
-                    if alpha.transparent() {
+                    if alpha.transparent() && r.raster.queue.is_none() {
                         continue;
                     }
                     pass.set_bind_group(2, mat, &[]);
@@ -4926,7 +5076,7 @@ impl PbrRenderer {
                             continue;
                         }
                         let (p, mat, _, alpha, pipelines) = get(r);
-                        if alpha.transparent() {
+                        if alpha.transparent() && r.raster.queue.is_none() {
                             continue;
                         }
                         pass.set_bind_group(2, mat, &[]);
@@ -4979,7 +5129,7 @@ impl PbrRenderer {
                         continue;
                     }
                     let (p, mat, _, alpha, pipelines) = get(r);
-                    if alpha.transparent() {
+                    if alpha.transparent() && r.raster.queue.is_none() {
                         continue;
                     }
                     pass.set_bind_group(2, mat, &[]);
@@ -5355,7 +5505,7 @@ impl PbrRenderer {
             pass.set_bind_group(0, &pre_frame_bind, &[]);
             for r in &draws {
                 let (p, mat, double, alpha, pipelines) = get(r);
-                if alpha.transparent() {
+                if !r.raster.geometry(alpha) {
                     continue;
                 }
                 pass.set_pipeline(match (r.skinned, double) {
@@ -5708,17 +5858,23 @@ impl PbrRenderer {
                 occlusion_query_set: None,
             });
             pass.set_bind_group(0, &frame_bind, &[]);
-            for r in &draws {
+            for &r in &geometry_draws {
                 let (p, mat, double, alpha, pipelines) = get(r);
-                if alpha.transparent() {
-                    continue;
-                }
-                pass.set_pipeline(match (r.skinned, double) {
-                    (false, false) => &pipelines.opaque,
-                    (false, true) => &pipelines.opaque_double,
-                    (true, false) => &pipelines.opaque_skin,
-                    (true, true) => &pipelines.opaque_skin_double,
-                });
+                let slot = usize::from(r.skinned) * 2 + usize::from(double);
+                let write = r.raster.queue.is_none_or(|q| q.depth_write);
+                let pipeline = if alpha == AlphaMode::Blend {
+                    if write { &pipelines.depth_blend[slot] } else { &pipelines.geometry_blend[slot] }
+                } else if !write {
+                    &pipelines.geometry_no_write[slot]
+                } else {
+                    match (r.skinned, double) {
+                        (false, false) => &pipelines.opaque,
+                        (false, true) => &pipelines.opaque_double,
+                        (true, false) => &pipelines.opaque_skin,
+                        (true, true) => &pipelines.opaque_skin_double,
+                    }
+                };
+                pass.set_pipeline(pipeline);
                 if r.skinned {
                     pass.set_vertex_buffer(1, p.skin.as_ref().unwrap().slice(..));
                 }
@@ -5829,6 +5985,14 @@ impl PbrRenderer {
                 &self.copy_hdr,
                 &bind,
             );
+            let depth_attachment = if let Some(writable) = &t.transparency_depth {
+                let source = t.pre_depth.texture();
+                encoder.copy_texture_to_texture(source.as_image_copy(), writable.texture().as_image_copy(), source.size());
+                wgpu::RenderPassDepthStencilAttachment { view: writable,
+                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Discard }), stencil_ops: None }
+            } else {
+                wgpu::RenderPassDepthStencilAttachment { view: &t.pre_depth, depth_ops: None, stencil_ops: None }
+            };
             {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     multiview_mask: None,
@@ -5842,11 +6006,7 @@ impl PbrRenderer {
                             store: wgpu::StoreOp::Store,
                         },
                     })],
-                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                        view: &t.pre_depth,
-                        depth_ops: None,
-                        stencil_ops: None,
-                    }),
+                    depth_stencil_attachment: Some(depth_attachment),
                     timestamp_writes: None,
                     occlusion_query_set: None,
                 });
@@ -5859,10 +6019,11 @@ impl PbrRenderer {
                         AlphaMode::Premultiplied => 2,
                         _ => unreachable!(),
                     };
-                    pass.set_pipeline(
-                        &pipelines.transparent
-                            [mode * 4 + usize::from(r.skinned) * 2 + usize::from(double)],
-                    );
+                    let slot = usize::from(r.skinned) * 2 + usize::from(double);
+                    let pipeline = if r.raster.queue.is_some_and(|q| q.depth_write) {
+                        &pipelines.late_depth_blend[slot]
+                    } else { &pipelines.transparent[mode * 4 + slot] };
+                    pass.set_pipeline(pipeline);
                     if r.skinned {
                         pass.set_vertex_buffer(1, p.skin.as_ref().unwrap().slice(..));
                     }

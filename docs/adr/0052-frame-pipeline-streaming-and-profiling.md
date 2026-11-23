@@ -69,7 +69,7 @@ their prior caller-owned lifetime. Managed unpinned/unshared payloads can be
 collected; shared decoded models remain alive while the renderer holds them.
 Unused PBR GPU model caches and RT geometry caches are released when their
 scene references disappear. General managed cache entries have an idle grace
-period. CPU prepared-cache accounting defaults to 256 MiB. The host can explicitly set
+period. Prepared CPU residency is always accounted. On 64-bit native desktop, Android and iOS the default has no aggregate cap. Other targets default to 256 MiB. The host can explicitly set
 16–4096 MiB with `--asset-cache-mib` (or its Rust policy API), with live residency
 checks and no pointers in project/save data. The budget does not bound every
 transient decoder allocation, World snapshot, renderer cache or driver resource.

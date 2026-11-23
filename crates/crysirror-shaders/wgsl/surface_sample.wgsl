@@ -3,7 +3,7 @@
 fn sample_surface(uv: vec2<f32>, world: vec3<f32>, normal: vec3<f32>, camera: vec3<f32>, time: f32) -> SurfaceOutput {
     let base = textureSample(t_base,s_material,uv)*material.base_color;
     let opacity = opacity_channel(textureSample(t_opacity,s_material,uv));
-    let mr = textureSample(t_mr,s_material,uv);
+    let mr = select(textureSample(t_mr,s_material,uv), vec4<f32>(1.0), material.surface.y == 6.0);
     let emission = textureSample(t_emissive,s_material,uv).rgb*material.emissive.rgb*material.emissive.a;
     let direction = camera-world;
     let view_dir = direction/max(length(direction),0.00001);

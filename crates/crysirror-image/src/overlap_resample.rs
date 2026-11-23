@@ -146,3 +146,32 @@ mod tests {
         assert_eq!([out.rgba[0], out.rgba[4], out.rgba[8]], [0, 2, 3]);
     }
 }
+
+/// Stretch a centered crop with endpoint-aligned nearest sampling, then average
+/// its stored bytes with the retained destination, rounding each channel down.
+/// A zero-sized crop on an axis samples its center coordinate throughout.
+pub fn blend_centered_crop(history: &mut ImageSurface, source: &ImageSurface, crop: [u32; 2]) -> Result<()> {
+    let [w,h] = [source.width,source.height];
+    ensure!(w > 0 && h > 0 && [history.width,history.height] == [w,h]
+        && crop[0] <= w && crop[1] <= h, "centered crop dimensions");
+    let len = crate::rgba_len(w,h)?;
+    ensure!(history.rgba.len()==len && source.rgba.len()==len, "centered crop buffer");
+    let index = |i:u32, dimension:u32, extent:u32| -> usize {
+        let span = u64::from(dimension.saturating_sub(1));
+        let offset = (dimension - extent) / 2;
+        let step = if span == 0 {0} else {
+            (2*u64::from(i)*u64::from(extent.saturating_sub(1))+span)/(2*span)
+        };
+        offset as usize + step as usize
+    };
+    let columns: Vec<_> = (0..w).map(|x| 4*index(x,w,crop[0])).collect();
+    for (y,row) in history.rgba.chunks_exact_mut(4*w as usize).enumerate() {
+        let origin = 4*w as usize*index(y as u32,h,crop[1]);
+        for (dst,&x) in row.chunks_exact_mut(4).zip(&columns) {
+            for (d,&s) in dst.iter_mut().zip(&source.rgba[origin+x..origin+x+4]) {
+                *d = (*d & s) + ((*d ^ s) >> 1);
+            }
+        }
+    }
+    Ok(())
+}

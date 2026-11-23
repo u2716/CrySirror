@@ -40,6 +40,7 @@ pub fn adapter_registry() -> Result<AdapterRegistry> {
     crysirror_catsystem2::register(&mut registry)?;
     crysirror_majiro::adapter::register(&mut registry)?;
     crysirror_qlie::adapter::register(&mut registry)?;
+    crysirror_minori::register(&mut registry)?;
     crysirror_sugarpot::register(&mut registry)?;
     crysirror_nsystem::register(&mut registry)?;
     crysirror_rscript::register(&mut registry)?;
@@ -50,6 +51,7 @@ pub fn adapter_registry() -> Result<AdapterRegistry> {
     crysirror_avg32::register(&mut registry)?;
     crysirror_willplus::adapter::register(&mut registry)?;
     crysirror_cm3d2::register(&mut registry)?;
+    crysirror_exhibit::register(&mut registry)?;
     crysirror_amanatsu::register(&mut registry)?;
     Ok(registry)
 }

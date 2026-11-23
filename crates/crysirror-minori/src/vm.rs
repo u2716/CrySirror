@@ -1,0 +1,3088 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Adopted from AetherKiri/AetherMinori; see SOURCE.json.
+use std::collections::{HashMap, HashSet};
+
+use crate::command::CommandKind;
+use crate::script::{Program, Statement};
+
+const WAIT_UNIT_MS: u32 = 10;
+
+/// The scenario counter uses the engine timer's tick phase, even after a write.
+#[derive(Default)]
+pub(crate) struct ScenarioTimer {
+    origin_ms: Option<u64>,
+    bias: u32,
+}
+
+impl ScenarioTimer {
+    pub fn ticks(&mut self, now_ms: u64) -> u32 {
+        let origin = *self.origin_ms.get_or_insert(now_ms);
+        let elapsed_ticks = now_ms.saturating_sub(origin) / u64::from(WAIT_UNIT_MS);
+        self.bias.wrapping_add(elapsed_ticks as u32)
+    }
+
+    pub fn set(&mut self, now_ms: u64, value: u32) {
+        let current = self.ticks(now_ms);
+        self.bias = self.bias.wrapping_add(value.wrapping_sub(current));
+    }
+
+    pub fn next_tick_ms(&self, now_ms: u64) -> u64 {
+        let unit = u64::from(WAIT_UNIT_MS);
+        let phase = now_ms.saturating_sub(self.origin_ms.unwrap_or(now_ms)) % unit;
+        now_ms.saturating_add(unit - phase)
+    }
+}
+
+fn timer_operand(arguments: &[String]) -> u32 {
+    arguments
+        .first()
+        .and_then(|s| decimal_prefix(s))
+        .unwrap_or(0) as u32
+}
+
+pub(crate) fn decimal_prefix(text: &str) -> Option<i32> {
+    let text = text.trim_start_matches(|c: char| c.is_ascii_whitespace());
+    let digits = text.strip_prefix(['+', '-']).unwrap_or(text);
+    let end = digits.bytes().take_while(u8::is_ascii_digit).count();
+    if end == 0 {
+        return None;
+    }
+    let magnitude = digits.as_bytes()[..end].iter().fold(0u32, |value, b| {
+        value.wrapping_mul(10).wrapping_add(u32::from(*b - b'0'))
+    });
+    Some(if text.starts_with('-') {
+        magnitude.wrapping_neg()
+    } else {
+        magnitude
+    } as i32)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CharRequest {
+    Available(i32),
+    LoadAlias {
+        id: i32,
+        image: String,
+        name: String,
+        blink: bool,
+    },
+    Load {
+        id: i32,
+        image: String,
+        secondary: Option<String>,
+        tertiary: Option<String>,
+        blink: bool,
+    },
+    Position {
+        id: i32,
+        x: i32,
+        y: i32,
+    },
+    Size {
+        id: i32,
+        width: i32,
+        height: i32,
+    },
+    Order {
+        id: i32,
+        order: i32,
+        secondary: bool,
+    },
+    BlendRate {
+        id: i32,
+        rate: i32,
+    },
+    Visible {
+        id: i32,
+        visible: bool,
+    },
+    Clear {
+        first: i32,
+        last: i32,
+    },
+    Move {
+        id: i32,
+        x: i32,
+        y: i32,
+        x_mode: i32,
+        y_mode: i32,
+        duration: i32,
+        blocking: bool,
+        blend_rate: i32,
+        offset: bool,
+    },
+    AllMove {
+        x: i32,
+        y: i32,
+        duration: i32,
+        mode: i32,
+    },
+    Freeze,
+    Movie {
+        id: i32,
+        name: String,
+        skippable: bool,
+    },
+    Sequence {
+        id: i32,
+        timed: bool,
+        frames: i32,
+        rate: i32,
+        start: i32,
+    },
+    Keep {
+        first: i32,
+        last: i32,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectRequest {
+    pub kind: String,
+    pub resource: String,
+    pub first: i32,
+    pub second: i32,
+    pub third: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageRequest {
+    pub id: i32,
+    pub voice: String,
+    pub voice_volume: i32,
+    pub voice_pan: i32,
+    pub speaker: String,
+    pub text: String,
+    pub read: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MovieRequest {
+    pub soundtrack: Option<(String, i32, i32)>,
+    pub id: i32,
+    pub name: String,
+    pub width: i32,
+    pub height: i32,
+    pub skippable: bool,
+    pub x: i32,
+    pub y: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BgmRequest {
+    pub name: String,
+    pub fade_in: i32,
+    pub fade_out: i32,
+    pub volume: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScrollRequest {
+    pub target_x: Option<i32>,
+    pub target_y: Option<i32>,
+    pub speed: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScrollXfRequest {
+    pub values: [i32; 10],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectOption {
+    pub text: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SeRequest {
+    pub channel: u8,
+    pub name: String,
+    pub looped: bool,
+    pub first: i32,
+    pub second: i32,
+    pub volume: i32,
+    pub pan: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoiceRequest {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PanelRequest {
+    pub mode: i32,
+    pub duration: i32,
+    pub image: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShakeRequest {
+    pub mode: String,
+    pub amplitude: i32,
+    pub duration: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StageExtra {
+    pub name: String,
+    pub first: i32,
+    pub second: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FixedFacePose {
+    pub eye: bool,
+    pub actor: Option<String>,
+    pub pose: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StageRequest {
+    pub base_spec: String,
+    pub base_x: i32,
+    pub base_y: i32,
+    pub image: String,
+    pub fixed_poses: Vec<FixedFacePose>,
+    pub x: i32,
+    pub y: i32,
+    pub extras: Vec<StageExtra>,
+}
+
+/// A .screen or .overlay layer set.
+///
+/// Both commands preserve three native resource slots: base-spec foreground,
+/// background, and standing art. Filtering is asset-local before placement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LayerRequest {
+    /// One resource name per screen depth. An empty list clears the layer.
+    pub images: Vec<String>,
+    /// Verified overlay command slots, before wildcard/prefix normalization.
+    /// Renderer consumes this mapping directly, not the normalized images list.
+    pub overlay_slots: Option<[String; 3]>,
+    /// Verified screen command slots, before wildcard/prefix normalization.
+    pub screen_slots: Option<[String; 3]>,
+}
+
+/// Original ef scene state, in command operand order (!bgH/S/V, !stH/S/V).
+/// The complete downstream color transfer and layer lifetime remain unresolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub struct HsvFilter {
+    pub bg_h: i32,
+    pub bg_s: i32,
+    pub bg_v: i32,
+    pub st_h: i32,
+    pub st_s: i32,
+    pub st_v: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransitionConfig {
+    pub transition_type: i32,
+    pub mask: String,
+    pub duration: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnimationCommand { Load(i32,String), Play(i32), Pause(i32), Position(i32,[i32;2]), Parent(i32,i32), Loop(i32,i32), Clear(i32) }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RotationSpec {
+    pub destination: [i32; 2],
+    pub source: [i32; 2],
+    pub first: i32,
+    pub last: i32,
+    pub direction: i32,
+    pub duration: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Rotate { Set(RotationSpec), Start(RotationSpec), End, Wait }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VmEvent {
+    ClearControlKeyLatch,
+    SetForeground(String),
+    Animation(AnimationCommand),
+    SqzFrame { name: String, frame: i32 },
+    Rotate { foreground: bool, action: Rotate },
+    ExecScene {
+        name: String,
+        arguments: String,
+    },
+    Cutin(CutinCommand),
+    ApplyChar(CharRequest),
+    ApplyEffect(EffectRequest),
+    ApplyEffect2(EffectRequest),
+    EndMessage,
+    EndScroll { interrupt: bool },
+    Message(MessageRequest),
+    PlayMovie(MovieRequest),
+    SetPanel(PanelRequest),
+    StartShake(ShakeRequest),
+    StartScroll(ScrollRequest),
+    WaveScroll {
+        period: Option<i32>,
+        speed: i32,
+    },
+    ForegroundScroll {
+        target: [i32; 2],
+        speed: i32,
+    },
+    AcceleratedScroll {
+        target: [i32; 2],
+        duration: i32,
+        interruptible: bool,
+    },
+    StartScrollXf(ScrollXfRequest),
+    PersistGlobals,
+    SetScenarioTimer(u32),
+    ScriptChanged(String),
+    SetStage(StageRequest),
+    SetScreen(LayerRequest),
+    SetOverlay(LayerRequest),
+    SetFrameStills(Vec<String>),
+    SetHsvFilter(HsvFilter),
+    SetTransition(TransitionConfig),
+    Select(Vec<SelectOption>),
+    PlayBgm(BgmRequest),
+    PlayBgm2(BgmRequest),
+    PlaySe(SeRequest),
+    PlayVoice(VoiceRequest),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CutinCommand {
+    Load(String),
+    Present(String),
+    Release(String),
+    ReleaseAll,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VmState {
+    Ready,
+    PendingChain { path: String },
+    WaitingTransition,
+    WaitingTimer { remaining_ms: u32 },
+    WaitingScenarioTimer { target: u32 },
+    WaitingBgmTimer { target: u32 },
+    WaitingInput,
+    WaitingMovie,
+    WaitingPanel,
+    WaitingSelect { labels: Vec<String> },
+    WaitingScroll,
+    WaitingRotation(bool),
+    WaitingAnimation { id:i32, alternate:bool },
+    WaitingCharMove,
+    Finished,
+}
+
+impl VmState {
+    pub(crate) fn label(&self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::PendingChain { .. } => "chain",
+            Self::WaitingTransition => "transition",
+            Self::WaitingTimer { .. } => "timer",
+            Self::WaitingScenarioTimer { .. } => "scenario_timer",
+            Self::WaitingBgmTimer { .. } => "bgm_timer",
+            Self::WaitingInput => "input",
+            Self::WaitingMovie => "movie",
+            Self::WaitingPanel => "panel",
+            Self::WaitingSelect { .. } => "select",
+            Self::WaitingAnimation { .. } => "animation",
+            Self::WaitingRotation(_) => "rotation",
+            Self::WaitingScroll => "scroll",
+            Self::WaitingCharMove => "character_motion",
+            Self::Finished => "finished",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ManualVmState {
+    pub script: String,
+    pub pc: usize,
+    pub globals: HashMap<String, i32>,
+    pub locals: HashMap<String, i32>,
+    pub control_enabled: bool,
+    pub skip_enabled: bool,
+    pub active_message_id: Option<i32>,
+    pub seen_messages: HashSet<i32>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AtLayer {
+    id: i32,
+    x: i32,
+    y: i32,
+}
+
+#[derive(Debug)]
+struct ScriptFrame {
+    name: String,
+    program: Program,
+    pc: usize,
+}
+
+impl ScriptFrame {
+    fn new(name: String, program: Program) -> Self {
+        Self {
+            name,
+            program,
+            pc: 0,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Vm {
+    pub(crate) audio_defaults: (i32,i32),
+    frames: Vec<ScriptFrame>,
+    globals: HashMap<String, i32>,
+    locals: HashMap<String, i32>,
+    state: VmState,
+    control_enabled: bool,
+    skip_enabled: bool,
+    active_message_id: Option<i32>,
+    seen_messages: HashSet<i32>,
+    at_layers: HashMap<String, AtLayer>,
+}
+
+impl Vm {
+    pub fn new(name: impl Into<String>, program: Program) -> Self {
+        Self {
+            audio_defaults: (2,2),
+            frames: vec![ScriptFrame::new(name.into(), program)],
+            globals: HashMap::new(),
+            locals: HashMap::new(),
+            state: VmState::Ready,
+            control_enabled: true,
+            skip_enabled: true,
+            active_message_id: None,
+            seen_messages: HashSet::new(),
+            at_layers: HashMap::new(),
+        }
+    }
+
+    pub fn state(&self) -> &VmState {
+        &self.state
+    }
+
+    pub fn current_script(&self) -> Option<&str> {
+        self.frames.last().map(|frame| frame.name.as_str())
+    }
+
+    pub fn global(&self, name: &str) -> Option<i32> {
+        self.globals.get(name).copied()
+    }
+
+    pub fn globals_snapshot(&self) -> HashMap<String, i32> {
+        self.globals.clone()
+    }
+
+    pub(crate) fn manual_state(&self) -> Result<ManualVmState, String> {
+        if self.frames.len() != 1 {
+            return Err("manual save during an included script is not supported".into());
+        }
+        // The current manual-save envelope restores only WaitingInput. Saving
+        // any other state would discard pending choice labels, chains or waits
+        // while keeping the already-advanced PC, silently changing the story.
+        if self.state != VmState::WaitingInput {
+            return Err("manual save requires a stable message input boundary".into());
+        }
+        let frame = &self.frames[0];
+        Ok(ManualVmState {
+            script: frame.name.clone(),
+            pc: frame.pc,
+            globals: self.globals.clone(),
+            locals: self.locals.clone(),
+            control_enabled: self.control_enabled,
+            skip_enabled: self.skip_enabled,
+            active_message_id: self.active_message_id,
+            seen_messages: self.seen_messages.clone(),
+        })
+    }
+
+    pub(crate) fn from_manual_state(
+        state: ManualVmState,
+        program: Program,
+    ) -> Result<Self, String> {
+        if state.pc > program.statements.len() {
+            return Err("manual save program counter is outside the script".into());
+        }
+        Ok(Self {
+            audio_defaults: (2,2),
+            frames: vec![ScriptFrame {
+                name: state.script,
+                program,
+                pc: state.pc,
+            }],
+            globals: state.globals,
+            locals: state.locals,
+            state: VmState::WaitingInput,
+            control_enabled: state.control_enabled,
+            skip_enabled: state.skip_enabled,
+            active_message_id: state.active_message_id,
+            seen_messages: state.seen_messages,
+            at_layers: HashMap::new(),
+        })
+    }
+
+    pub fn replace_globals(&mut self, globals: HashMap<String, i32>) {
+        self.globals = globals;
+    }
+
+    pub(crate) fn begin_episode_replay(&mut self) {
+        self.locals.insert("exitFromEvent".to_owned(), 100);
+    }
+
+    pub fn local(&self, name: &str) -> Option<i32> {
+        self.locals.get(name).copied()
+    }
+
+    pub fn advance_input(&mut self) {
+        if self.state == VmState::WaitingInput {
+            self.state = VmState::Ready;
+        }
+    }
+
+    pub fn poll_scenario_timer(&mut self, ticks: u32, skip: bool) {
+        if let VmState::WaitingScenarioTimer { target } = self.state
+            && (ticks >= target || skip)
+        {
+            self.state = VmState::Ready;
+        }
+    }
+
+    pub fn permits_key_skip(&self, requires_control: bool) -> bool {
+        self.skip_enabled && (!requires_control || self.control_enabled)
+    }
+
+    pub fn poll_bgm_timer(&mut self, ticks: u32, skip: bool) {
+        if let VmState::WaitingBgmTimer { target } = self.state
+            && (ticks > target || skip)
+        {
+            self.state = VmState::Ready;
+        }
+    }
+
+    pub fn complete_movie(&mut self) {
+        if self.state == VmState::WaitingMovie {
+            self.state = VmState::Ready;
+        }
+    }
+
+    /// Local variables as the scripts see them, for diagnostics.
+    pub fn local_variables(&self) -> Vec<(&str, i32)> {
+        let mut pairs: Vec<(&str, i32)> = self
+            .locals
+            .iter()
+            .map(|(name, value)| (name.as_str(), *value))
+            .collect();
+        pairs.sort_unstable();
+        pairs
+    }
+
+    pub fn complete_select(&mut self, index: usize) -> Result<(), String> {
+        let VmState::WaitingSelect { labels } = &self.state else {
+            return Err("select response received while VM is not waiting".into());
+        };
+        let label = labels
+            .get(index)
+            .cloned()
+            .ok_or_else(|| format!("select index {index} is outside {} options", labels.len()))?;
+        self.jump(&label)?;
+        self.state = VmState::Ready;
+        Ok(())
+    }
+
+    pub fn complete_panel(&mut self) {
+        if self.state == VmState::WaitingPanel {
+            self.state = VmState::Ready;
+        }
+    }
+
+    pub fn begin_char_move(&mut self) {
+        self.state = VmState::WaitingCharMove;
+    }
+
+    pub fn complete_char_move(&mut self) {
+        if self.state == VmState::WaitingCharMove {
+            self.state = VmState::Ready;
+        }
+    }
+
+    pub fn finish_animation_wait(&mut self) {
+        if matches!(self.state, VmState::WaitingAnimation {..}) { self.state=VmState::Ready; }
+    }
+
+    pub fn wait_rotation(&mut self, foreground: bool) {
+        self.state = VmState::WaitingRotation(foreground);
+    }
+    pub fn finish_rotation_wait(&mut self) {
+        if matches!(self.state, VmState::WaitingRotation(_)) { self.state = VmState::Ready; }
+    }
+
+    pub fn begin_scroll(&mut self) {
+        self.state = VmState::WaitingScroll;
+    }
+
+    pub fn complete_scroll(&mut self) {
+        if self.state == VmState::WaitingScroll {
+            self.state = VmState::Ready;
+        }
+    }
+
+    pub fn begin_transition(&mut self) {
+        self.state = VmState::WaitingTransition;
+    }
+
+    pub fn complete_transition(&mut self) {
+        if self.state == VmState::WaitingTransition {
+            self.state = VmState::Ready;
+        }
+    }
+
+    pub fn tick<F>(&mut self, delta_ms: u32, mut load_script: F) -> Result<Vec<VmEvent>, String>
+    where
+        F: FnMut(&str) -> Result<Program, String>,
+    {
+        let mut events = Vec::new();
+        match self.state.clone() {
+            VmState::PendingChain { path } => {
+                // The original NEXT consumer separates a script and optional
+                // entry label before loading (CHAIN_NEXT.md, 0x4e36a1 onward).
+                let (script, label) = path
+                    .split_once('#')
+                    .map_or((path.as_str(), None), |(script, label)| {
+                        (script, Some(label))
+                    });
+                let program =
+                    load_script(script).map_err(|error| format!("chain {path}: {error}"))?;
+                let mut frame = ScriptFrame::new(script.to_owned(), program);
+                if let Some(label) = label.filter(|label| !label.is_empty()) {
+                    frame.pc = frame
+                        .program
+                        .labels
+                        .get(label)
+                        .copied()
+                        .ok_or_else(|| format!("chain {path}: unknown label {label}"))?;
+                }
+                // Local variables survive a chain. 107_04.sc raises favMiyako
+                // and chains on, and 108_01.sc reads it three scripts later to
+                // pick the Miyako route; clearing here silently dropped the flag
+                // and every affection branch fell to the low path.
+                // .pragma clear_local_variables is the documented way to reset.
+                self.frames.clear();
+                self.frames.push(frame);
+                self.state = VmState::Ready;
+                events.push(VmEvent::ScriptChanged(script.to_owned()));
+            }
+            VmState::WaitingTimer { remaining_ms } if delta_ms < remaining_ms => {
+                self.state = VmState::WaitingTimer {
+                    remaining_ms: remaining_ms - delta_ms,
+                };
+                return Ok(Vec::new());
+            }
+            VmState::WaitingTimer { .. } => self.state = VmState::Ready,
+            VmState::WaitingScenarioTimer { .. }
+            | VmState::WaitingBgmTimer { .. }
+            | VmState::WaitingInput
+            | VmState::WaitingMovie
+            | VmState::WaitingPanel
+            | VmState::WaitingSelect { .. }
+            | VmState::WaitingAnimation { .. }
+            | VmState::WaitingRotation(_)
+            | VmState::WaitingScroll
+            | VmState::WaitingCharMove
+            | VmState::WaitingTransition
+            | VmState::Finished => {
+                return Ok(Vec::new());
+            }
+            VmState::Ready => {}
+        }
+
+        loop {
+            let Some(frame) = self.frames.last_mut() else {
+                self.state = VmState::Finished;
+                break;
+            };
+            if frame.pc >= frame.program.statements.len() {
+                self.frames.pop();
+                if self.frames.is_empty() {
+                    self.state = VmState::Finished;
+                    break;
+                }
+                continue;
+            }
+
+            let statement = frame.program.statements[frame.pc].clone();
+            frame.pc += 1;
+            match statement {
+                Statement::Empty => continue,
+                Statement::Comment | Statement::Label(_) => {}
+                Statement::Control { name, arguments } => {
+                    self.execute_at_control(&name, &arguments, &mut events)?;
+                }
+                Statement::Include(path) => {
+                    if self.frames.len() >= 32 {
+                        return Err("minori include nesting limit".into());
+                    }
+                    let program = match load_script(&path) {
+                        Ok(program) => program,
+                        Err(error) => {
+                            // A worker may still be preparing this script. Retry this
+                            // instruction without consuming the include.
+                            self.frames.last_mut().unwrap().pc -= 1;
+                            return Err(format!("include {path}: {error}"));
+                        }
+                    };
+                    self.frames.push(ScriptFrame::new(path.clone(), program));
+                    events.push(VmEvent::ScriptChanged(path));
+                }
+                Statement::Message(message) => self.emit_message(
+                    MessageRequest {
+                        id: 0,
+                        voice: String::new(),
+                        voice_volume: 100,
+                        voice_pan: 0,
+                        speaker: String::new(),
+                        text: message,
+                        read: false,
+                    },
+                    &mut events,
+                ),
+                Statement::Command { kind, arguments } => {
+                    self.execute_command(kind, arguments, &mut events)?;
+                }
+            }
+            break;
+        }
+        Ok(events)
+    }
+
+    fn execute_at_control(
+        &mut self,
+        name: &str,
+        arguments: &[String],
+        events: &mut Vec<VmEvent>,
+    ) -> Result<(), String> {
+        match name {
+            "define" => {
+                if arguments.len() != 4 {
+                    return Err(format!(
+                        "@define requires NAME ID X Y, got {}",
+                        arguments.join(" ")
+                    ));
+                }
+                self.at_layers.insert(
+                    arguments[0].clone(),
+                    AtLayer {
+                        id: self.resolve(&arguments[1]),
+                        x: self.resolve(&arguments[2]),
+                        y: self.resolve(&arguments[3]),
+                    },
+                );
+            }
+            "load" => {
+                if !(2..=5).contains(&arguments.len()) {
+                    return Err(format!(
+                        "@load requires NAME IMAGE [X Y BLEND], got {}",
+                        arguments.join(" ")
+                    ));
+                }
+                let mut layer = self
+                    .at_layers
+                    .get(&arguments[0])
+                    .copied()
+                    .ok_or_else(|| format!("@load uses undefined layer {}", arguments[0]))?;
+                if let Some(x) = arguments.get(2).filter(|value| value.as_str() != "*") {
+                    layer.x = self.resolve(x);
+                }
+                if let Some(y) = arguments.get(3).filter(|value| value.as_str() != "*") {
+                    layer.y = self.resolve(y);
+                }
+                self.at_layers.insert(arguments[0].clone(), layer);
+                let blink = !arguments[1].starts_with("[noblink:");
+                let image = strip_resource_prefix(&arguments[1]);
+                events.push(VmEvent::ApplyChar(CharRequest::Load {
+                    id: layer.id,
+                    image,
+                    secondary: None,
+                    tertiary: None,
+                    blink,
+                }));
+                events.push(VmEvent::ApplyChar(CharRequest::Position {
+                    id: layer.id,
+                    x: layer.x,
+                    y: layer.y,
+                }));
+                if let Some(blend) = arguments.get(4) {
+                    events.push(VmEvent::ApplyChar(CharRequest::BlendRate {
+                        id: layer.id,
+                        rate: self.resolve(blend).clamp(0, 256),
+                    }));
+                }
+            }
+            "stage" => events.push(VmEvent::SetStage(parse_stage(arguments)?)),
+            "moveofs" => {
+                if arguments.len() != 7 {
+                    return Err(format!(
+                        "@moveofs requires NAME X Y XMODE YMODE DURATION BLEND, got {}",
+                        arguments.join(" ")
+                    ));
+                }
+                let layer = self
+                    .at_layers
+                    .get(&arguments[0])
+                    .copied()
+                    .ok_or_else(|| format!("@moveofs uses undefined layer {}", arguments[0]))?;
+                events.push(VmEvent::ApplyChar(CharRequest::Move {
+                    id: layer.id,
+                    x: self.resolve(&arguments[1]),
+                    y: self.resolve(&arguments[2]),
+                    x_mode: move_mode(&arguments[3]),
+                    y_mode: move_mode(&arguments[4]),
+                    duration: self.resolve(&arguments[5]),
+                    blocking: false,
+                    blend_rate: self.resolve(&arguments[6]).clamp(0, 256),
+                    offset: true,
+                }));
+            }
+            "update" | "finish_all" => {}
+            _ => return Err(format!("unsupported minori control @{name}")),
+        }
+        Ok(())
+    }
+
+    fn execute_command(
+        &mut self,
+        command: CommandKind,
+        arguments: Vec<String>,
+        events: &mut Vec<VmEvent>,
+    ) -> Result<(), String> {
+        match command {
+            CommandKind::Debug => events.push(VmEvent::ClearControlKeyLatch),
+            CommandKind::RotateBg | CommandKind::RotateFg => {
+                let mode = arguments.first().map(|s| s.to_ascii_lowercase());
+                let action = match mode.as_deref() {
+                    Some("end") => Rotate::End,
+                    Some("wait") => Rotate::Wait,
+                    Some("set" | "start") => {
+                        let number = |i| optional_decimal(&arguments, i, 0);
+                        let spec = RotationSpec {
+                            destination: [number(1), number(2)], source: [number(3), number(4)],
+                            first: number(5) % 360, last: number(6) % 360,
+                            direction: if arguments.len() <= 7 || number(7) != 0 { 1 } else { -1 },
+                            duration: number(8),
+                        };
+                        if mode.as_deref() == Some("set") { Rotate::Set(spec) } else { Rotate::Start(spec) }
+                    }
+                    _ => return Ok(()),
+                };
+                events.push(VmEvent::Rotate { foreground: command == CommandKind::RotateFg, action });
+            }
+            CommandKind::SetFg => events.push(VmEvent::SetForeground(arguments.first().cloned().unwrap_or_default())),
+            CommandKind::Animation => {
+                use AnimationCommand::*;
+                let n = arguments.len();
+                let num = |i, d| optional_decimal(&arguments,i,d);
+                let id = num(1,0);
+                let action = match arguments.first().map(|s| s.to_ascii_lowercase()).as_deref() {
+                    Some("load") if n>=3 => Load(id, arguments[2].clone()),
+                    Some("play") if n>=2 => Play(id),
+                    Some("pause") if n>=2 => Pause(id),
+                    Some("pos") if n>=4 => Position(id,[num(2,0),num(3,0)]),
+                    Some("parent") if n>=2 => Parent(id,num(2,-1)),
+                    Some("loop") if n>=3 => Loop(id,num(2,0)),
+                    Some("clear") => Clear(num(1,-1)),
+                    _ => return Ok(()),
+                };
+                events.push(VmEvent::Animation(action));
+            }
+            CommandKind::WaitAnimation => {
+                let alternate=arguments.get(1).and_then(|s|s.as_bytes().first()).is_some_and(|b| matches!(b,b'1'..=b'9'|b't'|b'T'));
+                self.state=VmState::WaitingAnimation{id:optional_decimal(&arguments,0,-1), alternate};
+            }
+            CommandKind::Sqz => {
+                if arguments.len() >= 3 && arguments[0].eq_ignore_ascii_case("frame") {
+                    events.push(VmEvent::SqzFrame {name: arguments[1].clone(), frame: optional_decimal(&arguments,2,0)});
+                }
+            }
+            CommandKind::Exec => {
+                let mut fields = arguments.into_iter();
+                events.push(VmEvent::ExecScene {
+                    name: fields.next().unwrap_or_default(),
+                    arguments: fields.collect::<Vec<_>>().join(" "),
+                });
+            }
+            CommandKind::Cutin => {
+                let name = arguments.get(1);
+                let action = match (arguments.first().map(String::as_str), name) {
+                    (Some("load"), Some(name)) => CutinCommand::Load(name.clone()),
+                    (Some("present"), Some(name)) => CutinCommand::Present(name.clone()),
+                    (Some("release"), Some(name)) => CutinCommand::Release(name.clone()),
+                    (Some("releaseall"), _) => CutinCommand::ReleaseAll,
+                    _ => return Ok(()),
+                };
+                events.push(VmEvent::Cutin(action));
+            }
+            CommandKind::WaitBgm => {
+                self.state = VmState::WaitingBgmTimer {
+                    target: timer_operand(&arguments),
+                };
+            }
+            CommandKind::DeleteVar => {
+                let name = arguments
+                    .first()
+                    .ok_or("deleteVar requires a variable name")?;
+                self.locals.remove(name);
+                self.globals.remove(name);
+            }
+            CommandKind::SetGlobal => {
+                let (variable, value) = self.parse_assignment(&arguments)?;
+                self.globals.insert(variable, value);
+            }
+            CommandKind::Set => {
+                let (variable, value) = self.parse_assignment(&arguments)?;
+                self.locals.insert(variable, value);
+            }
+            CommandKind::Goto => {
+                let label = one_argument(command.name(), &arguments)?;
+                self.jump(label)?;
+            }
+            CommandKind::If => self.execute_if(&arguments)?,
+            CommandKind::WScroll => {
+                if arguments.len() < 2 {
+                    return Err("wscroll requires PERIOD SPEED".into());
+                }
+                events.push(VmEvent::WaveScroll {
+                    period: decimal_prefix(&arguments[0]),
+                    speed: decimal_prefix(&arguments[1]).unwrap_or(10),
+                });
+            }
+            CommandKind::ScrollFg | CommandKind::ScrollAcc => {
+                if arguments.len() < 3 {
+                    return Err(format!("{} requires X Y RATE", command.name()));
+                }
+                let target = [0, 1].map(|i| decimal_prefix(&arguments[i]).unwrap_or(0));
+                let rate = decimal_prefix(&arguments[2]).unwrap_or(10);
+                events.push(if command == CommandKind::ScrollFg {
+                    VmEvent::ForegroundScroll {
+                        target,
+                        speed: rate,
+                    }
+                } else {
+                    let interruptible = !matches!(
+                        arguments.get(3).and_then(|s| s.as_bytes().first()),
+                        Some(b'0' | b'f' | b'F')
+                    );
+                    VmEvent::AcceleratedScroll {
+                        target,
+                        duration: rate,
+                        interruptible,
+                    }
+                });
+            }
+            CommandKind::SetTimer => {
+                events.push(VmEvent::SetScenarioTimer(timer_operand(&arguments)));
+            }
+            CommandKind::WaitTimer => {
+                self.state = VmState::WaitingScenarioTimer {
+                    target: timer_operand(&arguments),
+                };
+            }
+            CommandKind::Wait => {
+                let value = self.resolve(arguments.first().ok_or("wait requires a duration")?);
+                let units = u32::try_from(value.max(0)).unwrap_or(u32::MAX);
+                self.state = VmState::WaitingTimer {
+                    remaining_ms: units.saturating_mul(WAIT_UNIT_MS),
+                };
+            }
+            CommandKind::Chain => {
+                let path = one_argument(command.name(), &arguments)?.to_owned();
+                // Shared reconstruction message finalization. Historical handler
+                // metadata is not ef authority: ef End executes at 0x4eeeb0
+                // through 0x4ddaa0; its persistence policy is audited separately.
+                self.end_message(events);
+                events.push(VmEvent::PersistGlobals);
+                self.state = VmState::PendingChain { path };
+            }
+            CommandKind::End => self.end_message(events),
+            CommandKind::EndScroll => {
+                let value = arguments.first().map_or("", String::as_str);
+                let first = value.as_bytes().first().copied().unwrap_or_default();
+                events.push(VmEvent::EndScroll {
+                    interrupt: matches!(first, b'1'..=b'9' | b't' | b'T'),
+                });
+            }
+            CommandKind::HScroll | CommandKind::VScroll => {
+                if arguments.len() < 2 {
+                    return Err(format!(
+                        "{} requires TARGET SPEED, got {}",
+                        command.name(),
+                        arguments.join(" ")
+                    ));
+                }
+                let target = self.resolve(&arguments[0]);
+                events.push(VmEvent::StartScroll(ScrollRequest {
+                    target_x: (command == CommandKind::HScroll).then_some(target),
+                    target_y: (command == CommandKind::VScroll).then_some(target),
+                    speed: parse_optional_i32(&arguments, 1, 10),
+                }));
+            }
+            CommandKind::Scroll => {
+                if arguments.len() < 3 {
+                    return Err(format!(
+                        "scroll requires X Y SPEED, got {}",
+                        arguments.join(" ")
+                    ));
+                }
+                events.push(VmEvent::StartScroll(ScrollRequest {
+                    target_x: Some(self.resolve(&arguments[0])),
+                    target_y: Some(self.resolve(&arguments[1])),
+                    speed: parse_optional_i32(&arguments, 2, 10),
+                }));
+            }
+            CommandKind::ScrollXf => {
+                if arguments.len() != 10 {
+                    return Err(format!(
+                        "scrollXF requires 10 integer fields, got {}",
+                        arguments.len()
+                    ));
+                }
+                let mut values = [0; 10];
+                for (slot, argument) in values.iter_mut().zip(&arguments) {
+                    *slot = self.resolve(argument);
+                }
+                events.push(VmEvent::StartScrollXf(ScrollXfRequest { values }));
+            }
+            CommandKind::Select => {
+                if arguments.is_empty() {
+                    return Err("select requires at least one TEXT:LABEL option".into());
+                }
+                let options: Vec<_> = arguments
+                    .iter()
+                    .take(4)
+                    .map(|argument| {
+                        let (text, label) = argument
+                            .split_once(':')
+                            .ok_or_else(|| format!("select option has no label: {argument}"))?;
+                        if text.is_empty() || label.is_empty() {
+                            return Err(format!("select option is empty: {argument}"));
+                        }
+                        Ok(SelectOption {
+                            text: text.to_owned(),
+                            label: label.to_owned(),
+                        })
+                    })
+                    .collect::<Result<_, String>>()?;
+                self.state = VmState::WaitingSelect {
+                    labels: options.iter().map(|option| option.label.clone()).collect(),
+                };
+                events.push(VmEvent::Select(options));
+            }
+            CommandKind::ShakeScreen => {
+                if arguments.len() != 3 {
+                    return Err(format!(
+                        "shakeScreen requires MODE AMPLITUDE DURATION, got {}",
+                        arguments.join(" ")
+                    ));
+                }
+                events.push(VmEvent::StartShake(ShakeRequest {
+                    mode: arguments[0].clone(),
+                    amplitude: self.resolve(&arguments[1]),
+                    duration: self.resolve(&arguments[2]),
+                }));
+            }
+            CommandKind::PlayBgm | CommandKind::PlayBgm2 => {
+                if arguments.is_empty() {
+                    return Err("playBGM requires a resource name".into());
+                }
+                let operand = optional_decimal;
+                let default_fade = if command == CommandKind::PlayBgm2 {200} else {self.audio_defaults.0};
+                let request = BgmRequest {
+                    name: arguments[0].clone(),
+                    fade_in: operand(&arguments, 1, if arguments.len()>1 && default_fade==1 {2} else {default_fade}),
+                    fade_out: operand(&arguments, 2, if arguments.len()>2 && default_fade==1 {2} else {default_fade}),
+                    volume: operand(&arguments, 3, 100),
+                };
+                events.push(if command == CommandKind::PlayBgm2 {
+                    VmEvent::PlayBgm2(request)
+                } else {
+                    VmEvent::PlayBgm(request)
+                });
+            }
+            CommandKind::PlaySe
+            | CommandKind::PlaySe2
+            | CommandKind::PlaySe3
+            | CommandKind::PlaySe4 => {
+                if arguments.is_empty() {
+                    return Err("playSE requires a resource name".into());
+                }
+                let (name, volume, pan) = parse_audio_spec(&arguments[0]);
+                let operand = optional_decimal;
+                let default_fade = if command == CommandKind::PlaySe4 {200} else {self.audio_defaults.1};
+                events.push(VmEvent::PlaySe(SeRequest {
+                    channel: match command {
+                        CommandKind::PlaySe => 1,
+                        CommandKind::PlaySe2 => 2,
+                        CommandKind::PlaySe3 => 3,
+                        CommandKind::PlaySe4 => 4,
+                        _ => unreachable!(),
+                    },
+                    name,
+                    looped: arguments
+                        .get(1)
+                        .is_some_and(|value| value.as_bytes().first() == Some(&b't')),
+                    first: operand(&arguments, 2, default_fade),
+                    second: operand(&arguments, 3, default_fade),
+                    volume,
+                    pan,
+                }));
+            }
+            CommandKind::PlayVoice => {
+                if arguments.is_empty() {
+                    return Err("playVoice requires a resource name".into());
+                }
+                // Only the resource name is read. 205_01.sc writes
+                // `.playVoice * * 0`, the same trailing stop-and-fade shape
+                // `.playBGM * * 0` uses one line later, so extra arguments are
+                // accepted and ignored rather than rejected.
+                events.push(VmEvent::PlayVoice(VoiceRequest {
+                    name: arguments[0].clone(),
+                }));
+            }
+            CommandKind::Pragma => {
+                let mode = one_argument(command.name(), &arguments)?;
+                match mode {
+                    "monologue" => self.skip_to_monologue_end()?,
+                    "skip_disable" => self.skip_enabled = false,
+                    "skip_enable" => self.skip_enabled = true,
+                    "disable_control" => self.control_enabled = false,
+                    "enable_control" => self.control_enabled = true,
+                    "clear_global_variables" => self.globals.clear(),
+                    "clear_local_variables" => self.locals.clear(),
+                    _ => return Err(format!("unsupported pragma mode {mode}")),
+                }
+            }
+            CommandKind::Message => {
+                if arguments.len() != 4 {
+                    return Err(format!(
+                        "message requires ID VOICE SPEAKER TEXT, got {} fields",
+                        arguments.len()
+                    ));
+                }
+                let id = self.resolve(&arguments[0]);
+                let read = self.seen_messages.contains(&id);
+                let (voice, voice_volume, voice_pan) = parse_audio_spec(&arguments[1]);
+                self.emit_message(
+                    MessageRequest {
+                        id,
+                        voice,
+                        voice_volume,
+                        voice_pan,
+                        speaker: arguments[2].clone(),
+                        text: arguments[3].clone(),
+                        read,
+                    },
+                    events,
+                );
+            }
+            CommandKind::Char => {
+                let request = self.parse_char(&arguments)?;
+                events.push(VmEvent::ApplyChar(request));
+            }
+            CommandKind::Effect | CommandKind::Effect2 => {
+                let request=EffectRequest {
+                    kind: arguments.first().cloned().unwrap_or_default(),
+                    resource: arguments.get(1).cloned().unwrap_or_default(),
+                    first: optional_decimal(&arguments, 2, -1),
+                    second: optional_decimal(&arguments, 3, -1),
+                    third: optional_decimal(&arguments, 4, -1),
+                };
+                events.push(if command==CommandKind::Effect2 {VmEvent::ApplyEffect2(request)} else {VmEvent::ApplyEffect(request)});
+            }
+            CommandKind::Movie2 => {
+                if arguments.len() != 7 {
+                    return Err("movie2 requires NAME WIDTH HEIGHT AUDIO RATE CHANNELS FLAG".into());
+                }
+                let audio = &arguments[3];
+                let soundtrack = (!audio.is_empty() && audio != "*").then(|| {
+                    (
+                        audio.clone(),
+                        parse_optional_i32(&arguments, 4, 48000),
+                        parse_optional_i32(&arguments, 5, 2),
+                    )
+                });
+                events.push(VmEvent::PlayMovie(MovieRequest {
+                    id: 0,
+                    name: arguments[0].clone(),
+                    width: parse_optional_i32(&arguments, 1, 800),
+                    height: parse_optional_i32(&arguments, 2, 600),
+                    x: 0,
+                    y: 0,
+                    skippable: !matches!(arguments[6].as_bytes().first(), Some(b'0' | b'f' | b'F')),
+                    soundtrack,
+                }));
+                self.state = VmState::WaitingMovie;
+            }
+            CommandKind::Movie => {
+                if arguments.len() < 5 {
+                    return Err(format!(
+                        "movie requires ID NAME WIDTH HEIGHT FLAG, got {}",
+                        arguments.join(" ")
+                    ));
+                }
+                let flag = arguments[4].as_bytes().first().copied().unwrap_or(b't');
+                events.push(VmEvent::PlayMovie(MovieRequest {
+                    soundtrack: None,
+                    id: self.resolve(&arguments[0]),
+                    name: arguments[1].clone(),
+                    width: arguments[2].parse().unwrap_or(1280),
+                    height: arguments[3].parse().unwrap_or(720),
+                    skippable: !matches!(flag, b'0' | b'f' | b'F'),
+                    x: parse_optional_i32(&arguments, 5, 0),
+                    y: parse_optional_i32(&arguments, 6, 0),
+                }));
+                self.state = VmState::WaitingMovie;
+            }
+            CommandKind::Screen => {
+                events.push(VmEvent::SetScreen(parse_screen(&arguments)?));
+            }
+            CommandKind::Overlay => {
+                events.push(VmEvent::SetOverlay(parse_overlay(&arguments)?));
+            }
+            CommandKind::Frame => {
+                let mut images = Vec::new();
+                for argument in &arguments {
+                    let name = strip_resource_prefix(argument);
+                    if name != "*" && !name.is_empty() {
+                        images.push(name);
+                    }
+                }
+                events.push(VmEvent::SetFrameStills(images));
+            }
+            CommandKind::HsvFilter => {
+                if arguments.len() != 6 {
+                    return Err(format!(
+                        "HSVfilter requires 6 values, got {}",
+                        arguments.join(" ")
+                    ));
+                }
+                let value = |index: usize| self.resolve(&arguments[index]);
+                events.push(VmEvent::SetHsvFilter(HsvFilter {
+                    bg_h: value(0),
+                    bg_s: value(1),
+                    bg_v: value(2),
+                    st_h: value(3),
+                    st_s: value(4),
+                    st_v: value(5),
+                }));
+            }
+            CommandKind::Panel => {
+                if arguments.is_empty() {
+                    return Err("panel requires at least a mode".into());
+                }
+                events.push(VmEvent::SetPanel(PanelRequest {
+                    mode: self.resolve(&arguments[0]),
+                    duration: arguments
+                        .get(1)
+                        .and_then(|value| value.parse().ok())
+                        .unwrap_or(-1),
+                    image: arguments.get(2).cloned().unwrap_or_default(),
+                }));
+                self.state = VmState::WaitingPanel;
+            }
+            CommandKind::Stage => {
+                events.push(VmEvent::SetStage(parse_stage(&arguments)?));
+            }
+            CommandKind::Transition => {
+                if arguments.len() < 3 {
+                    return Err(format!(
+                        "transition requires at least 3 arguments, got {}",
+                        arguments.join(" ")
+                    ));
+                }
+                events.push(VmEvent::SetTransition(TransitionConfig {
+                    transition_type: optional_decimal(&arguments, 0, 0),
+                    mask: arguments[1].clone(),
+                    duration: optional_decimal(&arguments, 2, 0),
+                }));
+            }
+            command => {
+                return Err(format!(
+                    "registered command .{} is not implemented (original parse={:#x}, execute={:#x})",
+                    command.name(),
+                    command.original_handler().parse,
+                    command.original_handler().execute
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn parse_char(&self, arguments: &[String]) -> Result<CharRequest, String> {
+        let mode = arguments
+            .first()
+            .ok_or("char requires a subcommand")?
+            .as_str();
+        let value = |index: usize| {
+            arguments
+                .get(index)
+                .map_or(0, |argument| self.resolve(argument))
+        };
+        let require = |count: usize| {
+            if arguments.len() < count {
+                Err(format!(
+                    "char {mode} requires {} arguments, got {}",
+                    count - 1,
+                    arguments.join(" ")
+                ))
+            } else {
+                Ok(())
+            }
+        };
+        match mode {
+            "loada" => {
+                require(4)?;
+                Ok(CharRequest::LoadAlias {
+                    id: value(1),
+                    image: strip_resource_prefix(&arguments[2]),
+                    name: arguments[3].clone(),
+                    blink: !arguments[2].starts_with("[noblink:"),
+                })
+            }
+            "load" => {
+                require(3)?;
+                Ok(CharRequest::Load {
+                    id: value(1),
+                    image: strip_resource_prefix(&arguments[2]),
+                    secondary: arguments.get(3).map(|value| strip_resource_prefix(value)),
+                    tertiary: arguments.get(4).map(|value| strip_resource_prefix(value)),
+                    blink: !arguments[2].starts_with("[noblink:"),
+                })
+            }
+            "pos" => {
+                require(4)?;
+                Ok(CharRequest::Position {
+                    id: value(1),
+                    x: value(2),
+                    y: value(3),
+                })
+            }
+            "size" => {
+                require(4)?;
+                Ok(CharRequest::Size {
+                    id: value(1),
+                    width: value(2),
+                    height: value(3),
+                })
+            }
+            "order" | "order2" => {
+                require(3)?;
+                Ok(CharRequest::Order {
+                    id: value(1),
+                    order: value(2),
+                    secondary: mode == "order2",
+                })
+            }
+            "blendrate" => {
+                require(3)?;
+                Ok(CharRequest::BlendRate {
+                    id: value(1),
+                    rate: value(2).clamp(0, 256),
+                })
+            }
+            "available" => {
+                require(2)?;
+                Ok(CharRequest::Available(value(1)))
+            }
+            "visible" => {
+                require(3)?;
+                Ok(CharRequest::Visible {
+                    id: value(1),
+                    visible: arguments[2] != "off",
+                })
+            }
+            "clear" | "keep" => {
+                let first = arguments.get(1).map_or(-1, |value| self.resolve(value));
+                let last = arguments.get(2).map_or(first, |value| self.resolve(value));
+                if mode == "clear" {
+                    Ok(CharRequest::Clear { first, last })
+                } else {
+                    Ok(CharRequest::Keep { first, last })
+                }
+            }
+            "move" | "moveofs" => {
+                require(7)?;
+                Ok(CharRequest::Move {
+                    id: value(1),
+                    x: value(2),
+                    y: value(3),
+                    x_mode: move_mode(&arguments[4]),
+                    y_mode: move_mode(&arguments[5]),
+                    duration: value(6),
+                    blocking: arguments.get(7).is_some_and(|value| value == "on"),
+                    blend_rate: arguments
+                        .get(8)
+                        .map_or(-1, |value| self.resolve(value))
+                        .clamp(-1, 256),
+                    offset: mode == "moveofs",
+                })
+            }
+            "allmove" => {
+                require(5)?;
+                Ok(CharRequest::AllMove {
+                    x: value(1),
+                    y: value(2),
+                    duration: value(3),
+                    mode: move_mode(&arguments[4]),
+                })
+            }
+            "freeze" => Ok(CharRequest::Freeze),
+            "seq" => {
+                require(3)?;
+                let timed = arguments[2].starts_with(['t', 'T']);
+                Ok(CharRequest::Sequence {
+                    id: value(1),
+                    timed,
+                    frames: arguments.get(3).map_or(1, |value| self.resolve(value)),
+                    rate: arguments.get(4).map_or(1, |value| self.resolve(value)),
+                    start: arguments.get(5).map_or(0, |value| self.resolve(value)),
+                })
+            }
+            "movie" => {
+                require(3)?;
+                Ok(CharRequest::Movie {
+                    id: value(1),
+                    name: arguments[2].clone(),
+                    skippable: arguments
+                        .get(3)
+                        .is_none_or(|value| !matches!(value.as_str(), "f" | "F")),
+                })
+            }
+            _ => Err(format!("unsupported char subcommand {mode}")),
+        }
+    }
+
+    fn parse_assignment(&self, arguments: &[String]) -> Result<(String, i32), String> {
+        if !matches!(arguments.len(), 3 | 5) || arguments[1] != "=" {
+            return Err(format!(
+                "assignment requires NAME = VALUE or NAME = LEFT OP RIGHT, got {}",
+                arguments.join(" ")
+            ));
+        }
+        let value = if arguments.len() == 3 {
+            self.resolve(&arguments[2])
+        } else {
+            let left = self.resolve(&arguments[2]);
+            let right = self.resolve(&arguments[4]);
+            match arguments[3].as_str() {
+                "|" => left | right,
+                "&" => left & right,
+                "+" => left.wrapping_add(right),
+                "-" => left.wrapping_sub(right),
+                "*" => left.wrapping_mul(right),
+                "/" if right != 0 => left.wrapping_div(right),
+                "%" if right != 0 => left.wrapping_rem(right),
+                "/" | "%" => return Err("assignment division by zero".into()),
+                operator => return Err(format!("unsupported assignment operator {operator}")),
+            }
+        };
+        Ok((arguments[0].clone(), value))
+    }
+
+    fn execute_if(&mut self, arguments: &[String]) -> Result<(), String> {
+        if arguments.len() != 4 {
+            return Err(format!(
+                "if requires LEFT OP RIGHT LABEL, got {}",
+                arguments.join(" ")
+            ));
+        }
+        let left = self.resolve(&arguments[0]);
+        let right = self.resolve(&arguments[2]);
+        let condition = match arguments[1].as_str() {
+            "==" => left == right,
+            "!=" => left != right,
+            ">" => left > right,
+            "<" => left < right,
+            ">=" => left >= right,
+            "<=" => left <= right,
+            operator => return Err(format!("unsupported if operator {operator}")),
+        };
+        // ef scripts use complementary guards followed by their named labels
+        // (e.g. 108_01.sc: favMiyako > 0 -> miyakotrue). Jump on true.
+        // The historical 0x449010 annotation belongs to a different binary.
+        if condition {
+            self.jump(&arguments[3])?;
+        }
+        Ok(())
+    }
+
+    fn jump(&mut self, label: &str) -> Result<(), String> {
+        let frame = self.frames.last_mut().ok_or("goto without a script")?;
+        let target = frame
+            .program
+            .labels
+            .get(label)
+            .copied()
+            .ok_or_else(|| format!("{}: unknown label {label}", frame.name))?;
+        frame.pc = target;
+        Ok(())
+    }
+
+    fn resolve(&self, value: &str) -> i32 {
+        value
+            .parse::<i32>()
+            .ok()
+            .or_else(|| self.locals.get(value).copied())
+            .or_else(|| self.globals.get(value).copied())
+            .unwrap_or(0)
+    }
+
+    fn skip_to_monologue_end(&mut self) -> Result<(), String> {
+        let frame = self.frames.last_mut().ok_or("monologue without a script")?;
+        let target = frame.program.statements[frame.pc..]
+            .iter()
+            .position(|statement| match statement {
+                Statement::Message(text) => text.starts_with("monologue_end"),
+                Statement::Command {
+                    kind: CommandKind::Message,
+                    arguments,
+                } => arguments
+                    .get(3)
+                    .is_some_and(|text| text.starts_with("monologue_end")),
+                _ => false,
+            })
+            .ok_or_else(|| format!("{}: monologue_end not found", frame.name))?;
+        frame.pc += target;
+        Ok(())
+    }
+
+    fn end_message(&mut self, events: &mut Vec<VmEvent>) {
+        if let Some(id) = self.active_message_id.take() {
+            self.seen_messages.insert(id);
+        }
+        events.push(VmEvent::EndMessage);
+    }
+
+    fn emit_message(&mut self, message: MessageRequest, events: &mut Vec<VmEvent>) {
+        self.active_message_id = Some(message.id);
+        events.push(VmEvent::Message(message));
+        self.state = VmState::WaitingInput;
+    }
+}
+
+pub(crate) fn parse_audio_spec(value: &str) -> (String, i32, i32) {
+    let Some(open) = value.find('[') else {
+        return (value.to_string(), 100, 0);
+    };
+    let name = value[..open].to_string();
+    let Some(close) = value[open + 1..].find(']') else {
+        return (name, 100, 0);
+    };
+    let mut values = value[open + 1..open + 1 + close].split(',');
+    let volume = values
+        .next()
+        .and_then(decimal_prefix)
+        .unwrap_or(100)
+        .clamp(0, 100);
+    let pan = values
+        .next()
+        .and_then(decimal_prefix)
+        .unwrap_or(0)
+        .clamp(-100, 100);
+    (name, volume, pan)
+}
+
+fn optional_decimal(arguments: &[String], index: usize, fallback: i32) -> i32 {
+    arguments
+        .get(index)
+        .and_then(|s| decimal_prefix(s))
+        .unwrap_or(fallback)
+}
+
+fn parse_optional_i32(arguments: &[String], index: usize, fallback: i32) -> i32 {
+    arguments
+        .get(index)
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(fallback)
+}
+
+fn move_mode(value: &str) -> i32 {
+    match value {
+        "add" => 1,
+        "sub" => 2,
+        _ => 0,
+    }
+}
+
+fn strip_resource_prefix(value: &str) -> String {
+    if value.starts_with("[sepia]") || value.starts_with("[mono]") { return value.to_owned(); }
+    value
+        .strip_prefix('[')
+        .and_then(|rest| rest.find(']').map(|end| &rest[end + 1..]))
+        .unwrap_or(value)
+        .to_string()
+}
+
+fn parse_layer(arguments: &[String]) -> Result<LayerRequest, String> {
+    if arguments.is_empty() {
+        return Err("layer command requires at least one image".into());
+    }
+    let images = arguments
+        .iter()
+        .map(|argument| strip_resource_prefix(argument))
+        .filter(|name| name != "*" && !name.is_empty())
+        .collect();
+    Ok(LayerRequest {
+        images,
+        overlay_slots: None,
+        screen_slots: None,
+    })
+}
+
+fn parse_screen(arguments: &[String]) -> Result<LayerRequest, String> {
+    if arguments.len() < 2 {
+        return Err("screen requires at least two operands".into());
+    }
+    let mut request = parse_overlay(arguments)?;
+    request.screen_slots = request.overlay_slots.take();
+    Ok(request)
+}
+
+fn parse_overlay(arguments: &[String]) -> Result<LayerRequest, String> {
+    if arguments.len() < 2 {
+        return Err("overlay requires at least two operands".into());
+    }
+    let mut request = parse_layer(arguments)?;
+    let offset = usize::from(arguments.len() > 2);
+    request.overlay_slots = Some([
+        if offset == 1 {
+            arguments[0].clone()
+        } else {
+            String::new()
+        },
+        arguments[offset].clone(),
+        arguments[offset + 1].clone(),
+    ]);
+    Ok(request)
+}
+
+fn parse_stage(arguments: &[String]) -> Result<StageRequest, String> {
+    if arguments.len() < 4 {
+        return Err(format!(
+            "stage requires at least 4 arguments, got {}",
+            arguments.join(" ")
+        ));
+    }
+
+    let mut cursor = 1usize;
+    let mut extra_count = ((arguments.len() - 4) / 2).min(10);
+    let (mut base_x, mut base_y) = (0, 0);
+    if !arguments[1].contains('.')
+        && !arguments[2].contains('.')
+        && let (Ok(x), Ok(y)) = (arguments[1].parse(), arguments[2].parse())
+    {
+        base_x = x;
+        base_y = y;
+        cursor = 3;
+        extra_count = extra_count.saturating_sub(1);
+    }
+    if cursor + 2 >= arguments.len() {
+        return Err(format!(
+            "stage image tuple is incomplete: {}",
+            arguments.join(" ")
+        ));
+    }
+
+    let (image, fixed_poses) = stage_image(&arguments[cursor])?;
+    let x = arguments[cursor + 1].parse().unwrap_or(0);
+    let y = arguments[cursor + 2].parse().unwrap_or(0);
+    cursor += 3;
+    let mut extras = Vec::with_capacity(extra_count);
+    for _ in 0..extra_count {
+        if cursor + 1 >= arguments.len() {
+            break;
+        }
+        let values = &arguments[cursor + 1];
+        let (first, second) = values
+            .split_once(',')
+            .map_or((values.as_str(), values.as_str()), |pair| pair);
+        extras.push(StageExtra {
+            name: strip_resource_prefix(&arguments[cursor]),
+            first: first.parse().unwrap_or(0),
+            second: second.parse().unwrap_or(0),
+        });
+        cursor += 2;
+    }
+
+    Ok(StageRequest {
+        base_spec: arguments[0].clone(),
+        base_x,
+        base_y,
+        image,
+        fixed_poses,
+        x,
+        y,
+        extras,
+    })
+}
+
+fn stage_image(mut name: &str) -> Result<(String, Vec<FixedFacePose>), String> {
+    let mut tone = "";
+    let mut poses = Vec::new();
+    while let Some(rest) = name.strip_prefix('[') {
+        let (tag, tail) = rest.split_once(']').ok_or("unterminated stage image modifier")?;
+        name = tail;
+        match tag {
+            "sepia" => tone = "[sepia]",
+            "mono" => tone = "[mono]",
+            _ => {
+                let mut fields = tag.split(':');
+                let eye = match fields.next() {
+                    Some("noblink") => true,
+                    Some("nolipsync") => false,
+                    _ => continue,
+                };
+                let argument = fields.next().unwrap_or("");
+                let (actor, ordinal) = if argument.as_bytes().first().is_some_and(u8::is_ascii_digit) {
+                    (None, argument)
+                } else {
+                    ((!matches!(argument, "" | "*")).then(|| argument.to_owned()), fields.next().unwrap_or("0"))
+                };
+                let pose = ordinal.parse::<u8>().map_err(|_| format!("invalid face pose in [{tag}]"))?;
+                poses.push(FixedFacePose { eye, actor, pose });
+            }
+        }
+    }
+    Ok((format!("{tone}{name}"), poses))
+}
+
+pub(crate) fn infer_bgm_before(program: &Program, pc: usize) -> Option<BgmRequest> {
+    let mut current = None;
+    for statement in program.statements.iter().take(pc) {
+        if let Statement::Command {
+            kind: CommandKind::PlayBgm,
+            arguments,
+        } = statement
+            && let Some(name) = arguments.first()
+        {
+            current = (name != "*").then(|| BgmRequest {
+                name: name.clone(),
+                fade_in: parse_optional_i32(arguments, 1, 2),
+                fade_out: parse_optional_i32(arguments, 2, 2),
+                volume: parse_optional_i32(arguments, 3, 100),
+            });
+        }
+    }
+    current
+}
+
+fn one_argument<'a>(command: &str, arguments: &'a [String]) -> Result<&'a str, String> {
+    if arguments.len() != 1 {
+        return Err(format!(
+            "{command} requires one argument, got {}",
+            arguments.join(" ")
+        ));
+    }
+    Ok(&arguments[0])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn program(source: &str) -> Program {
+        Program::parse(source).unwrap()
+    }
+
+    fn no_scripts(_: &str) -> Result<Program, String> {
+        Err("unexpected script load".into())
+    }
+
+    #[test]
+    fn hsv_filter_preserves_original_layer_operand_order() {
+        for (operands, expected) in [
+            (
+                "1 -2 3 -4 5 -6",
+                HsvFilter {
+                    bg_h: 1,
+                    bg_s: -2,
+                    bg_v: 3,
+                    st_h: -4,
+                    st_s: 5,
+                    st_v: -6,
+                },
+            ),
+            (
+                "0 0 0 5 -5 0",
+                HsvFilter {
+                    st_h: 5,
+                    st_s: -5,
+                    ..HsvFilter::default()
+                },
+            ),
+            (
+                "0 0 0 0 5 -5",
+                HsvFilter {
+                    st_s: 5,
+                    st_v: -5,
+                    ..HsvFilter::default()
+                },
+            ),
+            ("0 0 0 0 0 0", HsvFilter::default()),
+        ] {
+            let mut vm = Vm::new("hsv.sc", program(&format!(".HSVfilter {operands}\n.end")));
+            let events = vm.tick(0, no_scripts).unwrap();
+            assert_eq!(events, vec![VmEvent::SetHsvFilter(expected)]);
+        }
+    }
+
+    #[test]
+    fn hsv_filter_requires_exactly_six_operands() {
+        for operands in ["0 0 0 0 0", "0 0 0 0 0 0 0"] {
+            let mut vm = Vm::new("hsv.sc", program(&format!(".HSVfilter {operands}")));
+            assert!(
+                vm.tick(0, no_scripts)
+                    .unwrap_err()
+                    .contains("requires 6 values")
+            );
+        }
+    }
+
+    #[test]
+    fn char_parser_matches_all_original_modes_and_defaults() {
+        let vm = Vm::new("char.sc", program(".end"));
+        assert_eq!(
+            vm.parse_char(&words("load -10 image.png mask.png extra.png"))
+                .unwrap(),
+            CharRequest::Load {
+                id: -10,
+                image: "image.png".into(),
+                secondary: Some("mask.png".into()),
+                tertiary: Some("extra.png".into()),
+                blink: true,
+            }
+        );
+        assert_eq!(
+            vm.parse_char(&words("pos -10 640 -50")).unwrap(),
+            CharRequest::Position {
+                id: -10,
+                x: 640,
+                y: -50,
+            }
+        );
+        assert_eq!(
+            vm.parse_char(&words("size 10 320 720")).unwrap(),
+            CharRequest::Size {
+                id: 10,
+                width: 320,
+                height: 720,
+            }
+        );
+        assert_eq!(
+            vm.parse_char(&words("order 10 4")).unwrap(),
+            CharRequest::Order {
+                id: 10,
+                order: 4,
+                secondary: false,
+            }
+        );
+        assert_eq!(
+            vm.parse_char(&words("order2 10 900000")).unwrap(),
+            CharRequest::Order {
+                id: 10,
+                order: 900000,
+                secondary: true,
+            }
+        );
+        assert_eq!(
+            vm.parse_char(&words("blendrate 10 999")).unwrap(),
+            CharRequest::BlendRate { id: 10, rate: 256 }
+        );
+        assert_eq!(
+            vm.parse_char(&words("visible 10 off")).unwrap(),
+            CharRequest::Visible {
+                id: 10,
+                visible: false,
+            }
+        );
+        assert_eq!(
+            vm.parse_char(&words("clear")).unwrap(),
+            CharRequest::Clear {
+                first: -1,
+                last: -1
+            }
+        );
+        assert_eq!(
+            vm.parse_char(&words("moveofs 10 2 3 add sub 40 on 300"))
+                .unwrap(),
+            CharRequest::Move {
+                id: 10,
+                x: 2,
+                y: 3,
+                x_mode: 1,
+                y_mode: 2,
+                duration: 40,
+                blocking: true,
+                blend_rate: 256,
+                offset: true,
+            }
+        );
+        assert_eq!(
+            vm.parse_char(&words("allmove 2 3 40 add")).unwrap(),
+            CharRequest::AllMove {
+                x: 2,
+                y: 3,
+                duration: 40,
+                mode: 1,
+            }
+        );
+        assert_eq!(
+            vm.parse_char(&words("freeze")).unwrap(),
+            CharRequest::Freeze
+        );
+        assert_eq!(
+            vm.parse_char(&words("seq -10 t 360 12 0")).unwrap(),
+            CharRequest::Sequence {
+                id: -10,
+                timed: true,
+                frames: 360,
+                rate: 12,
+                start: 0,
+            }
+        );
+        assert_eq!(
+            vm.parse_char(&words("movie @@ev ev00_0050.avi")).unwrap(),
+            CharRequest::Movie {
+                id: 0,
+                name: "ev00_0050.avi".into(),
+                skippable: true,
+            }
+        );
+    }
+
+    fn words(value: &str) -> Vec<String> {
+        value.split_whitespace().map(str::to_owned).collect()
+    }
+
+    #[test]
+    fn shake_screen_parser_preserves_all_corpus_modes() {
+        for (source, mode, amplitude, duration) in [
+            (".shakeScreen H 50 10", "H", 50, 10),
+            (".shakeScreen V 60 20", "V", 60, 20),
+            (".shakeScreen Z 80 20", "Z", 80, 20),
+            (".shakeScreen R 30 50", "R", 30, 50),
+        ] {
+            let mut vm = Vm::new("shake.sc", program(source));
+            assert_eq!(
+                vm.tick(0, no_scripts).unwrap(),
+                vec![VmEvent::StartShake(ShakeRequest {
+                    mode: mode.into(),
+                    amplitude,
+                    duration,
+                })]
+            );
+        }
+    }
+
+    #[test]
+    fn scroll_family_parser_preserves_axes_speed_and_end_mode() {
+        let mut vm = Vm::new(
+            "scroll.sc",
+            program(
+                ".vscroll 150 -15\n.hscroll 1280 6\n.scroll 50 400 300\n.endScroll f\n.endScroll T",
+            ),
+        );
+        let expected = [
+            VmEvent::StartScroll(ScrollRequest {
+                target_x: None,
+                target_y: Some(150),
+                speed: -15,
+            }),
+            VmEvent::StartScroll(ScrollRequest {
+                target_x: Some(1280),
+                target_y: None,
+                speed: 6,
+            }),
+            VmEvent::StartScroll(ScrollRequest {
+                target_x: Some(50),
+                target_y: Some(400),
+                speed: 300,
+            }),
+            VmEvent::EndScroll { interrupt: false },
+            VmEvent::EndScroll { interrupt: true },
+        ];
+        for event in expected {
+            assert_eq!(vm.tick(0, no_scripts).unwrap(), vec![event]);
+        }
+        vm.begin_scroll();
+        assert_eq!(vm.state(), &VmState::WaitingScroll);
+        vm.complete_scroll();
+        assert_eq!(vm.state(), &VmState::Ready);
+        vm.begin_char_move();
+        assert_eq!(vm.state(), &VmState::WaitingCharMove);
+        vm.complete_char_move();
+        assert_eq!(vm.state(), &VmState::Ready);
+    }
+
+    #[test]
+    fn scroll_xf_parser_uses_the_original_ten_field_shape() {
+        let mut vm = Vm::new(
+            "scrollxf.sc",
+            program(".scrollXF 0 720 0 0 1280 720 1280 0 1250 0"),
+        );
+        assert_eq!(
+            vm.tick(0, no_scripts).unwrap(),
+            vec![VmEvent::StartScrollXf(ScrollXfRequest {
+                values: [0, 720, 0, 0, 1280, 720, 1280, 0, 1250, 0],
+            })]
+        );
+    }
+    #[test]
+    fn select_waits_and_jumps_to_the_chosen_label() {
+        let mut vm = Vm::new(
+            "select.sc",
+            program(
+                ".select Stay:STAY Walk:WALK\n.set RESULT = 0\n.label STAY\n.set RESULT = 1\n.goto DONE\n.label WALK\n.set RESULT = 2\n.label DONE\n.end",
+            ),
+        );
+        assert_eq!(
+            vm.tick(0, no_scripts).unwrap(),
+            vec![VmEvent::Select(vec![
+                SelectOption {
+                    text: "Stay".into(),
+                    label: "STAY".into(),
+                },
+                SelectOption {
+                    text: "Walk".into(),
+                    label: "WALK".into(),
+                },
+            ])]
+        );
+        assert_eq!(
+            vm.state(),
+            &VmState::WaitingSelect {
+                labels: vec!["STAY".into(), "WALK".into()]
+            }
+        );
+        assert!(vm.tick(0, no_scripts).unwrap().is_empty());
+        // A rejected snapshot must not consume the choice or its target labels.
+        assert!(vm.manual_state().is_err());
+        vm.complete_select(1).unwrap();
+        for _ in 0..8 {
+            vm.tick(0, no_scripts).unwrap();
+        }
+        assert_eq!(vm.local("RESULT"), Some(2));
+    }
+
+    #[test]
+    fn terminal_unlock_persistence_gap_diagnostic() {
+        let mut vm = Vm::new("badend.sc", program(".setGlobal BADEND1 = 1\n.end"));
+        let mut events = Vec::new();
+        for _ in 0..3 {
+            events.extend(vm.tick(0, no_scripts).unwrap());
+        }
+        assert_eq!(vm.global("BADEND1"), Some(1));
+        assert_eq!(vm.state(), &VmState::Finished);
+        // Diagnostic only: the unlock exists in RAM but End/EOF currently sends
+        // no durable-state request. Native terminal policy remains under audit.
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, VmEvent::PersistGlobals))
+        );
+    }
+
+    #[test]
+    fn screen_preserves_native_slots_before_resource_normalization() {
+        let two = parse_screen(&["[bank]sc_evening01.png".into(), "*".into()]).unwrap();
+        assert_eq!(
+            two.screen_slots.unwrap(),
+            ["", "[bank]sc_evening01.png", "*"]
+        );
+        assert!(two.overlay_slots.is_none());
+        let three =
+            parse_screen(&["first".into(), "*".into(), "third".into(), "ignored".into()]).unwrap();
+        assert_eq!(three.screen_slots.unwrap(), ["first", "*", "third"]);
+        assert!(parse_screen(&[]).is_err());
+        assert!(parse_screen(&["one".into()]).is_err());
+        let mut vm = Vm::new("screen.sc", program(".screen sc_evening01.png *"));
+        let events = vm.tick(0, no_scripts).unwrap();
+        let VmEvent::SetScreen(request) = &events[0] else {
+            panic!("expected screen");
+        };
+        assert_eq!(
+            request.screen_slots.as_ref().unwrap()[1],
+            "sc_evening01.png"
+        );
+    }
+
+    #[test]
+    fn overlay_preserves_native_slots_before_resource_normalization() {
+        let two = parse_overlay(&["*".into(), "or_kei00a.png".into()]).unwrap();
+        assert_eq!(two.overlay_slots.unwrap(), ["", "*", "or_kei00a.png"]);
+        let three = parse_overlay(&["first.png".into(), "*".into(), "third.png".into()]).unwrap();
+        assert_eq!(
+            three.overlay_slots.unwrap(),
+            ["first.png", "*", "third.png"]
+        );
+        assert!(parse_overlay(&["one.png".into()]).is_err());
+        assert!(
+            parse_layer(&["one.png".into()])
+                .unwrap()
+                .overlay_slots
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn select_truncates_to_the_original_four_option_limit() {
+        let mut vm = Vm::new("select.sc", program(".select A:A B:B C:C D:D E:E"));
+        let events = vm.tick(0, no_scripts).unwrap();
+        let VmEvent::Select(options) = &events[0] else {
+            panic!("expected select event");
+        };
+        assert_eq!(options.len(), 4);
+    }
+
+    #[test]
+    fn select_rejects_missing_labels() {
+        let mut missing = Vm::new("select.sc", program(".select Broken"));
+        assert!(
+            missing
+                .tick(0, no_scripts)
+                .unwrap_err()
+                .contains("no label")
+        );
+    }
+
+    #[test]
+    fn set_commands_support_all_original_binary_operators() {
+        let mut vm = Vm::new(
+            "set.sc",
+            program(
+                ".set A = 6\n.set OR = A | 1\n.set AND = A & 3\n.set ADD = A + 4\n.set SUB = A - 8\n.set MUL = A * 3\n.set DIV = A / 2\n.set MOD = A % 4\n.setGlobal G = ADD + MUL",
+            ),
+        );
+        for _ in 0..9 {
+            vm.tick(0, no_scripts).unwrap();
+        }
+        assert_eq!(vm.local("OR"), Some(7));
+        assert_eq!(vm.local("AND"), Some(2));
+        assert_eq!(vm.local("ADD"), Some(10));
+        assert_eq!(vm.local("SUB"), Some(-2));
+        assert_eq!(vm.local("MUL"), Some(18));
+        assert_eq!(vm.local("DIV"), Some(3));
+        assert_eq!(vm.local("MOD"), Some(2));
+        assert_eq!(vm.global("G"), Some(28));
+
+        let mut zero = Vm::new("zero.sc", program(".set X = 1 / 0"));
+        assert_eq!(
+            zero.tick(0, no_scripts).unwrap_err(),
+            "assignment division by zero"
+        );
+    }
+
+    #[test]
+    fn affection_counter_set_after_a_select_reaches_the_next_script() {
+        // 107_04.sc: .select 去接宫子:label1 优先工作:label2 / .label label1 /
+        // .set favMiyako = favMiyako + 1 / .chain 107_05.sc
+        let first = program(
+            ".select GO:label1 WORK:label2
+.label label1
+.set favMiyako = favMiyako + 1
+.chain middle.sc
+.label label2
+.end",
+        );
+        let mut vm = Vm::new("first.sc", first);
+        let scripts = |name: &str| match name {
+            "middle.sc" => Ok(program(
+                ".wait 10
+.chain gate.sc",
+            )),
+            "gate.sc" => Ok(program(
+                ".if favMiyako > 0 TRUE
+.if favMiyako <= 0 FALSE
+.label TRUE
+.chain high.sc
+.label FALSE
+.chain low.sc",
+            )),
+            "high.sc" => Ok(program(".set reached = 1\n.end")),
+            "low.sc" => Ok(program(".set reached = -1\n.end")),
+            other => Err(format!("unexpected script {other}")),
+        };
+        let mut chose = false;
+        for _ in 0..40 {
+            if vm.state() == &VmState::Finished {
+                break;
+            }
+            if let VmState::WaitingSelect { .. } = vm.state() {
+                if !chose {
+                    vm.complete_select(0).unwrap();
+                    chose = true;
+                }
+            }
+            vm.tick(20, scripts).unwrap();
+        }
+        assert_eq!(vm.local("favMiyako"), Some(1));
+        assert_eq!(
+            vm.local("reached"),
+            Some(1),
+            "the high-affection branch should have run"
+        );
+    }
+
+    #[test]
+    fn delete_var_removes_both_bindings_and_accepts_absent_names() {
+        let mut vm = Vm::new(
+            "vars.sc",
+            program(
+                ".setGlobal G = 8\n.set G = 3\n.setGlobal KEEP = 2\n.deleteVar G\n.deleteVar G\n.wait 1",
+            ),
+        );
+        for _ in 0..6 {
+            vm.tick(0, |_| Err("unexpected chain".into())).unwrap();
+        }
+        assert_eq!(vm.local("G"), None);
+        assert_eq!(vm.global("G"), None);
+        assert_eq!(vm.global("KEEP"), Some(2));
+    }
+
+    #[test]
+    fn local_variables_survive_a_chain() {
+        // 107_04.sc sets favMiyako and chains; 108_01.sc reads it later.
+        let mut vm = Vm::new(
+            "first.sc",
+            program(
+                ".set favMiyako = favMiyako + 1
+.chain second.sc
+.end",
+            ),
+        );
+        let scripts = |name: &str| match name {
+            "second.sc" => Ok(program(
+                ".set seen = favMiyako
+.end",
+            )),
+            other => Err(format!("unexpected {other}")),
+        };
+        for _ in 0..8 {
+            vm.tick(0, scripts).unwrap();
+            if vm.state() == &VmState::Finished {
+                break;
+            }
+        }
+        assert_eq!(vm.local("favMiyako"), Some(1));
+        assert_eq!(vm.local("seen"), Some(1));
+    }
+
+    #[test]
+    fn comparison_operators_jump_only_when_true() {
+        for (operator, left, right, expected) in [
+            ("==", 1, 1, true),
+            ("==", 1, 2, false),
+            ("!=", 1, 2, true),
+            ("!=", 1, 1, false),
+            (">", 2, 1, true),
+            (">", 1, 1, false),
+            ("<", -1, 0, true),
+            ("<", 0, 0, false),
+            (">=", 1, 1, true),
+            (">=", 0, 1, false),
+            ("<=", 1, 1, true),
+            ("<=", 2, 1, false),
+        ] {
+            let mut vm = Vm::new(
+                "condition.sc",
+                program(&format!(
+                    ".if {left} {operator} {right} YES\n.set result = 0\n.goto DONE\n.label YES\n.set result = 1\n.label DONE\n.end"
+                )),
+            );
+            for _ in 0..16 {
+                vm.tick(0, no_scripts).unwrap();
+                if vm.state() == &VmState::Finished {
+                    break;
+                }
+            }
+            assert_eq!(
+                vm.local("result"),
+                Some(i32::from(expected)),
+                "{left} {operator} {right}"
+            );
+        }
+    }
+
+    #[test]
+    fn false_condition_falls_through() {
+        let mut vm = Vm::new(
+            "branch.sc",
+            program(
+                ".setGlobal CLEAR = 0\n.if CLEAR == 1 YES\n.set X = 7\n.goto DONE\n.label YES\n.set X = 9\n.label DONE\n.end",
+            ),
+        );
+        for _ in 0..16 {
+            vm.tick(0, no_scripts).unwrap();
+            if vm.state() == &VmState::Finished {
+                break;
+            }
+        }
+        assert_eq!(vm.global("CLEAR"), Some(0));
+        assert_eq!(vm.local("X"), Some(7));
+        assert_eq!(vm.state(), &VmState::Finished);
+    }
+
+    #[test]
+    fn legacy_save_bgm_is_inferred_from_commands_before_the_checkpoint() {
+        let program = program(
+            ".playBGM first.ogg * * 80\n.message 1 voice actor text\n.playBGM second.ogg\n",
+        );
+        assert_eq!(
+            infer_bgm_before(&program, 2),
+            Some(BgmRequest {
+                name: "first.ogg".into(),
+                fade_in: 2,
+                fade_out: 2,
+                volume: 80,
+            })
+        );
+    }
+
+    #[test]
+    fn secondary_audio_and_bgm_wait_use_separate_events_and_a_strict_deadline() {
+        let mut vm = Vm::new(
+            "audio.sc",
+            program(
+                ".playBGM2 music.ogg 4ticks * 30\n.playSE4 rain.ogg[60,-10] true\n.waitBGM +12ticks\n.waitBGM -1",
+            ),
+        );
+        assert_eq!(
+            vm.tick(0, no_scripts).unwrap(),
+            [VmEvent::PlayBgm2(BgmRequest {
+                name: "music.ogg".into(),
+                fade_in: 4,
+                fade_out: 200,
+                volume: 30,
+            })]
+        );
+        assert_eq!(
+            vm.tick(0, no_scripts).unwrap(),
+            [VmEvent::PlaySe(SeRequest {
+                channel: 4,
+                name: "rain.ogg".into(),
+                volume: 60,
+                pan: -10,
+                looped: true,
+                first: 200,
+                second: 200,
+            })]
+        );
+        vm.tick(0, no_scripts).unwrap();
+        vm.poll_scenario_timer(99, false);
+        vm.poll_bgm_timer(12, false);
+        assert_eq!(vm.state(), &VmState::WaitingBgmTimer { target: 12 });
+        vm.poll_bgm_timer(13, false);
+        assert_eq!(vm.state(), &VmState::Ready);
+        vm.tick(0, no_scripts).unwrap();
+        vm.poll_bgm_timer(u32::MAX, false);
+        assert_eq!(vm.state(), &VmState::WaitingBgmTimer { target: u32::MAX });
+        vm.poll_bgm_timer(0, true);
+        assert_eq!(vm.state(), &VmState::Ready);
+    }
+
+    #[test]
+    fn foreground_rotation_manual_frame_and_second_effect_keep_operands() {
+        let mut vm = Vm::new("planes.sc",program(".rotateFG start 5 6 7 8 -370 450 0 12\n.sqz frame mist.sqz 3\n.effect2 SnowH * 1 2 3\n.waitAnimation 7 true"));
+        assert_eq!(vm.tick(0,no_scripts).unwrap(),[VmEvent::Rotate{foreground:true,action:Rotate::Start(RotationSpec{
+            destination:[5,6],source:[7,8],first:-10,last:90,direction:-1,duration:12
+        })}]);
+        assert_eq!(vm.tick(0,no_scripts).unwrap(),[VmEvent::SqzFrame{name:"mist.sqz".into(),frame:3}]);
+        assert_eq!(vm.tick(0,no_scripts).unwrap(),[VmEvent::ApplyEffect2(EffectRequest{kind:"SnowH".into(),resource:"*".into(),first:1,second:2,third:3})]);
+        vm.tick(0,no_scripts).unwrap();
+        assert_eq!(vm.state(),&VmState::WaitingAnimation{id:7,alternate:true});
+    }
+
+    #[test]
+    fn cutin_hide_and_scene_exec_keep_explicit_empty_fields() {
+        let mut vm = Vm::new(
+            "scene.sc",
+            program(
+                ".cutin load picture.png\n.cutin present \"\"\n.cutin releaseall\n.exec hook \"one two\" \"\" three",
+            ),
+        );
+        for action in [
+            CutinCommand::Load("picture.png".into()),
+            CutinCommand::Present(String::new()),
+            CutinCommand::ReleaseAll,
+        ] {
+            assert_eq!(vm.tick(0, no_scripts).unwrap(), [VmEvent::Cutin(action)]);
+        }
+        assert_eq!(
+            vm.tick(0, no_scripts).unwrap(),
+            [VmEvent::ExecScene {
+                name: "hook".into(),
+                arguments: "one two  three".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn scenario_timer_preserves_phase_and_wraps_at_32_bits() {
+        let mut timer = ScenarioTimer::default();
+        assert_eq!(timer.ticks(100), 0);
+        timer.set(109, u32::MAX);
+        assert_eq!(timer.ticks(109), u32::MAX);
+        assert_eq!(timer.next_tick_ms(109), 110);
+        assert_eq!(timer.ticks(110), 0);
+        assert_eq!(timer.ticks(139), 2);
+    }
+
+    #[test]
+    fn scenario_timer_parses_native_operands_and_resumes_at_the_target_or_on_skip() {
+        let mut vm = Vm::new("timer.sc", program(
+            ".setTimer -1suffix ignored\n.waitTimer +12ticks\n.setTimer\n.waitTimer *\n.waitTimer -1",
+        ));
+        assert_eq!(vm.tick(0, no_scripts).unwrap(), [VmEvent::SetScenarioTimer(u32::MAX)]);
+        vm.tick(0, no_scripts).unwrap();
+        vm.poll_scenario_timer(11, false);
+        assert_eq!(vm.state(), &VmState::WaitingScenarioTimer { target: 12 });
+        vm.poll_scenario_timer(12, false);
+        assert_eq!(vm.tick(0, no_scripts).unwrap(), [VmEvent::SetScenarioTimer(0)]);
+        vm.tick(0, no_scripts).unwrap();
+        vm.poll_scenario_timer(0, false);
+        assert_eq!(vm.state(), &VmState::Ready);
+        vm.tick(0, no_scripts).unwrap();
+        vm.poll_scenario_timer(0, true);
+        assert_eq!(vm.state(), &VmState::Ready);
+    }
+
+    #[test]
+    fn manual_snapshot_rejects_states_the_save_format_cannot_restore() {
+        let mut vm = Vm::new("save.sc", program(".end"));
+        let unsupported = [
+            VmState::Ready,
+            VmState::PendingChain {
+                path: "next.sc".into(),
+            },
+            VmState::WaitingSelect {
+                labels: vec!["left".into(), "right".into()],
+            },
+            VmState::WaitingTimer { remaining_ms: 123 },
+            VmState::WaitingScenarioTimer { target: 123 },
+            VmState::WaitingMovie,
+            VmState::WaitingTransition,
+            VmState::WaitingPanel,
+            VmState::WaitingScroll,
+            VmState::WaitingCharMove,
+            VmState::Finished,
+        ];
+        for state in unsupported {
+            vm.state = state.clone();
+            let before = vm.frames[0].pc;
+            assert!(
+                vm.manual_state()
+                    .unwrap_err()
+                    .contains("stable message input boundary")
+            );
+            assert_eq!(vm.state(), &state);
+            assert_eq!(vm.frames[0].pc, before);
+        }
+        vm.state = VmState::WaitingInput;
+        assert!(vm.manual_state().is_ok());
+    }
+
+    #[test]
+    fn manual_state_restores_the_next_program_counter_and_wait_boundary() {
+        let source = ".set FLAG = 1\n.message 10 voice actor text\n.set FLAG = 2\n";
+        let mut vm = Vm::new("scene.sc", program(source));
+        vm.tick(0, |_| Err("unexpected script load".into()))
+            .unwrap();
+        vm.tick(0, |_| Err("unexpected script load".into()))
+            .unwrap();
+        assert_eq!(vm.state(), &VmState::WaitingInput);
+        let state = vm.manual_state().unwrap();
+        let mut restored = Vm::from_manual_state(state, program(source)).unwrap();
+        restored.advance_input();
+        restored
+            .tick(0, |_| Err("unexpected script load".into()))
+            .unwrap();
+        assert_eq!(restored.local("FLAG"), Some(2));
+    }
+
+    #[test]
+    fn executes_one_command_per_original_engine_update() {
+        let mut vm = Vm::new("step.sc", program(".set A = 1\n.set B = 2\n.end"));
+        vm.tick(0, no_scripts).unwrap();
+        assert_eq!(vm.local("A"), Some(1));
+        assert_eq!(vm.local("B"), None);
+        assert_eq!(vm.state(), &VmState::Ready);
+
+        vm.tick(0, no_scripts).unwrap();
+        assert_eq!(vm.local("B"), Some(2));
+        assert_eq!(vm.state(), &VmState::Ready);
+    }
+
+    #[test]
+    fn effect_parser_preserves_every_corpus_shape_and_defaults() {
+        let mut vm = Vm::new(
+            "effect.sc",
+            program(
+                ".effect *\n.effect fadeout\n.effect WScroll2 * 60 -8\n.effect Cutin ev01_087a01.png -1 1500",
+            ),
+        );
+        let expected = [
+            EffectRequest {
+                kind: "*".into(),
+                resource: "".into(),
+                first: -1,
+                second: -1,
+                third: -1,
+            },
+            EffectRequest {
+                kind: "fadeout".into(),
+                resource: "".into(),
+                first: -1,
+                second: -1,
+                third: -1,
+            },
+            EffectRequest {
+                kind: "WScroll2".into(),
+                resource: "*".into(),
+                first: 60,
+                second: -8,
+                third: -1,
+            },
+            EffectRequest {
+                kind: "Cutin".into(),
+                resource: "ev01_087a01.png".into(),
+                first: -1,
+                second: 1500,
+                third: -1,
+            },
+        ];
+        for request in expected {
+            assert_eq!(
+                vm.tick(0, no_scripts).unwrap(),
+                vec![VmEvent::ApplyEffect(request)]
+            );
+        }
+    }
+
+    #[test]
+    fn retail_effect_slots_parse_signed_decimal_prefixes_and_missing_values() {
+        let mut vm = Vm::new("effects.sc", program(
+            ".effect2 WScroll3 * +60ticks -8px @var ignored\n.effect WScroll3 * +60ticks -8px @var\n.effect2 SnowH\n.effect2 fadeout",
+        ));
+        let request = EffectRequest {
+            kind: "WScroll3".into(), resource: "*".into(), first: 60, second: -8, third: -1,
+        };
+        assert_eq!(vm.tick(0, no_scripts).unwrap(), [VmEvent::ApplyEffect2(request.clone())]);
+        assert_eq!(vm.tick(0, no_scripts).unwrap(), [VmEvent::ApplyEffect(request)]);
+        for name in ["SnowH", "fadeout"] {
+            let request = EffectRequest {
+                kind: name.into(), resource: String::new(), first: -1, second: -1, third: -1,
+            };
+            assert_eq!(vm.tick(0, no_scripts).unwrap(), [VmEvent::ApplyEffect2(request)]);
+        }
+    }
+
+    #[test]
+    fn movie_parser_matches_both_corpus_flags_and_blocks_for_playback() {
+        let mut skippable = Vm::new("movie.sc", program(".movie 9989 sppl_01_op.avi 1280 720 t"));
+        assert_eq!(
+            skippable.tick(0, no_scripts).unwrap(),
+            vec![VmEvent::PlayMovie(MovieRequest {
+                soundtrack: None,
+                id: 9989,
+                name: "sppl_01_op.avi".into(),
+                width: 1280,
+                height: 720,
+                skippable: true,
+                x: 0,
+                y: 0,
+            })]
+        );
+        assert_eq!(skippable.state(), &VmState::WaitingMovie);
+        skippable.complete_movie();
+        assert_eq!(skippable.state(), &VmState::Ready);
+
+        let mut unskippable = Vm::new("movie.sc", program(".movie 9889 sppl_01_op.avi 1280 720 f"));
+        let events = unskippable.tick(0, no_scripts).unwrap();
+        assert!(matches!(
+            &events[0],
+            VmEvent::PlayMovie(MovieRequest {
+                skippable: false,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn movie2_keeps_the_separate_track_and_movie_wait() {
+        let mut vm = Vm::new(
+            "opening.sc",
+            program(".movie2 intro.avi 800 600 intro.ogg 44100 2 f"),
+        );
+        let events = vm.tick(0, no_scripts).unwrap();
+        let [VmEvent::PlayMovie(movie)] = events.as_slice() else {
+            panic!("expected movie2 playback")
+        };
+        assert_eq!(movie.soundtrack, Some(("intro.ogg".into(), 44100, 2)));
+        assert_eq!(
+            (movie.width, movie.height, movie.skippable),
+            (800, 600, false)
+        );
+        assert_eq!(vm.state(), &VmState::WaitingMovie);
+    }
+
+    #[test]
+    fn play_bgm_parser_matches_corpus_defaults_and_wildcards() {
+        let mut full = Vm::new("bgm.sc", program(".playBGM majyo015_02.ogg * * 90"));
+        assert_eq!(
+            full.tick(0, no_scripts).unwrap(),
+            vec![VmEvent::PlayBgm(BgmRequest {
+                name: "majyo015_02.ogg".into(),
+                fade_in: 2,
+                fade_out: 2,
+                volume: 90,
+            })]
+        );
+
+        let mut stop = Vm::new("bgm.sc", program(".playBGM *"));
+        assert_eq!(
+            stop.tick(0, no_scripts).unwrap(),
+            vec![VmEvent::PlayBgm(BgmRequest {
+                name: "*".into(),
+                fade_in: 2,
+                fade_out: 2,
+                volume: 100,
+            })]
+        );
+    }
+
+    #[test]
+    fn play_se_parser_preserves_channels_defaults_and_inline_mix() {
+        let mut vm = Vm::new(
+            "se.sc",
+            program(
+                ".playSE AT_chime.ogg[120,-150] f 0 *\n.playSE2 fune_no_ue_a.ogg[50] t\n.playSE3 umi_a\n.playSE3 *",
+            ),
+        );
+        assert_eq!(
+            vm.tick(0, no_scripts).unwrap(),
+            vec![VmEvent::PlaySe(SeRequest {
+                channel: 1,
+                name: "AT_chime.ogg".into(),
+                looped: false,
+                first: 0,
+                second: 2,
+                volume: 100,
+                pan: -100,
+            })]
+        );
+        assert_eq!(
+            vm.tick(0, no_scripts).unwrap(),
+            vec![VmEvent::PlaySe(SeRequest {
+                channel: 2,
+                name: "fune_no_ue_a.ogg".into(),
+                looped: true,
+                first: 2,
+                second: 2,
+                volume: 50,
+                pan: 0,
+            })]
+        );
+        assert_eq!(
+            vm.tick(0, no_scripts).unwrap(),
+            vec![VmEvent::PlaySe(SeRequest {
+                channel: 3,
+                name: "umi_a".into(),
+                looped: false,
+                first: 2,
+                second: 2,
+                volume: 100,
+                pan: 0,
+            })]
+        );
+        assert_eq!(
+            vm.tick(0, no_scripts).unwrap(),
+            vec![VmEvent::PlaySe(SeRequest {
+                channel: 3,
+                name: "*".into(),
+                looped: false,
+                first: 2,
+                second: 2,
+                volume: 100,
+                pan: 0,
+            })]
+        );
+    }
+
+    #[test]
+    fn play_voice_emits_one_resource_request_without_waiting() {
+        let mut vm = Vm::new(
+            "voice.sc",
+            program(".playVoice maj-A00_01-0003\n.set X = 1"),
+        );
+        assert_eq!(
+            vm.tick(0, no_scripts).unwrap(),
+            vec![VmEvent::PlayVoice(VoiceRequest {
+                name: "maj-A00_01-0003".into(),
+            })]
+        );
+        assert_eq!(vm.state(), &VmState::Ready);
+        assert_eq!(vm.local("X"), None);
+        vm.tick(0, no_scripts).unwrap();
+        assert_eq!(vm.local("X"), Some(1));
+    }
+
+    #[test]
+    fn panel_parser_matches_every_corpus_shape_and_blocks_for_scene_animation() {
+        let mut standard = Vm::new("panel.sc", program(".panel 1"));
+        assert_eq!(
+            standard.tick(0, no_scripts).unwrap(),
+            vec![VmEvent::SetPanel(PanelRequest {
+                mode: 1,
+                duration: -1,
+                image: String::new(),
+            })]
+        );
+        assert_eq!(standard.state(), &VmState::WaitingPanel);
+        assert!(standard.tick(1000, no_scripts).unwrap().is_empty());
+
+        let mut custom = Vm::new("panel.sc", program(".panel 1 * msgPanel_girl.png"));
+        assert_eq!(
+            custom.tick(0, no_scripts).unwrap(),
+            vec![VmEvent::SetPanel(PanelRequest {
+                mode: 1,
+                duration: -1,
+                image: "msgPanel_girl.png".into(),
+            })]
+        );
+    }
+
+    #[test]
+    fn stage_parser_covers_every_argument_shape_used_by_the_corpus() {
+        let mut standard = Vm::new("stage.sc", program(".stage * BLACK.png 0 0"));
+        assert_eq!(
+            standard.tick(0, no_scripts).unwrap(),
+            vec![VmEvent::SetStage(StageRequest {
+                base_spec: "*".into(),
+                base_x: 0,
+                base_y: 0,
+                image: "BLACK.png".into(),
+                fixed_poses: vec![],
+                x: 0,
+                y: 0,
+                extras: vec![],
+            })]
+        );
+
+        let request = parse_stage(&[
+            "base:parts".into(),
+            "10".into(),
+            "20".into(),
+            "foreground.png".into(),
+            "30".into(),
+            "40".into(),
+            "normal.png".into(),
+            "50,60".into(),
+        ])
+        .unwrap();
+        assert_eq!(request.base_x, 10);
+        assert_eq!(request.base_y, 20);
+        assert_eq!(request.image, "foreground.png");
+        assert_eq!(
+            parse_stage(&[
+                "*".into(),
+                "[noblink:2]ev00_0070a02.png".into(),
+                "0".into(),
+                "0".into()
+            ])
+            .unwrap()
+            .image,
+            "ev00_0070a02.png"
+        );
+        assert_eq!((request.x, request.y), (30, 40));
+        assert_eq!(
+            request.extras,
+            vec![StageExtra {
+                name: "normal.png".into(),
+                first: 50,
+                second: 60,
+            }]
+        );
+    }
+
+    #[test]
+    fn at_load_preserves_layer_position_and_accepts_script_overrides() {
+        let mut vm = Vm::new(
+            "at-load.sc",
+            program(
+                "@define sara 400 1269 -1760\n@load sara [noblink:2]first.png 1266 -1754 100\n@load sara second.png * -1758\n",
+            ),
+        );
+        assert!(vm.tick(0, no_scripts).unwrap().is_empty());
+        assert_eq!(
+            vm.tick(0, no_scripts).unwrap(),
+            vec![
+                VmEvent::ApplyChar(CharRequest::Load {
+                    id: 400,
+                    image: "first.png".into(),
+                    secondary: None,
+                    tertiary: None,
+                    blink: false,
+                }),
+                VmEvent::ApplyChar(CharRequest::Position {
+                    id: 400,
+                    x: 1266,
+                    y: -1754,
+                }),
+                VmEvent::ApplyChar(CharRequest::BlendRate { id: 400, rate: 100 }),
+            ]
+        );
+        assert_eq!(
+            vm.tick(0, no_scripts).unwrap(),
+            vec![
+                VmEvent::ApplyChar(CharRequest::Load {
+                    id: 400,
+                    image: "second.png".into(),
+                    secondary: None,
+                    tertiary: None,
+                    blink: true,
+                }),
+                VmEvent::ApplyChar(CharRequest::Position {
+                    id: 400,
+                    x: 1266,
+                    y: -1758,
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn transition_config_matches_original_three_argument_parser() {
+        let mut vm = Vm::new("transition.sc", program(".transition 22 * 30"));
+        let events = vm.tick(0, no_scripts).unwrap();
+        assert_eq!(
+            events,
+            vec![VmEvent::SetTransition(TransitionConfig {
+                transition_type: 22,
+                mask: "*".into(),
+                duration: 30,
+            })]
+        );
+        assert_eq!(vm.state(), &VmState::Ready);
+    }
+
+    #[test]
+    fn timer_is_cooperative_and_uses_ten_millisecond_units() {
+        let mut vm = Vm::new("wait.sc", program(".wait 13\n.set X = 1\n.end"));
+        vm.tick(0, no_scripts).unwrap();
+        assert_eq!(vm.state(), &VmState::WaitingTimer { remaining_ms: 130 });
+        vm.tick(129, no_scripts).unwrap();
+        assert_eq!(vm.local("X"), None);
+        vm.tick(1, no_scripts).unwrap();
+        assert_eq!(vm.local("X"), Some(1));
+        vm.tick(0, no_scripts).unwrap();
+    }
+
+    #[test]
+    fn pragma_restores_all_original_modes() {
+        let mut vm = Vm::new(
+            "pragma.sc",
+            program(
+                ".setGlobal G = 1\n.set L = 2\n.pragma skip_enable\n.pragma disable_control\n.pragma clear_global_variables\n.pragma clear_local_variables",
+            ),
+        );
+        for _ in 0..6 {
+            vm.tick(0, no_scripts).unwrap();
+        }
+        assert!(vm.skip_enabled);
+        assert!(!vm.control_enabled);
+        assert_eq!(vm.global("G"), None);
+        assert_eq!(vm.local("L"), None);
+
+        let mut monologue = Vm::new(
+            "monologue.sc",
+            program(".pragma monologue\nskipped\nmonologue_end visible"),
+        );
+        monologue.tick(0, no_scripts).unwrap();
+        let events = monologue.tick(0, no_scripts).unwrap();
+        assert!(matches!(
+            &events[0],
+            VmEvent::Message(MessageRequest { text, .. }) if text == "monologue_end visible"
+        ));
+    }
+
+    #[test]
+    fn message_voice_spec_strips_volume_and_pan_before_resource_load() {
+        let mut vm = Vm::new(
+            "voice-spec.sc",
+            program(".message 280 yur-K01-0003_b[100,-60] speaker text"),
+        );
+        let events = vm.tick(0, no_scripts).unwrap();
+        assert_eq!(
+            events,
+            vec![VmEvent::Message(MessageRequest {
+                id: 280,
+                voice: "yur-K01-0003_b".into(),
+                voice_volume: 100,
+                voice_pan: -60,
+                speaker: "speaker".into(),
+                text: "text".into(),
+                read: false,
+            })]
+        );
+    }
+
+    #[test]
+    fn message_always_waits_for_input_and_preserves_control_codes() {
+        let mut vm = Vm::new(
+            "message.sc",
+            program(".pragma enable_control\n.message 100 voice speaker hello world\n.set X = 1"),
+        );
+        vm.tick(0, no_scripts).unwrap();
+        let events = vm.tick(0, no_scripts).unwrap();
+        assert_eq!(
+            events,
+            vec![VmEvent::Message(MessageRequest {
+                id: 100,
+                voice: "voice".into(),
+                voice_volume: 100,
+                voice_pan: 0,
+                speaker: "speaker".into(),
+                text: "hello world".into(),
+                read: false,
+            })]
+        );
+        assert_eq!(vm.state(), &VmState::WaitingInput);
+        vm.advance_input();
+        vm.tick(0, no_scripts).unwrap();
+        assert_eq!(vm.local("X"), Some(1));
+
+        let mut controls = Vm::new("controls.sc", program(".message 1   \\a\\vtext"));
+        let events = controls.tick(0, no_scripts).unwrap();
+        assert_eq!(
+            events,
+            vec![VmEvent::Message(MessageRequest {
+                id: 1,
+                voice: String::new(),
+                voice_volume: 100,
+                voice_pan: 0,
+                speaker: String::new(),
+                text: "\\a\\vtext".into(),
+                read: false,
+            })]
+        );
+        assert_eq!(controls.state(), &VmState::WaitingInput);
+    }
+
+    #[test]
+    fn end_commits_the_message_read_bit_without_ending_the_script() {
+        let mut vm = Vm::new(
+            "end.sc",
+            program(
+                ".pragma enable_control\n.message 7 voice speaker first\n.end\n.set X = 1\n.message 7 voice speaker second",
+            ),
+        );
+        vm.tick(0, no_scripts).unwrap();
+        let first = vm.tick(0, no_scripts).unwrap();
+        assert!(matches!(
+            &first[0],
+            VmEvent::Message(MessageRequest { read: false, .. })
+        ));
+        vm.advance_input();
+        assert_eq!(vm.tick(0, no_scripts).unwrap(), vec![VmEvent::EndMessage]);
+        vm.tick(0, no_scripts).unwrap();
+        assert_eq!(vm.local("X"), Some(1));
+        let second = vm.tick(0, no_scripts).unwrap();
+        assert!(matches!(
+            &second[0],
+            VmEvent::Message(MessageRequest { read: true, .. })
+        ));
+    }
+
+    #[test]
+    fn labeled_chain_loads_script_and_skips_commands_before_entry() {
+        let mut vm = Vm::new("first.sc", program(".set flag = 1\n.chain next.sc#resume"));
+        vm.tick(0, no_scripts).unwrap();
+        vm.tick(0, no_scripts).unwrap();
+        assert_eq!(vm.current_script(), Some("first.sc"));
+        assert_eq!(vm.local("flag"), Some(1));
+        let events = vm
+            .tick(0, |name| {
+                assert_eq!(name, "next.sc");
+                Ok(program(
+                    ".set flag = 99\n.label resume\n.message 10 * * resumed",
+                ))
+            })
+            .unwrap();
+        assert_eq!(events, vec![VmEvent::ScriptChanged("next.sc".into())]);
+        assert_eq!(vm.local("flag"), Some(1));
+        vm.tick(0, no_scripts).unwrap();
+        assert_eq!(vm.state(), &VmState::WaitingInput);
+    }
+
+    #[test]
+    fn missing_chain_label_does_not_replace_current_script() {
+        let mut vm = Vm::new("first.sc", program(".chain next.sc#missing"));
+        vm.tick(0, no_scripts).unwrap();
+        let error = vm
+            .tick(0, |name| {
+                assert_eq!(name, "next.sc");
+                Ok(program(".end"))
+            })
+            .unwrap_err();
+        assert!(error.contains("unknown label missing"));
+        assert_eq!(vm.current_script(), Some("first.sc"));
+        assert!(matches!(vm.state(), VmState::PendingChain { .. }));
+    }
+
+    #[test]
+    fn chain_from_test_sc_is_deferred_to_the_next_engine_update() {
+        let mut vm = Vm::new(
+            "test.sc",
+            program(".setGlobal FLAG = 2\n.chain A00_01.sc\n.set X = 9"),
+        );
+        vm.tick(0, no_scripts).unwrap();
+        let first_events = vm.tick(0, no_scripts).unwrap();
+        assert_eq!(
+            first_events,
+            vec![VmEvent::EndMessage, VmEvent::PersistGlobals]
+        );
+        assert_eq!(
+            vm.state(),
+            &VmState::PendingChain {
+                path: "A00_01.sc".into()
+            }
+        );
+        assert_eq!(vm.current_script(), Some("test.sc"));
+        assert_eq!(vm.local("X"), None);
+
+        let second_events = vm
+            .tick(0, |name| {
+                assert_eq!(name, "A00_01.sc");
+                Ok(program(".set X = FLAG\n.wait 1"))
+            })
+            .unwrap();
+        assert_eq!(
+            second_events,
+            vec![VmEvent::ScriptChanged("A00_01.sc".into())]
+        );
+        assert_eq!(vm.current_script(), Some("A00_01.sc"));
+        assert_eq!(vm.global("FLAG"), Some(2));
+        assert_eq!(vm.local("X"), Some(2));
+        assert_eq!(vm.state(), &VmState::Ready);
+
+        vm.tick(0, no_scripts).unwrap();
+        assert_eq!(vm.state(), &VmState::WaitingTimer { remaining_ms: 10 });
+    }
+}

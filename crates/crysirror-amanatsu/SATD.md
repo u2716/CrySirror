@@ -5,23 +5,19 @@
 **Scope and current location.** The whole adopt-mode port: asset readers in
 `crysirror-unity` (shared) and game semantics in this crate.
 
-**Remaining work.** `ActionMap` beyond the new-game map select,
-`ChangeMap`, heroine entry/standing placement, the `ActionMapUI` HUD
-(cameras, 2D map, `Skip`) and time-zone advance (tutorial
+**WaterGun.** The normal command, installed gun and mode controls, temporary actor animation, held laser/pulsed emission and return to the original map pose have release replay evidence in [the validation record](../../docs/validation/amanatsu.md#2026-11-23--water-gun-command-original-mesh-and-free-flight-droplets). Outstanding work starts at the Obi solver's per-particle contacts against the target's sixteen skinned `ALObiCollider` meshes. The VM needs the collider tag, particle ID, world contact point and normal. `WaterGunFFDecalProc` uses that contact to project into the active animated `HumanFluidFlow` FFCanvas texture channels. The host's VFX sequence receipt supplies none of these contacts, and a rigid box query cannot reproduce the mesh contact or the UV projection. The connected stream draws free-flight particles. Fluid surface reconstruction, hit-driven counters/reactions, original voice sequencing and scene transitions remain open.
+
+**Remaining work.** Map HUD and time-zone variants beyond the verified pool routes (tutorial
 `ConfirmDialog`, HUD config/help and button fade animations, HScene
 coordinate card loading, the flag turning morning
-events 1/2 into 3, the item events' CGs and heroine placement and the item
+events 1/2 into 3, item-event CG and placement variants beyond the verified pool chair conversation, and the item
 HScene settings flag, `AutoSaveMode`,
 link-partner placement (`SetCharaForMap` `isLink`), the `MapSelectUI`
 hover faces (`_charaInfos`) and player icon (`_pIcon`),
 `MapSelectUI` next-zone reloading a map behind it, the light settings'
-baked lightmaps (`_colorLightmaps`/`_lightmapIndices`: only map 00's `Lake
-Polygon` is lightmapped in the shipped settings; the renderer has no second
-UV set) and reflection cubemaps, Azure's scattering integral,
+reflection cubemaps, Azure's scattering integral,
 clouds, moon and stars (the sky is a gradient fit from the Azure hour,
-latitude and Rayleigh/Mie gradients), `ActionPoint` choice and `_animIDList` motions, NavMesh
-movement, `CharaSelectUI` sources/sorting/pairs/release, scroll views and
-`RectMask2D` clipping, `CommandScene` (prelude choice, the heroine-motion/water-gun/
+latitude and Rayleigh/Mie gradients), non-looping ActionPoint transitions, swimming/splines, obstacle avoidance, off-mesh links and native NavMesh path corners, `CharaSelectUI` sources/sorting/pairs/release, grid dragging, inertia and scrollbar gestures, `CommandScene` (prelude choice, the heroine-motion/water-gun/
 `*_Fin` assets of `Get*Asset`, the HScene-after/move-map ends, the exact
 `GetGeneralCommandAgreeAsset` branches beyond favourability > 3, cost
 for massage/with/invite, the favourability level-up
@@ -29,8 +25,8 @@ short movies (`IsNextShortMovie` gates, the movies and the LV increase are
 ported; `sm.rs` lists the timeline tracks that are not played), parameter gauge/max animations, `IsForgetPoint`; talks now play `e1-approach` and one
 `e1-N`), ADV expressions/motions/event CGs/cloth states and the
 auto/skip/log/config buttons and text reveal,
-the map-select title/option buttons, the save list's comment entry, local-time stamps (UTC is used) and animations, map open flags from save progress);
-map rendering parity (the lake lightmap of `ma/lit`, reflection probes, the Azure sky
+map-select help and player settings beyond the verified config and return-to-title paths, the save list's comment entry, local-time stamps (UTC is used) and animations, map open flags from save progress);
+map rendering parity (reflection probes, the Azure sky
 time of day, Beautify sharpen/depth of field/film grain/vignette and URP
 ShadowsMidtonesHighlights (tonemap, exposure, saturation, contrast, colour
 temperature and bloom are applied), the PS Vita lite tonemap without colour
@@ -38,57 +34,37 @@ grading, `AL/MapColorMask`, water
 and particle shaders, camera-light fades and `CmpCorrectLightAngle`); the synchronous
 `ChangeMap` import (≈1–2 s inside one VM step behind the fade) moving to a
 worker under ADR 0050; characters beyond the card-driven assembly in
-`CustomScene` (the scene's preset instead of `AL_F_00`, accessory swing
-and hide states, `customshape` face/body shape values, eye shadow,
-paint/eyelid layers, the AL forward program terms listed in the
-2026-11-23 rows (skin base pre-grade, SSS, shine, rim, specular, the md
-lamp shift, card `LineWidth` on the outline; `_SkinIntensity` detail rate, the
-`mt_body_detail` normal map/line mask, `mt_body_shine` and the sunburn
-and body detail overlay layers are not drawn: their textures use separate UV
-layouts/positioned decals not in the body's UV0), clothing body cut-outs,
+`CustomScene` (accessory swing
+and hide states, `customshape` face/body shape values, outstanding cosmetic layers and the
+AL shader terms without drawing evidence (see the per-material validation records), clothing body cut-outs,
 the eye bones, MagicaCloth depth curves, inertia and MeshCloth
 (BoneCloth hair and the body BoneSprings are simulated as spring bones;
 hair `colliderList`s hold only null slots in the shipped prefabs and no
 runtime assignment was found in `GameAssembly.dll`, so hair does not collide), height blending between the
 `_S/_M/_L` clips, controller transitions, characters on maps); the
 `CustomScene` character maker UI (instantiated from `lib/custom` prefabs at
-runtime; only the background is drawn) and `Memory` scene controller; on the title: the Memories entry; saves:
-the `SaveLoadUI` list (つづきから loads the newest save; MapSelectUI
-Save/Load), manual saves, the original's auto-save rotation limit,
+runtime; detail pages, editable character properties, native card writing and the dirty-card exit flow remain open).
+In Memory, grid dragging, inertia and scrollbar gestures still need verification. For saves, outstanding work includes the original auto-save rotation limit,
 `SaveTimeText` in local time (UTC is written), `PlayerData` from the
 player card editor (the default male card is saved), save versions (0.0.0)
-and import of saves in the installation's `UserData/save`, the `ConfigWindow` parts listed in `config.rs`, the `ExitDialog` animations
-confirmation (quit is immediate), the TOS check/viewer, the language dialog,
+and import of saves in the installation's `UserData/save`, the `ConfigWindow` parts listed in `config.rs`, the `ExitDialog` animations, the TOS check/viewer, the language dialog,
 Selectable hover/press transitions (`ColorTint`, Animator triggers), the
 ILLGAMES `PlayAnimationUI` tweens (LitMotion easing) and the uploader/
 downloader; Animator parameter conditions; sound: BGM cross-fades, config
 volumes, the title call voice, ENV/3D SE and voices outside the title, the
-`UnityPlayer.dll` setup-header scan on a worker; the ADV commands still reported as unported (character, event CG
-and HScene commands), characters (body/face/hair/clothes, colour masks, blend
-shapes, bones, physics), maps and HScene mode,
-saves (`UserData/save`), character cards; TextMeshPro Alpha8 SDF atlases
+`UnityPlayer.dll` setup-header scan on a worker; the installed ADV commands `CharaMotionIKSetPartner`,
+`LookAtDankonAdd` and `LookAtDankonRemove` and unverified parameter/target variants;
+multi-actor animation and cross-character pose constraints; TextMeshPro Alpha8 SDF atlases
 beyond the RGBA decode limit; meshes with `m_MeshCompression`.
-
-**Next work list (survey 2026-11-21, `material_census`, ActionMapScene
-decompile).** New game: `ActionMapScene.Initialize` creates `SaveData`, loads
-the player from the default card (`PropertyData._defaultMaleCardFileName`
-`AL_M_00`, `HumanData.LoadCharaFile`/`LoadFromPreset`), instantiates the
-map prefab (`ActiomMapPrefabScenePath`) and `AngleData`, opens
-`ActionMapUI`/`MapSelectUI`/`PlayerSelectUI`/`CharaSelectUI` prefabs and
-the tutorial `ConfirmDialog`. Map rendering is in place (see history);
-characters still need the toon path. Shader census — maps: `Universal Render
-Pipeline/Lit` (104), `Nature/SpeedTree8_PBRLit` (459), `AL/Map` (282),
-`AL/MapColorMask`, NatureManufacture water, Azure sky, Lux/VFX particles;
-characters: ILLGAMES toon shaders `AL/skin_body`, `AL/skin_head`, `AL/hair`,
-`AL/hair_outline`, `AL/cloth`, `AL/cloth_alpha`, `AL/acs*`, `AL/eye*`,
-`AL/nail` (150–490 properties each: colour masks, paint/cheek layers,
-outlines); character cards (PNG + ILLGAMES data), body/face assembly,
-Cinemachine cameras, NavMesh wandering, Mecanim humanoid animation.
 
 **Closure evidence.** Installed-game runs through the title, ADV, map and
 HScene mode and save/load, recorded in a validation note.
 
-| Date | Change | Remaining scope |
+## Implementation history
+
+The final column records outstanding work at the date of each change. The current open scope is listed above.
+
+| Date | Change | Remaining at that date |
 | --- | --- | --- |
 | 2026-11-21 | Shared Unity 6 readers (bundles, type trees, generated MonoBehaviour trees, textures incl. BC4/BC6H/BC7, meshes with skinning and blend shapes); ADV scenario decoding. | Everything listed above. |
 | 2026-11-21 | Boot flow Init → Logo → Title with the scene fade; shared Mecanim playback (`crysirror_unity::animator`), UnityEvent persistent calls and uGUI raycast/interactable inheritance; title menus, Back/right click, scene loads and quit ported from `TitleScene`. | Listed above. |
@@ -152,3 +128,21 @@ HScene mode and save/load, recorded in a validation note.
 | 2026-11-23 | ActionPoint activities at placement (`_animIDList` weighted by `al_next_action` row −1, the id's `anim_f` state). Remaining: time-zone variants, follow-up actions, point choice, NavMesh. | Listed above. |
 | 2026-11-23 | Body-state part and censor overlay (`HumanBody.UpdateVisible` refs 96/102, `AL/sub/mnpb` block noise), body detail overlay layers baked into the body base. Remaining: detail relief/gloss. | Listed above. |
 | 2026-11-23 | HScene surface effects: paste levels from finish arcs against the `SiruPasteInfo` hit objects, the skin programs' liquid coverage as a shared toon liquid layer. Remaining: particle simulation, bump/droplet/highlight terms, clothes, pour, service finishes, consecutive reset. | Listed above. |
+| 2026-11-23 | Connected MapSelectUI settings and return-to-title, including the ordinary ConfirmDialog, localized question, Yes/No, close and cancellation. | Other MapSelectUI controls, overlap animations and the rest of the port remain open. See the map system menu replay in the validation note. |
+| 2026-11-23 | Retained the active posture's explicitly referenced attachment transforms and their ancestor chains when exporting the character in GLB chunks. The installed `som_00` fixture and Claude's existing 5400-frame `hpull` track now resolve the previously missing meshless target. | The resulting hit was observed in this track. Native hit distribution, other postures and the other surface-effect gaps above remain open. |
+| 2026-11-23 | The movie and heroine grids accept wheel input through their authored ScrollRects and viewport masks. MemoryItem hover previews an unlocked title, and pointer exit restores the selected title. The title's two editor entries now resolve the sex-specific ID-zero preset through the original characustom lists. CategoryTop is mounted beneath its authored canvas and its top-level category toggles and settings button are wired. Verified against the installed hierarchy in release tests and by entering both editors from Title. | Editor subpages, model modification, card writing and drag/scrollbar gestures remain open. |
+| 2026-11-23 | Applied the linear, fractional `_UseShadowColor` blend after AL lighting and replaced uniform character hulls with the separate `AL/hair_outline` back-face meshes, using the card width, actual detail mask, depth-limited displacement and dither cutoff. | The hair and shadow-tone pixel regressions pass on desktop Metal. Skin and clothing have no equivalent hull; their native texture-line fragments, secondary shadow and view terms, original-frame comparisons and console output remain open. |
+| 2026-11-23 | Resolved the authored wandering-point list and occupancy cursor, weighted follow-up motions, time-zone variants, native DNAV v16 tile connectivity, and ordinary land locomotion. A 9000-frame release replay reached two pool ActionPoints and changed to the destination action. | Dynamic avoidance, swimming/area links, spline actions, non-looping motion callbacks, terrain following over steep detail triangles and native corner parity remain open. |
+| 2026-11-23 | Initial eligibility and control fixture verified the WaterGun buttons, mode sprites and source parameters. At this stage the command stayed open on entry. | Later entries below record the connected scene, stream and return path. |
+| 2026-11-23 | Connected the command to the installed WaterGun prefab, raised gun model, both held input bindings, source-speed/interval free flight, and return to the command menu. Real menu replay reached 186 laser particles and 341 pulse particles, then released both emitters on End. | Native skinned Obi contacts, FluidFlow wet decals and clothing counters, the fluid surface mesher, reaction/voice sequencing, and opening/closing transitions remain open. |
+| 2026-11-23 | Applied the target's water animation table on entry, including the default base for unlisted map IDs, and restored the map pose on exit. Offscreen renderer diagnostics verified both clip changes on the pool route. | The contact-driven reaction states, hit processing, surface rendering and voice/timing above remain open. |
+| 2026-11-23 | Bound the map settings' static directional lightmaps per receiver. The pool lake's missing UV1 resolves to UV0 in the matching UnityPlayer input layout. The desktop render path applies the original Sea Mobile colour/direction decode and reserves both images within the map texture budget. | Sea Mobile caustics, foam, distortion and captured Windows pixel parity remain open. See the pool lightmap validation note. |
+| 2026-11-23 | Applied the enabled skin body's forward-fragment line tint from both red detail-array slices, card width, `_linetexon`, line power and colour. | The shipped baseline disables the body switch. Original line-enabled card capture, head nose/lip lines and cloth distance/alpha contours remain open. |
+| 2026-11-23 | Implemented the head's placed nose and lip line masks and view weighting. The desktop colour pass evaluates the single-sample contour for both cloth variants. Ordinary masked cloth also reaches raster shadow and depth passes. A Metal readback isolates the head masks and the transparent-cloth edge beyond the native 11-unit range. | GPU pass selection skips blended cloth in shadow and depth draws. Native AL/cloth_alpha has ShadowCaster, DepthOnly and DepthNormals passes, and the installed bikini material overrides its queue to 2470 with _ZWriteMode=1. These pass and render-order differences remain, along with static virtual-shadow invalidation on camera movement, dynamic liquid opacity, nose gloss, the lip's red shadow channel, Windows comparison, MSAA and console output. |
+| 2026-11-23 | Matched the installed clothing queues, independent Forward depth writes and dedicated raster shadow cutoff. Metal tests check colour order, actual wall shadows and distance-driven virtual-shadow updates. AL_F_04 and AL_F_T001 exercise real enabled contours; oversized but sparsely used palettes on AL_F_08 and AL_F_09 now preserve every weighted influence. All four completed the pool route. | The shader's liquid-dependent opacity, ExtraPrePass activation, two materials with alpha-to-coverage, Windows reference images and console output remain unverified. A single renderer with over 256 genuinely weighted joints still exceeds the palette limit. |
+| 2026-11-23 | Decoded the authored one-dimensional Motion clip pairs in the native base controllers, bound the posture override clips for each actor and connected the original YuragiCtrl timer and curve. The installed controller regression and two muted runs from the night save exercised changing weights on both actors. | Nested and continuous body-shape blends, multi-actor transitions, full gauge and pose parity remain open. |
+| 2026-11-23 | Mounted the original per-sex hit prefabs at their authored body transforms before emitter lookup. Both installed card fixtures now resolve and export all 141 attachment references in 124 posture definitions. | Dynamic contact and parity for each posture still need playback. |
+| 2026-11-23 | Shared per-model dither in the colour, normal/depth and raster shadow passes. A Metal readback changed a model from full to half to zero, checked all 676 foreground/depth samples and measured the cast shadow. | MSAA, RT and console parity remain unverified. See the ADV character fade validation note for the original shader evidence. |
+| 2026-11-23 | Mounted ControlPanel, read the original character-height correction and head anchor, and wired its face and body camera resets. Two ordinary title-entry replays exercised both buttons. | Free orbit, detail sliders and card editing/writing still need original behavior verification. |
+| 2026-11-23 | Connected editor exit to its native TwoChoices modal. Verified open, cancellation back to the editor and confirmation back to Title through real player input. | Dirty-card prompts, card serialization and alternate editor UI translation bundles remain open. |
+| 2026-11-23 | Verified the ordinary pool chair conversation through its CG, point award, return to ActionPoint 44 and cleared fade. | The other item event variants and the three cross-character ADV commands remain open. |

@@ -36,6 +36,13 @@ title, load screen and story opening under this profile. Unconnected selectors
 stop with a visible error, as tracked in
 [SATD-cmvs-20211007-profile](SATD.md#satd-cmvs-20211007-profile).
 
+## CMVS 2007 on Windows i386
+
+`Pc20070119X86` starts the installed `start.ps2` and reads PS2A scripts,
+images and other members from CPZ3 archives. The Primitive Link disc edition
+reaches its original disc-check interface. See the
+[installed-game validation](../../docs/validation/cmvs-20070119.md).
+
 ## CVNS
 
 `Cvns20040515X86` identifies the predecessor CVNS engine in the supplied i386

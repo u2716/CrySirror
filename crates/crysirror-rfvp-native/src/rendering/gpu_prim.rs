@@ -248,7 +248,7 @@ impl GpuPrimRenderer {
         if self.debug_tiles.iter().any(|t| t.prim_id == prim_id) {
             return;
         }
-        let (gen, ready, has_cpu, w, h) = match graph {
+        let (generation, ready, has_cpu, w, h) = match graph {
             Some(g) => (
                 g.get_generation(),
                 g.get_texture_ready(),
@@ -267,7 +267,7 @@ impl GpuPrimRenderer {
             prim_id,
             graph_id,
             kind,
-            graph_gen: gen,
+            graph_gen: generation,
             graph_ready: ready,
             graph_has_cpu: has_cpu,
             graph_w: w,
@@ -442,7 +442,7 @@ impl GpuPrimRenderer {
         graph_id: u16,
         graph: &GraphBuff,
     ) {
-        let gen = graph.get_generation();
+        let generation = graph.get_generation();
 
         let Some(img) = graph.get_texture().as_ref() else {
             return;
@@ -450,13 +450,13 @@ impl GpuPrimRenderer {
 
         // Fast path for frequently-updated CPU RGBA graphs (movie/text buffers): update in place.
         if let Some(e) = self.graph_cache.get_mut(&graph_id) {
-            if e.generation == gen {
+            if e.generation == generation {
                 return;
             }
 
             if graph.load_kind == GraphBuffLoadKind::RawRgba {
                 if e.texture.update_rgba8(resources, img) {
-                    e.generation = gen;
+                    e.generation = generation;
                     return;
                 }
             }
@@ -472,7 +472,7 @@ impl GpuPrimRenderer {
         self.graph_cache.insert(
             graph_id,
             GraphGpuEntry {
-                generation: gen,
+                generation: generation,
                 texture: tex,
             },
         );

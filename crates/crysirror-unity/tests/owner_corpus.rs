@@ -132,3 +132,49 @@ fn every_mono_behaviour_matches_the_schema() {
     }
     assert!(failed.is_empty());
 }
+
+/// The 5.6 player uses 64-bit object IDs, 32-bit object offsets and streamed textures.
+#[test]
+#[ignore = "requires COM3D2_DATA pointing to a Unity 5.6.4p2 installation"]
+fn com3d2_boot_scene_and_streamed_logo() {
+    let root = std::path::PathBuf::from(std::env::var_os("COM3D2_DATA").unwrap());
+    let open = |name: &str| -> Arc<dyn AssetReader> {
+        Arc::new(File(Mutex::new(
+            std::fs::File::open(root.join(name)).unwrap(),
+        )))
+    };
+    let main = SerializedFile::open(open("globalgamemanagers")).unwrap();
+    assert_eq!((main.format, main.unity_version.as_str()), (17, "5.6.4p2"));
+    let info = main
+        .objects
+        .iter()
+        .find(|o| o.class_id == c::BUILD_SETTINGS)
+        .unwrap();
+    let levels = build_levels(&main.bytes(info).unwrap()).unwrap();
+    assert_eq!(levels[6], "Assets/Scene/SceneLogo.unity");
+    let resources = SerializedFile::open(open("resources.assets")).unwrap();
+    let info = resources
+        .objects
+        .iter()
+        .find(|o| {
+            o.class_id == c::TEXTURE_2D && {
+                let bytes = resources.bytes(o).unwrap();
+                crysirror_unity::Reader::new(&bytes).string().unwrap() == "kiss_logo"
+            }
+        })
+        .unwrap();
+    let mut sibling = String::new();
+    let img = crysirror_unity::texture::decode_56(&resources.bytes(info).unwrap(), |p| {
+        sibling = p.to_owned();
+        Ok(open(p))
+    })
+    .unwrap();
+    assert_eq!((img.width, img.height), (1024, 484));
+    assert_eq!(sibling, "resources.assets.resS");
+    assert!(img.rgba.chunks_exact(4).any(|p| p[3] == 0));
+    assert!(
+        img.rgba
+            .chunks_exact(4)
+            .any(|p| p[3] == 255 && p[..3] != [255; 3])
+    );
+}

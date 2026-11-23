@@ -204,6 +204,11 @@ pub const MAX_NODE_POSES: usize = 1024;
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AnimationState {
+    /// Ordered coverage of every mesh on this model instance (4 × 4 Bayer).
+    /// Absent or 1 draws the complete model, 0 removes its coverage in colour,
+    /// depth and shadow passes. Intermediate values reveal integral sixteenths.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dither: Option<f32>,
     #[serde(default)]
     pub layers: Vec<AnimationLayer>,
     /// State machine instance; when set, layers are derived from it.
@@ -252,6 +257,7 @@ pub struct AnimationState {
 pub const MAX_MORPH_WEIGHTS: usize = 1024;
 impl AnimationState {
     pub fn validate(&self) -> Result<()> {
+        ensure!(self.dither.is_none_or(|v| v.is_finite() && (0. ..=1.).contains(&v)), "model dither outside [0,1]");
         ensure!(
             self.attach.as_ref().is_none_or(|n| !n.is_empty() && n.len() <= 256 && self.follow.is_some()),
             "animation attach needs a follow leader and a node name of at most 256 bytes"

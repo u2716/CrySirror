@@ -240,7 +240,7 @@ pub fn simplify(positions: &[Vec3], indices: &[u32], target_tris: usize) -> (Vec
             *edge_count.entry(edge(t[k], t[(k + 1) % 3])).or_default() += 1;
         }
     }
-    let locked: HashSet<u32> = edge_count.iter().filter(|(_, &n)| n != 2).flat_map(|(e, _)| [e.0, e.1]).collect();
+    let locked: HashSet<u32> = edge_count.iter().filter(|&(_, &n)| n != 2).flat_map(|(e, _)| [e.0, e.1]).collect();
     let p = |v: u32| positions[v as usize].as_dvec3();
     let mut quadric: HashMap<u32, DMat4> = HashMap::new();
     let mut around: HashMap<u32, Vec<usize>> = HashMap::new();
@@ -675,7 +675,7 @@ mod tests {
                 // A crack is an open (odd-count) edge. Even counts > 2 are
                 // chords that two neighbouring groups created independently
                 // between the same locked border vertices; the surface stays closed.
-                let bad: Vec<_> = e.iter().filter(|(_, &n)| n % 2 == 1).collect();
+                let bad: Vec<_> = e.iter().filter(|&(_, &n)| n % 2 == 1).collect();
                 if !bad.is_empty() {
                     let owners: Vec<_> = sel.iter().filter(|&&c| dag.clusters[c].indices.chunks_exact(3).any(|t| (0..3).any(|k| edge(t[k], t[(k + 1) % 3]) == *bad[0].0))).map(|&c| (c, dag.clusters[c].level, dag.clusters[c].lod_error, dag.clusters[c].parent_error, projected(dag.clusters[c].lod_error, dag.clusters[c].lod_bounds, eye), projected(dag.clusters[c].parent_error, dag.clusters[c].parent_bounds, eye))).collect();
                     panic!("crack at threshold {threshold} eye {eye}: {} bad edges, first {:?}, owners {owners:?}", bad.len(), bad[0]);

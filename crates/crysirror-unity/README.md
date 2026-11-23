@@ -11,6 +11,14 @@ decodes MonoBehaviour fields under a consumer-supplied schema (see
 the world renderer. No Unity code, scripts or devices are hosted. Other Unity
 versions and compressed meshes fail visibly.
 
+## Unity 5.6 player data (serialized format 17)
+
+The COM3D2 5.6.4p2 profile reads object tables with 64-bit path IDs and
+32-bit relative offsets, Texture2D level zero from embedded or sibling
+`.resS` data, material texture bindings, and uncompressed static mesh
+channels. The [COM3D2 startup validation](../../docs/validation/com3d2.md)
+uses these readers on the retail title scene.
+
 ## Unity 2020+ data (serialized format 22, UnityFS)
 
 - `bundle.rs`: UnityFS archives (formats 6–8; LZ4/LZ4HC, LZMA and stored

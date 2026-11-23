@@ -160,3 +160,38 @@ fn audit_installed_script_opcode_inventory() -> anyhow::Result<()> {
     eprintln!("Syscalls {syscalls:04x?}");
     Ok(())
 }
+
+#[test]
+#[ignore = "requires the external CMVS 20070119 i386 installation"]
+fn ps2_script_pack_opens_through_scoped_resources() -> anyhow::Result<()> {
+    let game = PathBuf::from(std::env::var_os("CRYSIRROR_CMVS_GAME").expect("game root"));
+    let tag = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+    let writable = Writable(std::env::temp_dir().join(format!("cmvs-ps2-{tag}")));
+    std::fs::create_dir(&writable.0)?;
+    let client = ClientId(1);
+    let mut vfs = DiskVfs::new(&game, &writable.0)?;
+    vfs.register(client, "cmvs", "fixture")?;
+    let storage = vfs.storage(client)?;
+    let source = storage.open_asset(&VfsPath::new(Mount::Asset, "cmvs.exe")?)?;
+    let resources = Cpz6Resources::prepare(
+        VmProfile::Pc20070119X86,
+        DecodeContext::new(client),
+        source.as_ref(),
+    )?;
+    let mut registry = FormatRegistry::default();
+    registry.register(crysirror_formats_arc::legacy_archive("purple-software/cpz3").unwrap())?;
+    let archive = resources.open(
+        storage.as_ref(),
+        &registry,
+        &VfsPath::new(Mount::Asset, "data/pack/script.cpz")?,
+    )?;
+    assert_eq!(archive.entries().len(), 140);
+    for member in archive.entries() {
+        let script = Script::read(archive.open_entry(&member.path)?.as_ref())?;
+        assert!(!script.code().is_empty(), "{}", member.path);
+        if member.path == "main.ps2" {
+            assert_eq!(script.code().len(), 129448);
+        }
+    }
+    Ok(())
+}

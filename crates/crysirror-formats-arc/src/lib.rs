@@ -19,7 +19,9 @@ pub mod images_b;
 pub mod images_c;
 pub mod images_d;
 mod legacy;
+pub mod minori;
 mod nscripter;
+mod psarc;
 mod simple;
 mod xp3;
 pub use images::{image_format_ids, register_images};
@@ -31,6 +33,8 @@ pub use xp3::Xp3;
 /// variant/evidence limits separately; an ID never substitutes for a parser.
 pub fn register(registry: &mut crysirror_resource::FormatRegistry) -> anyhow::Result<()> {
     registry.register(std::sync::Arc::new(lilim_animation::AbmFrames))?;
+    registry.register(std::sync::Arc::new(minori::MinoriPaz))?;
+    registry.register(std::sync::Arc::new(psarc::Psarc))?;
     registry.register(std::sync::Arc::new(BgiArc))?;
     registry.register(std::sync::Arc::new(MajiroArc))?;
     registry.register(std::sync::Arc::new(Nscripter::sar()))?;

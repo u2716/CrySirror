@@ -7,8 +7,7 @@
 //! (`BackTitle`).
 //!
 //! SATD-amanatsu-port: the card list's sources/sorting/personal view, the
-//! hover frames (`OnPointMemory`), the grid's scrolling (`LoopGridView`
-//! shows its first rows), the title's `Localize` text and the play
+//! scrollbar dragging/inertia, the title's `Localize` text and the play
 //! button's interactable text swap are not ported.
 use crate::{charaselect::Grid, level::Level, unity::Unity};
 use anyhow::{Context, Result};
@@ -87,8 +86,9 @@ pub struct Memory {
     entries: Vec<Entry>,
     grid: Option<Grid>,
     selected: Option<usize>,
-    /// (`Selected` frame, `Selectable` frame) of each item.
+    /// Selected and pointer-over frames of each item.
     frames: Vec<(Option<usize>, Option<usize>)>,
+    hovered: Option<usize>,
     title: Option<usize>,
     /// Morning (1), evening (2), night (3): toggle and checkmark nodes.
     toggles: Vec<(usize, Option<usize>, i32)>,
@@ -145,13 +145,14 @@ impl Memory {
                 }
                 let selected = named_child(level, node, "MemorySelectedFrame");
                 let selectable = named_child(level, node, "MemorySelectableFrame");
-                for n in [selected, named_child(level, node, "MemoryOnPointFrame")].into_iter().flatten() {
+                let hover = named_child(level, node, "MemoryOnPointFrame");
+                for n in [selected, hover].into_iter().flatten() {
                     level.set_active(n, false);
                 }
                 if let Some(s) = selectable {
                     level.set_active(s, e.unlocked);
                 }
-                frames.push((selected, selectable));
+                frames.push((selected, hover));
             }
         }
         let mut cards_grid = Grid::find(level, "AL.EntryScene.EntryFileListCtrl", None);
@@ -160,7 +161,7 @@ impl Memory {
                 g.add(level, card, img.clone());
             }
         }
-        let mut m = Memory { entries, grid, selected: None, frames, title, toggles, zone: 1, play, back, cards: cards_grid, card: None, card_image, card_images: cards.iter().map(|c| c.1.clone()).collect() };
+        let mut m = Memory { entries, grid, selected: None, hovered: None, frames, title, toggles, zone: 1, play, back, cards: cards_grid, card: None, card_image, card_images: cards.iter().map(|c| c.1.clone()).collect() };
         m.set_zone(level, 1);
         m.set_card(level, (!cards.is_empty()).then_some(0));
         m.play_active(level);
@@ -199,6 +200,27 @@ impl Memory {
         }
         if let (Some(n), Some(i)) = (self.card_image, card) {
             level.states.entry(n).or_default().image = self.card_images.get(i).cloned().flatten();
+        }
+    }
+
+    pub fn scroll(&mut self, level: &mut Level, layout: &crysirror_unity::ugui::Layout, x: f32, y: f32, steps: f32) -> bool {
+        self.grid.iter_mut().chain(self.cards.iter_mut()).any(|g| g.scroll(level, layout, x, y, steps))
+    }
+
+    /// MemoryItem pointer enter/exit. The preview lasts until the pointer
+    /// leaves the item, at which point MovieManager restores its selection.
+    pub fn hover(&mut self, level: &mut Level, hit: Option<usize>) {
+        let next = self.grid.as_ref().and_then(|g| g.item_of(level, hit?)).filter(|&i| self.entries[i].unlocked);
+        if next == self.hovered { return; }
+        if let Some(n) = self.hovered.and_then(|i| self.frames[i].1) {
+            level.set_active(n, false);
+        }
+        self.hovered = next;
+        if let Some(n) = next.and_then(|i| self.frames[i].1) {
+            level.set_active(n, true);
+        }
+        if let Some(t) = self.title {
+            level.states.entry(t).or_default().text = Some(next.or(self.selected).map(|i| self.entries[i].title.clone()).unwrap_or_default());
         }
     }
 

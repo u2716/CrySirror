@@ -96,7 +96,7 @@ impl LayerSystem {
         }
         if let Some(transition) = &self.transition {
             match &transition.spec.effect {
-                TransitionEffect::Mask { asset, .. } => visitor(ClientId(transition.owner), asset),
+                TransitionEffect::Mask { asset, .. } | TransitionEffect::ByteRule { asset, .. } => visitor(ClientId(transition.owner), asset),
                 TransitionEffect::Siglus {
                     mask: Some(asset), ..
                 } => visitor(ClientId(transition.owner), asset),

@@ -49,6 +49,7 @@ pub struct ActionMap {
     enter: Option<usize>,
     cancels: Vec<usize>,
     title: Option<usize>,
+    config: Option<usize>,
     next_zone: Option<usize>,
     save_load: Option<usize>,
 }
@@ -63,7 +64,7 @@ impl ActionMap {
         let scene = &select.scene;
         let mut buttons = HashMap::new();
         let mut dialog = None;
-        let (mut enter, mut cancels, mut title, mut next_zone, mut save_load) = (None, Vec::new(), None, None, None);
+        let (mut enter, mut cancels, mut title, mut config, mut next_zone, mut save_load) = (None, Vec::new(), None, None, None, None);
         let mut hidden = Vec::new();
         for (i, n) in scene.nodes.iter().enumerate() {
             for c in &n.components {
@@ -80,6 +81,7 @@ impl ActionMap {
                     }
                     "AL.MapSelectUI" => {
                         title = c.fields.pptr("_btnTitle").and_then(|p| node_of(scene, p.path_id));
+                        config = c.fields.pptr("_btnConfig").and_then(|p| node_of(scene, p.path_id));
                         next_zone = c.fields.pptr("_btnNextTimeZone").and_then(|p| node_of(scene, p.path_id));
                         save_load = c.fields.pptr("_btnSaveLoad").and_then(|p| node_of(scene, p.path_id));
                         // `CharaIconClear`: no heroine icons on a new game.
@@ -109,7 +111,7 @@ impl ActionMap {
         for n in hidden {
             select.set_active(n, false);
         }
-        Self { phase: Phase::MapSelect, time_zone: 0, map: None, buttons, dialog, enter, cancels, title, next_zone, save_load }
+        Self { phase: Phase::MapSelect, time_zone: 0, map: None, buttons, dialog, enter, cancels, title, config, next_zone, save_load }
     }
 
     /// A Button click inside `MapSelectUI`.
@@ -134,8 +136,10 @@ impl ActionMap {
                     return Action::NextTimeZone(self.time_zone);
                 } else if Some(node) == self.save_load {
                     return Action::OpenSaveLoad;
+                } else if Some(node) == self.config {
+                    return Action::Scene(Request::Config);
                 } else if Some(node) == self.title {
-                    select.log.push("SATD-amanatsu-port: MapSelectUI title button (ExitDialog to title) not ported".into());
+                    return Action::Scene(Request::ConfirmTitle);
                 } else {
                     select.log.push(format!("SATD-amanatsu-port: MapSelectUI button {} not ported", select.scene.path(node)));
                 }
@@ -170,4 +174,50 @@ impl ActionMap {
             self.phase = Phase::MapSelect;
         }
     }
+}
+
+/// Manager.Game.ReturnTitle's normal Yes/No ConfirmDialog. Read the strings
+/// from the selected installation language and bind its prefab's UIText/TMP
+/// references; the same prefab also contains an inactive warning theme.
+pub(crate) fn title_dialog(unity: &mut crate::unity::Unity) -> anyhow::Result<Level> {
+    use anyhow::{Context, ensure};
+    let language = if unity.list_dir("UserData").iter().any(|name| name == "setup.xml") {
+        let bytes = unity.read_all("UserData/setup.xml")?;
+        let xml = if let Some(bytes) = bytes.strip_prefix(&[0xff, 0xfe]) {
+            ensure!(bytes.len() % 2 == 0, "invalid UTF-16 setup.xml");
+            String::from_utf16(&bytes.chunks_exact(2).map(|p| u16::from_le_bytes([p[0], p[1]])).collect::<Vec<_>>())?
+        } else {
+            String::from_utf8(bytes)?
+        };
+        xml.split_once("<Language>").and_then(|(_, x)| x.split_once("</Language>"))
+            .map(|(s, _)| s.trim().parse::<u32>()).transpose()?.unwrap_or(0)
+    } else { 0 };
+    let pack = unity.find_script_object(&format!("lib/localization/info/{language}.unity3d#"), "Localize.Translate.LanguagePack")?
+        .context("return-title LanguagePack")?;
+    let config = pack.fields("_config").context("language config")?;
+    let mut level = Level::prefab(unity, crate::talk::ADV_BUNDLE, "ConfirmDialog")?;
+    let panel = level.find("ConfirmDialog/Dialog_Panel").context("normal ConfirmDialog theme")?;
+    let warning = level.find("ConfirmDialog/Dialog_Panel_Del").context("warning ConfirmDialog theme")?;
+    level.set_active(warning, false);
+    crate::talk::show(&mut level, panel);
+    let theme = level.scene.nodes[panel].components.iter().find(|c| c.script == "AL.Dialog.ConfirmDialogTheme")
+        .context("ConfirmDialogTheme component")?.fields.clone();
+    let node = |p: crysirror_unity::PPtr| node_of(&level.scene, p.path_id).context("ConfirmDialog UI reference");
+    let sentence = node(theme.pptr("_txtSentence").context("ConfirmDialog sentence")?)?;
+    let warn = node(theme.pptr("_txtSentenceWarning").context("ConfirmDialog warning")?)?;
+    let buttons = theme.array("_btnContents").context("ConfirmDialog button list")?.iter()
+        .map(|v| match v { crysirror_unity::managed::Value::PPtr(p) => node(*p), _ => anyhow::bail!("invalid ConfirmDialog button") })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let [ok, yes, no] = buttons.as_slice() else { anyhow::bail!("unsupported ConfirmDialog button layout") };
+    level.set_active(*ok, false);
+    level.set_active(*yes, true);
+    level.set_active(*no, true);
+    level.set_active(warn, false);
+    for (owner, key) in [(sentence, "_titleDialog"), (*yes, "_dialogYes"), (*no, "_dialogNo")] {
+        let text = level.scene.nodes[owner].components.iter().find(|c| c.script == "ILLGAMES.Unity.UI.UIText")
+            .and_then(|c| c.fields.pptr("_tmpText")).and_then(|p| node_of(&level.scene, p.path_id))
+            .context("ConfirmDialog text target")?;
+        level.states.entry(text).or_default().text = Some(config.string(key).with_context(|| format!("language {key}"))?.to_owned());
+    }
+    Ok(level)
 }

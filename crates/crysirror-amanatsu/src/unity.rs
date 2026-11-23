@@ -15,7 +15,8 @@ use crysirror_unity::{
     managed::{Fields, Value},
     unity6, PPtr, SerializedFile, TreeRegistry,
 };
-use std::collections::HashMap;
+use lru::LruCache;
+use std::{collections::HashMap, num::NonZeroUsize};
 use std::sync::Arc;
 
 /// Generated trees: `{"scripts": {hex id: {"class", "tree"}}}`.
@@ -25,8 +26,8 @@ const MANAGED_TREES: &str = include_str!("../data/managed_trees.json");
 pub struct Unity {
     storage: Arc<dyn ClientStorage>,
     pub data_dir: String,
-    files: HashMap<String, Arc<SerializedFile>>,
-    bundles: HashMap<String, Arc<Bundle>>,
+    files: LruCache<String, Arc<SerializedFile>>,
+    bundles: LruCache<String, Arc<Bundle>>,
     /// CAB node name → (bundle path, node path).
     cabs: HashMap<String, (String, String)>,
     pub registry: TreeRegistry,
@@ -49,8 +50,10 @@ impl Unity {
         let mut u = Self {
             storage,
             data_dir: data_dir.to_owned(),
-            files: HashMap::new(),
-            bundles: HashMap::new(),
+            // Serialized files can retain descriptors after bundle eviction.
+            // Bound both owners, including loose player files.
+            files: LruCache::new(NonZeroUsize::new(32).unwrap()),
+            bundles: LruCache::new(NonZeroUsize::new(16).unwrap()),
             cabs: HashMap::new(),
             registry: TreeRegistry::default(),
             script_classes: HashMap::new(),
@@ -61,7 +64,10 @@ impl Unity {
         u.walk("lib", &mut paths);
         u.walk(&format!("{data_dir}/StreamingAssets/aa"), &mut paths);
         for p in paths.iter().filter(|p| p.ends_with(".unity3d") || p.ends_with(".bundle")) {
-            let Ok(bundle) = u.bundle(p) else { continue };
+            // Discovery retains names and type trees, releasing each source
+            // before indexing the next bundle.
+            let source = u.reader(p).with_context(|| format!("index bundle {p}"))?;
+            let Ok(bundle) = Bundle::open(source) else { continue };
             for node in bundle.nodes.iter().filter(|n| n.flags & 4 != 0) {
                 if let Ok(f) = SerializedFile::open(bundle.reader(node)) {
                     u.registry.add(&f);
@@ -124,7 +130,7 @@ impl Unity {
             return Ok(b.clone());
         }
         let b = Arc::new(Bundle::open(self.reader(path)?).with_context(|| format!("bundle {path}"))?);
-        self.bundles.insert(path.to_owned(), b.clone());
+        self.bundles.put(path.to_owned(), b.clone());
         Ok(b)
     }
 
@@ -142,7 +148,7 @@ impl Unity {
             SerializedFile::open(self.reader(&format!("{}/{key}", self.data_dir))?).with_context(|| format!("player file {key}"))?
         };
         let f = Arc::new(f);
-        self.files.insert(key.to_owned(), f.clone());
+        self.files.put(key.to_owned(), f.clone());
         Ok(f)
     }
 
@@ -192,7 +198,15 @@ impl Unity {
     fn stream_reader_ro(&self, file: &str, path: &str) -> Option<Arc<dyn AssetReader>> {
         if let Some(rest) = file.strip_prefix("bundle:") {
             let (bp, _) = rest.split_once('#')?;
-            let b = self.bundles.get(bp)?;
+            // A serialized file cache hit can outlive its bundle cache entry.
+            let reopened;
+            let b = match self.bundles.peek(bp) {
+                Some(b) => b.as_ref(),
+                None => {
+                    reopened = Bundle::open(self.reader(bp).ok()?).ok()?;
+                    &reopened
+                }
+            };
             let n = b.node(unity6::stream_node(path))?;
             return Some(b.reader(n));
         }

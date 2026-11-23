@@ -9,7 +9,7 @@
 //! pair editing, release/delete dialogs, the personality text and the
 //! selected heroine's parameter panel are not ported.
 use crate::level::Level;
-use crysirror_unity::{managed::Value, scene6::Scene6};
+use crysirror_unity::{managed::Value, scene6::Scene6, ugui::Layout};
 
 pub(crate) fn node_of(scene: &Scene6, path_id: i64) -> Option<usize> {
     scene.by_game_object.get(&path_id).copied().or_else(|| scene.nodes.iter().position(|n| n.transform == path_id || n.components.iter().any(|c| c.path_id == path_id)))
@@ -46,8 +46,11 @@ pub(crate) struct Grid {
     entry_icon: Option<Vec<String>>,
     /// The item toggle's `graphic` (checkmark, shown while on).
     check: Option<Vec<String>>,
-    /// Rows the viewport shows (SATD-amanatsu-port: no scrolling).
+    /// Number of complete rows visible at the initial position.
     rows: usize,
+    viewport: Option<usize>,
+    sensitivity: f32,
+    offset: f32,
     pub(crate) items: Vec<(usize, String)>,
 }
 
@@ -87,6 +90,11 @@ impl Grid {
             }
             h
         };
+        let scroll = scene.nodes.iter().flat_map(|n| &n.components).find(|c| {
+            c.script == "UnityEngine.UI.ScrollRect"
+                && c.fields.pptr("m_Content").and_then(|p| node_of(scene, p.path_id)) == Some(content)
+                && c.fields.int("m_Vertical") == Some(1)
+        });
         let mut g = Self {
             template,
             content,
@@ -98,6 +106,9 @@ impl Grid {
             entry_icon: rel("_imgEntryIcon"),
             check,
             rows: 0,
+            viewport: scroll.and_then(|s| s.fields.pptr("m_Viewport")).and_then(|p| node_of(scene, p.path_id)),
+            sensitivity: scroll.and_then(|s| s.fields.float("m_ScrollSensitivity")).unwrap_or(1.) as f32,
+            offset: 0.,
             items: Vec::new(),
         };
         // A zero `mItemSize` takes the item prefab's own size.
@@ -139,11 +150,27 @@ impl Grid {
                 level.set_active(h, false);
             }
         }
-        if row >= self.rows {
-            level.set_active(node, false);
-        }
         self.items.push((node, card.to_owned()));
         node
+    }
+
+    /// ScrollRect operates in canvas units. Its authored viewport mask clips both
+    /// paint and raycasts, including partially visible leading and trailing rows.
+    pub(crate) fn scroll(&mut self, level: &mut Level, layout: &Layout, x: f32, y: f32, steps: f32) -> bool {
+        let Some(view) = self.viewport.and_then(|v| layout.rects.get(&v)) else { return false };
+        if steps == 0. || !view.contains(x, y) { return false; }
+        let Some(first) = self.items.first().and_then(|(node, _)| layout.rects.get(node)) else { return false };
+        if first.height() <= 0. || self.size[1] <= 0. { return false; }
+        let view_height = view.height() * self.size[1] / first.height();
+        let rows = self.items.len().div_ceil(self.columns);
+        let extent = rows as f32 * self.size[1] + rows.saturating_sub(1) as f32 * self.padding[1];
+        let next = (self.offset + steps * self.sensitivity).clamp(0., (extent - view_height).max(0.));
+        if next == self.offset { return false; }
+        self.offset = next;
+        let mut position = level.scene.nodes[self.content].xform.rect.unwrap_or_default().anchored_position;
+        position[1] += next;
+        level.states.entry(self.content).or_default().anchored_position = Some(position);
+        true
     }
 
     pub(crate) fn item_of(&self, level: &Level, mut node: usize) -> Option<usize> {
@@ -263,6 +290,10 @@ impl CharaSelect {
     pub fn describe(&self, level: &Level) -> String {
         let g = |g: &Grid| format!("{} → {} ({} cols, {} rows)", level.scene.path(g.template), level.scene.path(g.content), g.columns, g.rows);
         format!("cards {}; {} entry slots", g(&self.cards), self.entered.slots.len())
+    }
+
+    pub fn scroll(&mut self, level: &mut Level, layout: &Layout, x: f32, y: f32, steps: f32) -> bool {
+        self.cards.scroll(level, layout, x, y, steps)
     }
 
     /// A click inside the UI; `register` receives the entered card.

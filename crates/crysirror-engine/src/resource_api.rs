@@ -44,6 +44,8 @@ impl Default for ResourceRuntime {
         let mut formats = FormatRegistry::default();
         formats.register(Arc::new(crysirror_resource::installer::MsiArchiveFormat))
             .expect("built-in MSI identifier is unique");
+        formats.register(Arc::new(crysirror_resource::exhibit_voice::ExhibitVoice))
+            .expect("built-in AiFS identifier is unique");
         formats.register(Arc::new(crysirror_resource::circus_pck::CircusPck))
             .expect("built-in Circus PCK identifier is unique");
         #[cfg(feature = "arc-formats")]
@@ -53,6 +55,8 @@ impl Default for ResourceRuntime {
         crysirror_formats_blackcyc::register_archives(&mut formats).expect("BlackCyc archive identifiers are unique");
         #[allow(unused_mut)]
         let mut files = FileRegistry::default();
+        files.register(Arc::new(crysirror_resource::exhibit_pcm::ExhibitPcm))
+            .expect("ExHibit audio identifier is unique");
         files.register(Arc::new(crysirror_resource::cg_catalog::CgCatalogFormat))
             .expect("CG catalogue decoder identifier is unique");
         #[cfg(feature = "blackcyc-formats")]

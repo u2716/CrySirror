@@ -32,6 +32,7 @@ The [desktop guide](DESKTOP_API.md) lists the available launch options.
 | [BGI / Ethornell](#bgi-and-softpal) | BP scenarios, ARC resources, CBG graphics, character composition, text, effects, audio and game saves. |
 | [SoftPAL](#bgi-and-softpal) | PAL resources and scripts, sprites, text, choices, animation, audio, movies and game saves. |
 | [RFVP / FAVORITE View Point](#rfvp) | HCB scenarios, BIN archives and loose resources, graphics, text, effects, audio, movies, custom cursors and game saves. |
+| [minori](../crates/crysirror-minori/README.md) | Adopted ef first tale AA scenario VM and shared minori PAZ archive profiles. |
 | [NScripter](#nscripter) | Text scenarios, SAR/NSA archives, sprites, animation, ruby, choices, menus, backlog, skip/auto, audio and movies. |
 | [Circus](#circus) | Native ADV_TXT/MES profiles, PCK/DAT resources, CRXG graphics, XPCM audio, dialogue, menus, screen effects and native save slots. |
 | [CatSystem2](#catsystem2) | INT/FWP resources, HG3 graphics, KCS/FES/CST scenarios, dialogue, image effects, E-mote and menus. |

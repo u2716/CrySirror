@@ -4,6 +4,8 @@
 //! `Scene.LoadBaseSceneAsync`), its time-zone light setting
 //! (`LightmapSettings_<map>_<zone>`: object on/off lists and fog) and the
 //! move-point prefab's Cinemachine camera positions.
+pub mod wandering;
+
 use crate::{tables::Table, unity::Unity};
 use anyhow::{Context, Result};
 use crysirror_unity::{
@@ -33,6 +35,7 @@ pub struct MapInfo {
     pub name: String,
     /// Scene bundle (`ma/pre/sc/…`) and scene name (`map000`).
     pub scene: (String, String),
+    pub navigation: (String, String),
     pub point: (String, String),
     /// Light setting bundle and asset prefix (`LightmapSettings_000_`).
     pub light: (String, String),
@@ -97,6 +100,7 @@ pub fn map_infos(unity: &mut Unity) -> Result<Vec<MapInfo>> {
                 id: s(0).parse().with_context(|| format!("map_info id {:?}", r.first()))?,
                 name: s(1),
                 scene: (s(6), s(7)),
+                navigation: (s(9), s(10)),
                 point: (s(12), s(13)),
                 light: (s(15), s(16)),
             });
@@ -248,8 +252,9 @@ pub struct MapWorld {
     /// `AL.ActionPoint`s of the move-point prefab: (name, Unity world
     /// position, world rotation).
     pub points: Vec<(String, [f32; 3], [f32; 4])>,
-    /// `ActionPoint._animIDList` by point name (the activities a heroine
-    /// may take there; first 0 normal standing, 1 chair).
+    /// The points referenced by MovePointInfo._wandering, in authored order.
+    pub wander_points: Vec<wandering::Point>,
+    /// ActionPoint._animIDList by point name.
     pub point_anims: HashMap<String, Vec<i32>>,
     /// `ActionPoint`s of kind 1 (`GetShortMoviePoint`): short movie id,
     /// position, rotation.
@@ -392,6 +397,38 @@ fn map_particles(unity: &mut Unity, key: &str, scene: &Scene6, log: &mut Vec<Str
     out
 }
 
+/// LightmapSettingsSaveData.Update matches each renderer by its exact name,
+/// then resolves the lightmap index by the registered colour texture identity.
+fn receiver_lightmaps(unity: &mut Unity, file: &str, fields: &crysirror_unity::managed::Fields, scene: &Scene6) -> Result<HashMap<usize, world6::RendererLightmap>> {
+    let mut receivers = HashMap::new();
+    for row in fields.array("_lightmapIndices").unwrap_or_default() {
+        let Value::Struct(row) = row else { anyhow::bail!("invalid lightmap receiver") };
+        let name = row.string("ObjectName").context("lightmap receiver name")?;
+        let index = row.int("LightmapIndex").context("lightmap receiver index")?;
+        if index < 0 { continue }
+        let mut texture = |array| -> Result<(String, i64)> {
+            let Some(Value::PPtr(p)) = fields.array(array).and_then(|values| values.get(index as usize)) else {
+                anyhow::bail!("{name} lacks {array}[{index}]")
+            };
+            unity.target(file, *p)
+        };
+        let radiance = texture("_colorLightmaps")?;
+        let direction = texture("_dirLightmaps")?;
+        let tiling_offset = match row.get("LightmapTilingOffset") {
+            Some(Value::Floats(v)) => v.as_slice().try_into().context("lightmap ST length")?,
+            Some(Value::Struct(v)) => [v.float("x"), v.float("y"), v.float("z"), v.float("w")].map(|x| x.unwrap_or(f64::NAN) as f32),
+            _ => anyhow::bail!("missing lightmap ST for {name}"),
+        };
+        anyhow::ensure!(tiling_offset.iter().all(|x| x.is_finite()), "invalid lightmap ST for {name}");
+        for (node, obj) in scene.nodes.iter().enumerate().filter(|(_, obj)| obj.name == name) {
+            if obj.components.iter().any(|c| c.class_id == crysirror_unity::class_id::MESH_RENDERER) {
+                receivers.insert(node, world6::RendererLightmap { radiance: radiance.clone(), direction: direction.clone(), tiling_offset });
+            }
+        }
+    }
+    Ok(receivers)
+}
+
 /// `load` with a texture budget (scenes with two characters, such as H,
 /// leave them room in the prepared-asset budget).
 pub fn load_with_budget(unity: &mut Unity, info: &MapInfo, time_zone: i32, texture_budget: usize) -> Result<MapWorld> {
@@ -401,6 +438,7 @@ pub fn load_with_budget(unity: &mut Unity, info: &MapInfo, time_zone: i32, textu
     // Light setting of the time zone.
     let mut fog = None;
     let mut azure = None;
+    let mut lightmaps = HashMap::new();
     let light_name = format!("{}{time_zone:02}", info.light.1);
     match unity.bundle_asset(&format!("lib/{}", info.light.0), &light_name, crysirror_unity::class_id::MONO_BEHAVIOUR)? {
         Some((k, id)) => {
@@ -412,8 +450,8 @@ pub fn load_with_budget(unity: &mut Unity, info: &MapInfo, time_zone: i32, textu
             if f.int("_fog").unwrap_or(0) != 0 {
                 fog = color3(f.get("_fogColor")).map(|c| (c, f.float("_fogStartDistance").unwrap_or(0.) as f32, f.float("_fogEndDistance").unwrap_or(1000.) as f32));
             }
-            // SATD-amanatsu-port: lightmaps, reflection probes and the
-            // Azure sky time of day of the setting are not applied.
+            lightmaps = receiver_lightmaps(unity, &k, &f, &scene)?;
+            log.push(format!("{light_name}: {} directional lightmap receivers", lightmaps.len()));
         }
         None => log.push(format!("light setting {light_name} not found")),
     }
@@ -443,10 +481,6 @@ pub fn load_with_budget(unity: &mut Unity, info: &MapInfo, time_zone: i32, textu
     // (`Directional Light C`, a weaker top fill) are not applied.
     let chara_light = world6::scene_lights(&scene).into_iter().filter(|l| l.kind == 1 && l.culling_mask & CHARA_LAYER != 0 && l.intensity > 0.01).max_by(|a, b| a.intensity.total_cmp(&b.intensity));
     log.push(format!("character light: {:?}", chara_light.as_ref().map(|l| (scene.path(l.node), l.intensity))));
-    // SATD-amanatsu-port: the settings' baked lightmaps (`_colorLightmaps`,
-    // `_lightmapIndices`; only map 00's `Lake Polygon`) need a second UV
-    // set in the renderer; the point
-    // and spot lights of the active groups light the map in real time.
     // Map renderers sit on the Default, water (4) and map (7, 8) layers.
     let lights: Vec<SceneLight> = world6::scene_lights(&scene).into_iter().filter(|l| matches!(l.kind, 0 | 2) && l.culling_mask & MAP_LAYERS != 0 && l.intensity > 0.01 && l.range > 0.).collect();
     log.push(format!("{} local lights", lights.len()));
@@ -454,15 +488,17 @@ pub fn load_with_budget(unity: &mut Unity, info: &MapInfo, time_zone: i32, textu
     // SATD-amanatsu-port: one texture budget for the map; characters and
     // the rest of the session share the player's prepared-asset budget.
     let options = GlbOptions { max_texture: 1024, texture_budget, spring_unit: 10., morph_targets: false };
-    let (chunks, report) = world6::scene_glb(&scene, &key, &roots, unity, &options, "CrySirror AmanatsuLocation map importer")?;
+    let (chunks, report) = world6::scene_glb_with_lightmaps(&scene, &key, &roots, unity, &options, "CrySirror AmanatsuLocation map importer", &lightmaps)?;
     // Move-point prefab cameras.
     let mut cameras = Vec::new();
     let mut action_points = Vec::new();
+    let mut wander_points = Vec::new();
     let mut short_movies = Vec::new();
     let mut items = Vec::new();
     let mut point_anims = HashMap::new();
     match crate::level::Level::prefab(unity, &format!("lib/{}", info.point.0), &info.point.1) {
         Ok(points) => {
+            wander_points = wandering::points(&points.scene)?;
             for (i, n) in points.scene.nodes.iter().enumerate() {
                 if n.components.iter().any(|c| c.script == "AL.ItemOutlinable") {
                     let pos = world6::world_matrix(&points.scene, i).w_axis.truncate();
@@ -504,7 +540,7 @@ pub fn load_with_budget(unity: &mut Unity, info: &MapInfo, time_zone: i32, textu
         }
     };
     log.push(format!("camera light: {:?}", camera_light.as_ref().map(|l| (l.direction, l.color, l.intensity))));
-    Ok(MapWorld { info: info.clone(), chunks, report, sun, chara_light, camera_light, lights, sky, settings, post, fog, cameras, points: action_points, point_anims, short_movies, items, particles, log })
+    Ok(MapWorld { info: info.clone(), chunks, report, sun, chara_light, camera_light, lights, sky, settings, post, fog, cameras, points: action_points, wander_points, point_anims, short_movies, items, particles, log })
 }
 
 impl MapWorld {

@@ -262,6 +262,7 @@ impl CmvsVm {
         let script = Script::read(startup_script)?;
         let name: &[u8] = match profile {
             VmProfile::Cvns20040515X86 => b"start.pss",
+            VmProfile::Pc20070119X86 => b"start.ps2",
             _ => b"start.ps3",
         };
         let startup = PreparedScript::new(profile, script, name.to_vec())?;
@@ -506,7 +507,7 @@ impl CmvsVm {
             (None, 4)
         };
         let name = if command == 0x03 {
-            &b"main.ps3"[..]
+            if self.machine.profile() == VmProfile::Pc20070119X86 { &b"main.ps2"[..] } else { &b"main.ps3"[..] }
         } else if command == 0x805 {
             b"main.pss"
         } else {
@@ -1557,6 +1558,15 @@ impl CmvsVm {
                 Step::Yield => return Ok(VmYield::Frame),
                 Step::System { pc, command } => {
                     let opcode = command + 0x2000;
+                    if self.profile() == VmProfile::Pc20070119X86 {
+                        if command >= 800 {
+                            return Err(error(pc, opcode, "outside CMVS 2007 syscall table"));
+                        }
+                        if super::noop::returns_without_effect_20070119(opcode) {
+                            self.machine.complete_system(SystemResult(0x4000))?;
+                            continue;
+                        }
+                    }
                     if let Some(selector) = super::cvns::selector(opcode) {
                         let result = if super::cvns::returns_without_effect(selector) {
                             SystemResult(0x4000)
@@ -1854,7 +1864,8 @@ impl CmvsVm {
             _ => {
                 let revision = self.machine.profile() == VmProfile::Pc20211007X64;
                 if (revision && (0x23d0..=0x23df).contains(&opcode))
-                    || (super::noop::returns_without_effect(opcode)
+                    || (self.profile() != VmProfile::Pc20070119X86
+                        && super::noop::returns_without_effect(opcode)
                         && !(revision && super::noop::implemented_in_20211007(opcode)))
                     || self
                         .actions

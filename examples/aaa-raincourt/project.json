@@ -1,0 +1,9 @@
+{
+  "schema": 2,
+  "name": "The Rain Court",
+  "content_revision": "raincourt-1",
+  "canvas": [1920, 1080],
+  "background": [28, 51, 43, 255],
+  "assets": "assets",
+  "clients": [{"name":"game","adapter":"crysirror-script-v1","game":"raincourt"}]
+}
