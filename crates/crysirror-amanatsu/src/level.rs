@@ -118,14 +118,37 @@ impl Level {
     }
 
     fn selectable(&self, node: usize) -> Option<&crysirror_unity::scene6::Component> {
-        self.scene.nodes[node].components.iter().find(|c| matches!(c.script.as_str(), "UnityEngine.UI.Button" | "UnityEngine.UI.Toggle"))
+        self.scene.nodes[node].components.iter().find(|c| crysirror_unity::ugui::is_selectable(&c.fields))
+    }
+
+    /// `Selectable.interactable` setter: the disabled state transition, and
+    /// the `ClothesSettingMenu.ButtonEx`/`DesideButton` overrides that swap
+    /// their normal/disabled labels (`DesideButton` also its icon).
+    pub fn set_interactable(&mut self, node: usize, on: bool) {
+        if self.selectable_interactable(node) == on && self.interactable.contains_key(&node) {
+            return;
+        }
+        self.interactable.insert(node, on);
+        let Some(c) = self.selectable(node).cloned() else { return };
+        crysirror_unity::ugui::selectable_transition(&self.scene, &c.fields, !on, &mut self.states);
+        if matches!(c.script.as_str(), "AL.H.UI.ClothesSettingMenu.ButtonEx" | "AL.H.UI.ClothesSettingMenu.DesideButton") {
+            for (field, show) in [("_textNormal", on), ("_textDisabled", !on)] {
+                if let Some(n) = c.fields.pptr(field).and_then(|p| self.owner(p.path_id)) {
+                    self.set_active(n, show);
+                }
+            }
+            let icons: Vec<PPtr> = c.fields.array("_spritesIcon").map(|a| a.iter().filter_map(|v| if let crysirror_unity::managed::Value::PPtr(p) = v { Some(*p) } else { None }).collect()).unwrap_or_default();
+            if let Some(n) = c.fields.pptr("_imageIcon").and_then(|p| self.owner(p.path_id)) {
+                self.states.entry(n).or_default().sprite = if on { None } else { icons.get(1).copied() };
+            }
+        }
     }
 
     /// The Button or Toggle handling a click on `node` (itself or an
     /// ancestor).
     pub fn click_handler(&self, mut node: usize) -> Option<usize> {
         loop {
-            if self.scene.nodes[node].components.iter().any(|c| c.script == "UnityEngine.UI.Button" || c.script == "UnityEngine.UI.Toggle") {
+            if self.selectable(node).is_some() {
                 return Some(node);
             }
             node = self.scene.nodes[node].parent?;
@@ -137,7 +160,7 @@ impl Level {
         self.scene.nodes[node]
             .components
             .iter()
-            .find(|c| c.script == "UnityEngine.UI.Button")
+            .find(|c| crysirror_unity::ugui::is_selectable(&c.fields))
             .and_then(|c| c.fields.fields("m_OnClick"))
             .map(events::persistent_calls)
             .unwrap_or_default()
@@ -165,7 +188,7 @@ impl Level {
                 }
                 ("UnityEngine.GameObject", "SetActive", Argument::Bool(b), Some(n)) => self.set_active(n, *b),
                 ("UnityEngine.UI.Toggle" | "UnityEngine.UI.Button" | "UnityEngine.UI.Selectable", "set_interactable", Argument::Bool(b), Some(n)) => {
-                    self.interactable.insert(n, *b);
+                    self.set_interactable(n, *b);
                 }
                 (t, _, _, _) if t.starts_with("UnityEngine.") => {
                     self.log.push(format!("unported persistent call {t}.{}", call.method));

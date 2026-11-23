@@ -196,7 +196,7 @@ impl Title {
     /// `OnMenuButtonsInteractable`: every `ButtonIndex` button.
     fn menu_buttons_interactable(&self, level: &mut Level, on: bool) {
         for b in self.buttons.iter().flatten() {
-            level.interactable.insert(*b, on);
+            level.set_interactable(*b, on);
         }
     }
 
@@ -298,7 +298,7 @@ impl Title {
         }
         self.menu_buttons_interactable(level, false);
         if let Some(Some(b)) = self.buttons.get(back) {
-            level.interactable.insert(*b, true);
+            level.set_interactable(*b, true);
         }
     }
 

@@ -179,7 +179,7 @@ impl Memory {
     /// card selected.
     fn play_active(&self, level: &mut Level) {
         if let Some(p) = self.play {
-            level.interactable.insert(p, self.selected.is_some() && self.card.is_some());
+            level.set_interactable(p, self.selected.is_some() && self.card.is_some());
         }
     }
 

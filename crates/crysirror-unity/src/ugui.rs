@@ -728,3 +728,77 @@ pub fn slider_value(scene: &Scene6, slider: &Fields, value: f32, states: &mut Ha
     st.anchor_min = Some(amin);
     st.anchor_max = Some(amax);
 }
+
+/// A `Selectable` (Button, Toggle or a subclass): it serialises
+/// `m_Transition` and `m_Interactable`.
+pub fn is_selectable(fields: &Fields) -> bool {
+    fields.get("m_Transition").is_some() && fields.get("m_Interactable").is_some()
+}
+
+/// `Selectable.DoStateTransition` between the normal and the disabled state
+/// on the target graphic: a colour tint (1) multiplies its colour by
+/// `m_Colors` × `m_ColorMultiplier`, a sprite swap (2) overrides its sprite
+/// with `m_SpriteState.m_DisabledSprite`. Animation transitions (3) are not
+/// driven here.
+pub fn selectable_transition(scene: &Scene6, selectable: &Fields, disabled: bool, states: &mut HashMap<usize, NodeState>) {
+    let target = pptr(selectable, "m_TargetGraphic");
+    if target.path_id == 0 {
+        return;
+    }
+    let Some((node, graphic)) = scene.nodes.iter().enumerate().find_map(|(i, n)| n.components.iter().find(|c| c.path_id == target.path_id).map(|c| (i, c))) else { return };
+    match selectable.int("m_Transition").unwrap_or(1) {
+        1 => {
+            let Some(Value::Struct(colors)) = selectable.get("m_Colors") else { return };
+            let tint = color(colors, if disabled { "m_DisabledColor" } else { "m_NormalColor" });
+            let k = colors.float("m_ColorMultiplier").unwrap_or(1.) as f32;
+            let tint = tint.map(|c| (c * k).min(1.));
+            let base = color(&graphic.fields, "m_Color");
+            states.entry(node).or_default().color = (tint != [1.; 4]).then(|| std::array::from_fn(|i| base[i] * tint[i]));
+        }
+        2 => {
+            let Some(Value::Struct(sprites)) = selectable.get("m_SpriteState") else { return };
+            let sprite = pptr(sprites, "m_DisabledSprite");
+            states.entry(node).or_default().sprite = (disabled && sprite.path_id != 0).then_some(sprite);
+        }
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+mod selectable_tests {
+    use super::*;
+    use crate::scene6::{Component, Node};
+
+    fn fields(v: Vec<(&str, Value)>) -> Fields {
+        Fields(v.into_iter().map(|(k, v)| (k.to_owned(), v)).collect())
+    }
+
+    #[test]
+    fn disabled_transition() {
+        let rgba = |c: f64, a: f64| Value::Struct(fields(vec![("r", Value::Float(c)), ("g", Value::Float(c)), ("b", Value::Float(c)), ("a", Value::Float(a))]));
+        let graphic = Component { path_id: 7, class_id: class_id::MONO_BEHAVIOUR, script: "UnityEngine.UI.Image".into(), fields: fields(vec![("m_Color", rgba(1., 1.))]) };
+        let node = Node { name: String::new(), active: true, game_object: 1, transform: 2, xform: Default::default(), parent: None, children: Vec::new(), components: vec![graphic], origin: 0 };
+        let scene = Scene6 { nodes: vec![node], ..Default::default() };
+        let tint = fields(vec![
+            ("m_Transition", Value::Int(1)),
+            ("m_Interactable", Value::Int(1)),
+            ("m_TargetGraphic", Value::PPtr(PPtr { file_id: 0, path_id: 7 })),
+            ("m_Colors", Value::Struct(fields(vec![("m_NormalColor", rgba(1., 1.)), ("m_DisabledColor", rgba(0.5, 0.5)), ("m_ColorMultiplier", Value::Float(1.))]))),
+        ]);
+        assert!(is_selectable(&tint));
+        let mut states = HashMap::new();
+        selectable_transition(&scene, &tint, true, &mut states);
+        assert_eq!(states[&0].color, Some([0.5; 4]));
+        selectable_transition(&scene, &tint, false, &mut states);
+        assert_eq!(states[&0].color, None);
+        let swap = fields(vec![
+            ("m_Transition", Value::Int(2)),
+            ("m_TargetGraphic", Value::PPtr(PPtr { file_id: 0, path_id: 7 })),
+            ("m_SpriteState", Value::Struct(fields(vec![("m_DisabledSprite", Value::PPtr(PPtr { file_id: 0, path_id: 9 }))]))),
+        ]);
+        selectable_transition(&scene, &swap, true, &mut states);
+        assert_eq!(states[&0].sprite, Some(PPtr { file_id: 0, path_id: 9 }));
+        selectable_transition(&scene, &swap, false, &mut states);
+        assert_eq!(states[&0].sprite, None);
+    }
+}

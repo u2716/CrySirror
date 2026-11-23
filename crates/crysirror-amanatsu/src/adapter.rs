@@ -1180,7 +1180,7 @@ impl Game {
         let can = gp.cost > 0;
         for (field, on) in [("_btnTalk", can), ("_btnListen", can), ("_btnMassage", can), ("_btnInvite", can), ("_btnHTopic", can), ("_btnH", can && gp.favorability.lv > 0)] {
             if let Some(n) = ui.pptr(field).and_then(|p| level.owner(p.path_id)) {
-                level.interactable.insert(n, on);
+                level.set_interactable(n, on);
             }
         }
         if let Some(n) = ui.pptr("_imgHCover").and_then(|p| level.owner(p.path_id)) {
@@ -1585,7 +1585,7 @@ impl Game {
         ] {
             let ok = ok && looping;
             if let Some(n) = level.find(&format!("HScene/Canvas/ccr_dropShadow/GaugeController/{button}")) {
-                level.interactable.insert(n, ok);
+                level.set_interactable(n, ok);
             }
         }
     }
@@ -1798,6 +1798,15 @@ impl Game {
             "Config" => self.open_config(),
             "Point" => self.open_h_points(),
             "Clothes" | "Acs" | "Coodenate" => self.h_clothes_menu(name),
+            // `SelectCoodinateCard` `元に戻す`: `ChangeCoordinateType` to the
+            // type the actor entered the HScene with, reloading it. Without
+            // a loaded card that type is still the current one, so the
+            // reload shows the same coordinate.
+            "Reset" => {
+                let card = self.cloth_card.clone().or_else(|| self.h.as_ref().map(|h| h.card.clone())).unwrap_or_default();
+                let kind = crate::chara::COORDINATE_TYPES[self.coordinates.get(&card).copied().unwrap_or(0)];
+                self.log.push(format!("HScene coordinate reset {card}: {kind}"));
+            }
             "Toggle Female" | "Toggle Female 0" => self.cloth_card = self.h.as_ref().map(|h| h.card.clone()),
             "Toggle Male" => self.cloth_card = Some(MALE_CARD.to_owned()),
             n if n.starts_with("Button ") => self.h_cloth_state(&n["Button ".len()..]),
@@ -1908,7 +1917,7 @@ impl Game {
     }
 
     /// `ClothesSettingMenu`: the `Clothes`/`Acs`/`Coodenate` buttons open
-    /// their panel (again: close). SATD-amanatsu-port: coordinate cards,
+    /// their panel (again: close). SATD-amanatsu-port: coordinate card loading,
     /// accessory slots one by one and the menu animation are not ported.
     fn h_clothes_menu(&mut self, which: &str) {
         let Some(oi) = self.overlays.iter().position(|(l, _)| l.name == crate::h::SCENE_PREFAB) else { return };
@@ -1937,6 +1946,35 @@ impl Game {
         }
         if self.cloth_card.is_none() {
             self.cloth_card = self.h.as_ref().map(|h| h.card.clone());
+        }
+        if panel == "SelectCoodinateCard" {
+            self.h_coordinate_cards();
+        }
+    }
+
+    /// `SelectCoodinateCard.SetActor`/`UpdateUI`: the coordinate cards of
+    /// the selected character's sex (`UserData/coordinate/<sex>`). Without
+    /// cards the empty note shows; `Deside` is interactable only with a
+    /// selection and a part toggle on (`InteractableDecide`), and nothing
+    /// is selected on opening.
+    /// SATD-amanatsu-port: listing and loading cards
+    /// (`HumanDataCoordinate.LoadFileLimited` with the part flags) are not
+    /// ported; present cards are reported.
+    fn h_coordinate_cards(&mut self) {
+        let card = self.cloth_card.clone().or_else(|| self.h.as_ref().map(|h| h.card.clone())).unwrap_or_default();
+        let dir = if card == MALE_CARD { "UserData/coordinate/male" } else { "UserData/coordinate/female" };
+        let cards = self.unity.list_dir(dir).into_iter().filter(|n| n.ends_with(".png")).count();
+        let Some(oi) = self.overlays.iter().position(|(l, _)| l.name == crate::h::SCENE_PREFAB) else { return };
+        let level = &mut self.overlays[oi].0;
+        let base = "HScene/Canvas/ccr_dropShadow/Option/RightTopArea/ClothesSetting/root/SelectCoodinateCard";
+        if let Some(n) = level.find(&format!("{base}/Scroll View/Viewport/Content/non")) {
+            level.set_active(n, cards == 0);
+        }
+        if let Some(n) = level.find(&format!("{base}/Deside")) {
+            level.set_interactable(n, false);
+        }
+        if cards > 0 {
+            self.log.push(format!("SATD-amanatsu-port: {cards} coordinate cards in {dir} not listed"));
         }
     }
 

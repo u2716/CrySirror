@@ -101,7 +101,7 @@ impl ActionMap {
         // save progress.
         for (&node, &id) in &buttons {
             let open = maps.iter().any(|m| m.id == id);
-            select.interactable.insert(node, open);
+            select.set_interactable(node, open);
         }
         if let Some(d) = dialog {
             select.set_active(d, false);
