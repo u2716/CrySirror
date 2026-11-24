@@ -5,6 +5,7 @@
 pub use adapter::register;
 pub use adapter::{Config, ENGINE_ID};
 pub mod adapter;
+pub mod anim;
 pub mod dc;
 pub mod game;
 pub mod ground;
@@ -19,6 +20,7 @@ pub mod package;
 pub mod probes;
 pub mod region;
 pub mod scene;
+pub mod skeleton;
 pub mod texture;
 use anyhow::{Context, Result, bail, ensure};
 use std::collections::{BTreeMap, BTreeSet};

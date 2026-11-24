@@ -281,10 +281,34 @@ fn trs(m: &[f32; 16]) -> ([f32; 3], [f32; 4], [f32; 3]) {
     (t.to_array(), r.to_array(), s.to_array())
 }
 
+/// A skeleton and its decoded clips for skinned art groups.
+pub struct Rig<'a> {
+    pub skeleton: &'a crate::skeleton::Skeleton,
+    pub clips: &'a [crate::anim::Clip],
+}
+
 /// Build the document. Textures decode from the package's VRAM data;
 /// `max_texture` halves oversized base-colour images by box filtering.
 pub fn document(name: &str, meshes: &[Mesh], source: &dyn AssetReader, directory: &Directory, max_texture: u32) -> Result<Document> {
-    document_lit(name, meshes, source, directory, max_texture, None)
+    document_lit(name, meshes, source, directory, max_texture, None, None)
+}
+
+/// Up to four influences of a vertex, renormalised; joints outside the
+/// skeleton are dropped.
+fn influences(v: &[(u16, f32)], joints: usize) -> ([u16; 4], [f32; 4]) {
+    let mut list: Vec<(u16, f32)> = v.iter().copied().filter(|(j, w)| usize::from(*j) < joints && *w > 0.).collect();
+    list.sort_by(|a, b| b.1.total_cmp(&a.1));
+    list.truncate(4);
+    let total: f32 = list.iter().map(|x| x.1).sum();
+    let (mut j, mut w) = ([0u16; 4], [0f32; 4]);
+    for (k, (jj, ww)) in list.iter().enumerate() {
+        j[k] = *jj;
+        w[k] = if total > 0. { ww / total } else { 0. };
+    }
+    if total <= 0. {
+        w[0] = 1.;
+    }
+    (j, w)
 }
 
 /// Texture role from the source file name stored in `VRAM_DESC`
@@ -305,7 +329,8 @@ fn texture_role(name: &str) -> u8 {
 
 /// [`document`] with the level's baked probes: meshes placed once get
 /// per-vertex irradiance in `_AUX` and the `baked_vertex_irradiance` effect.
-pub fn document_lit(name: &str, meshes: &[Mesh], source: &dyn AssetReader, directory: &Directory, max_texture: u32, probes: Option<&crate::probes::ProbeField>) -> Result<Document> {
+pub fn document_lit(name: &str, meshes: &[Mesh], source: &dyn AssetReader, directory: &Directory, max_texture: u32, probes: Option<&crate::probes::ProbeField>, rig: Option<&Rig>) -> Result<Document> {
+    let mut skinned_nodes = Vec::new();
     let mut doc = Document { generator: "CrySirror Naughty Dog background importer".into(), ..Default::default() };
     let mut textures = HashMap::new();
     for item in directory.items.iter().filter(|i| i.kind == "VRAM_DESC") {
@@ -367,6 +392,10 @@ pub fn document_lit(name: &str, meshes: &[Mesh], source: &dyn AssetReader, direc
                     continue;
                 }
                 let normals = if f.normals.len() == f.positions.len() { f.normals.clone() } else { Vec::new() };
+                let (joints, weights): (Vec<[u16; 4]>, Vec<[f32; 4]>) = match rig {
+                    Some(r) if f.skin.len() == f.positions.len() => f.skin.iter().map(|v| influences(v, r.skeleton.names.len())).unzip(),
+                    _ => (Vec::new(), Vec::new()),
+                };
                 let aux = match bake {
                     Some(field) => crate::probes::bake(field, &placement(mesh, 0), &f.positions, &normals, &f.triangles),
                     None => Vec::new(),
@@ -378,6 +407,8 @@ pub fn document_lit(name: &str, meshes: &[Mesh], source: &dyn AssetReader, direc
                     indices: f.triangles.iter().flatten().map(|&i| u32::from(i)).collect(),
                     material: Some(material),
                     aux,
+                    joints,
+                    weights,
                     ..Default::default()
                 });
             }
@@ -391,6 +422,9 @@ pub fn document_lit(name: &str, meshes: &[Mesh], source: &dyn AssetReader, direc
             let (translation, rotation, scale) = trs(&placement(mesh, i));
             let mut geometry = Node::named(format!("{name}/{index}/{i}/geometry"));
             geometry.mesh = Some(mesh_index);
+            if rig.is_some() && mesh.skinned {
+                skinned_nodes.push(doc.nodes.len());
+            }
             doc.nodes.push(geometry);
             let mut placed = Node::named(format!("{name}/{index}/{i}"));
             placed.translation = translation;
@@ -401,7 +435,56 @@ pub fn document_lit(name: &str, meshes: &[Mesh], source: &dyn AssetReader, direc
             doc.nodes.push(placed);
         }
     }
+    if let Some(rig) = rig.filter(|_| !skinned_nodes.is_empty()) {
+        add_rig(&mut doc, rig, &skinned_nodes);
+    }
     Ok(doc)
+}
+
+/// Joint nodes in their rest pose, a skin for the skinned mesh nodes and
+/// one glTF animation per clip (keys at the clip's frame times; channels a
+/// clip leaves undefined keep the rest pose).
+fn add_rig(doc: &mut Document, rig: &Rig, skinned: &[usize]) {
+    use crysirror_asset::interchange::glb::{Animation, Channel, Skin, Track};
+    let skel = rig.skeleton;
+    let base = doc.nodes.len();
+    for (j, name) in skel.names.iter().enumerate() {
+        let (t, r, s) = skel.rest[j];
+        let mut node = Node::named(name.clone());
+        node.translation = t.to_array();
+        node.rotation = r.to_array();
+        node.scale = s.to_array();
+        doc.nodes.push(node);
+    }
+    for (j, parent) in skel.parents.iter().enumerate() {
+        match parent {
+            Some(p) => doc.nodes[base + p].children.push(base + j),
+            None => doc.roots.push(base + j),
+        }
+    }
+    doc.skins.push(Skin { joints: (base..base + skel.names.len()).collect(), inverse_bind: skel.inverse_bind.clone(), skeleton: None });
+    let skin = doc.skins.len() - 1;
+    for &n in skinned {
+        doc.nodes[n].skin = Some(skin);
+    }
+    for clip in rig.clips {
+        let times: Vec<f32> = (0..clip.frames).map(|f| f as f32 / clip.fps.max(1.)).collect();
+        let mut tracks = Vec::new();
+        for (j, track) in clip.joints.iter().enumerate().filter(|(j, _)| *j < skel.names.len()) {
+            if let Some(v) = &track.translation {
+                tracks.push(Track { node: base + j, times: times.clone(), values: Channel::Translation(v.iter().map(|x| x.to_array()).collect()), tangents: None });
+            }
+            if let Some(v) = &track.rotation {
+                tracks.push(Track { node: base + j, times: times.clone(), values: Channel::Rotation(v.iter().map(|x| x.to_array()).collect()), tangents: None });
+            }
+            if let Some(v) = &track.scale {
+                tracks.push(Track { node: base + j, times: times.clone(), values: Channel::Scale(v.iter().map(|x| x.to_array()).collect()), tangents: None });
+            }
+        }
+        if !tracks.is_empty() {
+            doc.animations.push(Animation { name: clip.name.clone(), tracks });
+        }
+    }
 }
 
 /// The sky image of a `sky-…` level package: sampler 0 of its mesh's

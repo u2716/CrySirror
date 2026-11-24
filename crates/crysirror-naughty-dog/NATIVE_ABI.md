@@ -106,9 +106,13 @@ Fragment byte +0x20 counts descriptor rows and +0x2f all streams. Fragment +0x0c
 
 Skeletons: `JOINT_HIERARCHY` `{8, joint count, JH block, flip data, names, 0, …, skeleton id}`; the JH block (magic `0x4a48010a`) holds the joint count at +0xc, offsets at +0x28 (per-joint `{flags, parent, first child, next sibling}`), +0x2c (default local poses, 48 bytes `scale | quat | translation`) and +0x44 (3 × 4 inverse bind matrices, 48 bytes each); names are `{StringId, string}` pairs. `npc-normal-base` `skel` has 124 joints rooted at the feet (ankles 0.12 m, pelvis 1.06 m, A-pose).
 
+## Animation clips
+
+`ANIM` items hold the clip at +8 (ICE "CD" clip data, magic `0x43440107`; `ANIM_RAWCHANNELS` carry only the `align` and `apReference` channels). Clip header: hierarchy hash +4 (the skeleton's JH hash: the player clips name `0xef94465d`, the 230-joint rig in `actor27.psarc/proto.pak`, 204 animated joints, with 1,548 clips), size +8, frame count `u16` +0xe, frames per second +0x1c, program block +0x30, first frame record +0x38. The program after the block's 16-byte mask is a list of `{u8 argument count, u8 opcode, u16 arguments}` with the EBOOT's animation command numbering (`sub_2D7058` names: 11 `CopyUniformDataToKeyCache`, 15/16 `KeyCacheUniformLerp/Slerp`, 21–24 constant vector/quaternion decompression, 26 `Dec3VecFloat16`, 27 `Dec3VecRange`, 28 `DecompressQuatSmallestThree`, 29/30 `PostDecompressQuatLog[Pca]`); data offsets are relative to clip + 0x60 and outputs are offsets into a 48-byte-per-joint buffer (scale, quaternion, translation). Decoding rules and their evidence are in `src/anim.rs`. `Dec3VecRange` items (16-byte records; 20-bit-ish truncated floats appear mid-record) and the log/PCA quaternions are not decoded yet; `idle` (one constant frame) decodes completely and `walk` needs them.
+
 ## Foreground (art-group) meshes
 
-Art-group meshes use the same descriptors as level geometry (above); their `vis_sphere` tags (`TAG_VEC4`) bound the model, and spheres of animated objects cover their motion. Skinned meshes are drawn in bind space without their joint transforms. The player model's package holds no `JOINT_HIERARCHY`; its skeleton comes from a shared animation package.
+Art-group meshes use the same descriptors as level geometry (above); their `vis_sphere` tags (`TAG_VEC4`) bound the model, and spheres of animated objects cover their motion. Skinned player models carry no `JOINT_HIERARCHY`; they bind to the `proto.pak` rig (230 joints), whose `idle` clip the player renders.
 
 ## Spawners
 

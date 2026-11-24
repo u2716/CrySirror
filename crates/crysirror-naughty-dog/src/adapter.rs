@@ -335,7 +335,15 @@ struct Session {
     /// `logo2` with its `logo2-alpha` mask) as an uploaded image.
     menu_pages: Vec<crate::menu::Page>,
     logo: Option<(VfsPath, u32, u32)>,
+    /// The player rig (`actor27.psarc/proto.pak` skeleton and the clips the
+    /// player uses), loaded with the first skinned model that has no
+    /// skeleton of its own; `Some(None)` when unavailable.
+    player_rig: Option<Option<(crate::skeleton::Skeleton, Vec<crate::anim::Clip>)>>,
 }
+
+/// Player clips decoded from `proto.pak` (the standing pose is a constant
+/// one-frame clip).
+const PLAYER_CLIPS: &[&str] = &["idle"];
 
 /// The world environment: the level's directional light and ambient term
 /// when known. Native intensities (0.9–19 on the installed levels) are
@@ -514,6 +522,7 @@ impl NaughtyDogVm {
             sky: None,
             menu_pages: Vec::new(),
             logo: None,
+            player_rig: None,
         };
         if self.config.viewer() {
             let level = self.config.level.as_deref().unwrap_or("menu-temple");
@@ -760,7 +769,7 @@ impl NaughtyDogVm {
     fn upload_meshes(&self, host: &mut dyn HostServices, session: &mut Session, name: &str, path: &str, mut meshes: Vec<crate::mesh::Mesh>, package: &dyn AssetReader, directory: &Directory, world: &mut Vec<serde_json::Value>) -> Result<()> {
         // `to_glb` refuses a model over the import limit; split on either.
         let probes = (!session.probes.is_empty()).then_some(&session.probes);
-        let glb = scene::document_lit(name, &meshes, package, directory, MAX_TEXTURE, probes)?.to_glb().ok().filter(|g| g.len() <= MODEL_LIMIT);
+        let glb = scene::document_lit(name, &meshes, package, directory, MAX_TEXTURE, probes, None)?.to_glb().ok().filter(|g| g.len() <= MODEL_LIMIT);
         let Some(glb) = glb else {
             ensure!(meshes.len() > 1, "{name}: one mesh exceeds the model limit");
             let second = meshes.split_off(meshes.len() / 2);
@@ -974,6 +983,18 @@ impl NaughtyDogVm {
             }
         }
         out
+    }
+
+    /// The player skeleton and clips from `actor27.psarc/proto.pak`.
+    fn player_rig(actors: &ArchiveMount) -> Result<Option<(crate::skeleton::Skeleton, Vec<crate::anim::Clip>)>> {
+        if !actors.exists("proto.pak") {
+            return Ok(None);
+        }
+        let package = crysirror_core::service::MemoryAssetReader(read_all(actors.open("proto.pak")?.as_ref(), PACKAGE_LIMIT)?.into());
+        let loaded = crate::mesh::Loaded::read(&package, PACKAGE_LIMIT)?;
+        let Some(skeleton) = crate::skeleton::of_package(&loaded)? else { return Ok(None) };
+        let clips = crate::anim::items(&loaded).filter(|(n, _)| PLAYER_CLIPS.contains(n)).map(|(n, at)| crate::anim::decode(&loaded, at, n, skeleton.animated)).collect::<Result<Vec<_>>>()?;
+        Ok(Some((skeleton, clips)))
     }
 
     /// The English title logo of `menu.pak` (`logo2`, alpha from
@@ -1261,7 +1282,22 @@ impl NaughtyDogVm {
             return Ok(());
         }
         scene::place_art_group(&mut meshes);
-        let glb = scene::document(art, &meshes, package.as_ref(), &directory, MAX_TEXTURE)?.to_glb()?;
+        // Skinned models without their own skeleton are player models bound
+        // to the `proto.pak` rig.
+        let skinned = meshes.iter().any(|m| m.skinned);
+        let own = crate::skeleton::of_package(&loaded)?;
+        if skinned && own.is_none() && session.player_rig.is_none() {
+            session.player_rig = Some(Self::player_rig(&session.actors).unwrap_or_else(|e| {
+                session.stage.log(format!("player rig: {e:#}"));
+                None
+            }));
+        }
+        let rig = match (&own, &session.player_rig) {
+            (None, Some(Some((skeleton, clips)))) if skinned => Some(scene::Rig { skeleton, clips }),
+            _ => None,
+        };
+        let idle = rig.as_ref().and_then(|r| r.clips.iter().find(|c| c.name == "idle")).map(|c| c.name.clone());
+        let glb = scene::document_lit(art, &meshes, package.as_ref(), &directory, MAX_TEXTURE, None, rig.as_ref())?.to_glb()?;
         session.next_model += 1;
         let asset = host.upload_model(self.client, 0x4e44_0000 + session.next_model, &glb)?;
         let triangles: usize = meshes.iter().flat_map(|m| &m.fragments).map(|f| f.triangles.len()).sum();
@@ -1277,6 +1313,9 @@ impl NaughtyDogVm {
                 session.ground.add_placed(&meshes, Some(m.to_cols_array()));
             }
             world.push(json!({"op": "spawn", "entity": {"id": id, "name": format!("{art}:{}", s.name), "visible": visible, "transform": {"translation": s.position, "rotation_degrees": [x.to_degrees(), y.to_degrees(), z.to_degrees()], "scale": [1.0, 1.0, 1.0]}, "geometry": {"kind": "scene", "asset": asset.relative()}}}));
+            if let Some(clip) = &idle {
+                world.push(json!({"op": "set_animation", "id": id, "animation": {"layers": [{"clip": clip, "looping": true}]}}));
+            }
             session.entities.push((id, asset.clone()));
             let name = sid(&s.name);
             session.stage.entities.entry(name).or_default().push(id);
