@@ -39,7 +39,7 @@ Native PPU behaviour is analyzed from an owner-supplied decrypted `EBOOT.elf` be
 2. The task graph (`src/task.rs`) selects the first story subnode (`{"task": NAME}` selects another). Its level, the level's `cache` levels and the node's world level load from `pak22.psarc`. The world package's load regions (`src/region.rs`) run their scheme lambda in the interpreter and add the displayed levels.
 3. Spawners are placed in world space (parent spawners applied) with their art groups from `actor27.psarc`. Spawners flagged 0x40000000 start hidden. The player model stands at the subnode's continue spawner.
 4. Every spawner with a `state-script` property runs as a process (`src/ss.rs`), and each frame advances these processes. Natives act on spawned entities, the screen fade, task state and process variables. Unimplemented natives return 0 and are listed in the session diagnostics.
-5. `task-subnode-complete` and movie subnodes advance the task. A movie plays `movie1/NAME.m2v` through the shared MPEG decoder. Enter or Escape skips it. A movie over the runtime's 64 MiB world-video read limit is skipped.
+5. `task-subnode-complete` and movie subnodes advance the task. A movie plays `movie1/NAME.m2v` through the shared MPEG decoder. Enter or Escape skips it. A movie over the platform large-asset limit (1 GiB on desktop and mobile, 64 MiB on PS Vita and Switch) is skipped.
 
 Controls: WASD move the player on walkable level and prop surfaces (Shift runs), arrows orbit the camera, Page Down/Page Up step through task subnodes. `{"level": NAME}` without a task opens the free-camera level viewer (WASD/QE, arrows, Page Down/Up through `pak22.txt`).
 

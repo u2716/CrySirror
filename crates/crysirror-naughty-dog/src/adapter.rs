@@ -52,8 +52,8 @@ const NO_AUTO_BIRTH: u32 = 0x4000_0000;
 const MOVIE_LAYER: u32 = 0x4e44_0002;
 /// The world assigns the first video the first video surface slot.
 const MOVIE_SURFACE: &str = "__surface/1000";
-/// `crysirror_runtime::vfs::MAX_FILE`.
-const MAX_WORLD_VIDEO: u64 = 64 << 20;
+/// World videos are read whole (`crysirror_runtime::vfs::MAX_FILE`).
+const MAX_WORLD_VIDEO: u64 = crysirror_core::limits::LARGE_ASSET_BYTES;
 const MAX_LOG: usize = 64;
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -151,7 +151,13 @@ enum Load {
     Package(String),
     /// An art group of `actor27.psarc`, placed at each spawner.
     Actor(String, Vec<SpawnerRecord>),
+    /// Part of a package's meshes whose model exceeded the host's
+    /// per-model limit: `(package, archive path, meshes)`.
+    Part(String, String, Vec<crate::mesh::Mesh>),
 }
+
+/// Largest generated model: the host's large-asset limit less a margin.
+const MODEL_LIMIT: usize = (crysirror_core::limits::LARGE_ASSET_BYTES as usize) / 16 * 15;
 
 /// The player character placed at the continue spawner.
 struct Player {
@@ -454,6 +460,10 @@ impl NaughtyDogVm {
         let (node, sub) = game.select(&name)?;
         let n = &game.rt.inner.tasks.nodes[node];
         let s = &n.subnodes[sub];
+        // A subnode without a level (most movies) loads nothing.
+        if s.level.is_empty() {
+            return Ok(TaskPlan { name, level: String::new(), continue_player: None, levels: Vec::new(), regions: Vec::new() });
+        }
         let mut levels = vec![s.level.clone()];
         for c in session.all_levels.get(&s.level).map(|l| l.caches.as_slice()).unwrap_or_default() {
             if !levels.contains(c) {
@@ -529,6 +539,12 @@ impl NaughtyDogVm {
                 self.load_actor(host, session, &art, &spawners, &mut world)?;
                 String::new()
             }
+            Load::Part(name, path, meshes) => {
+                let package = session.mount.open(&path)?;
+                let directory = Directory::read(package.as_ref())?;
+                self.upload_meshes(host, session, &name, &path, meshes, package.as_ref(), &directory, &mut world)?;
+                String::new()
+            }
         };
         if let Some(path) = (!package_name.is_empty()).then(|| package_path(&session.mount, &package_name)).flatten() {
             let package = session.mount.open(&path)?;
@@ -587,13 +603,8 @@ impl NaughtyDogVm {
                     Some((a, b)) => (std::array::from_fn(|k| a[k].min(l[k])), std::array::from_fn(|k| b[k].max(h[k]))),
                 });
                 session.triangles += meshes.iter().flat_map(|m| &m.fragments).map(|f| f.triangles.len()).sum::<usize>();
-                let glb = scene::document(&package_name, &meshes, package.as_ref(), &directory, MAX_TEXTURE)?.to_glb()?;
-                session.next_model += 1;
-                let asset = host.upload_model(self.client, 0x4e44_0000 + session.next_model, &glb)?;
-                let id = 0x100 + session.next_model;
-                world.push(json!({"op": "spawn", "entity": {"id": id, "name": package_name, "geometry": {"kind": "scene", "asset": asset.relative()}}}));
-                session.entities.push((id, asset));
-                session.packages.push(package_name);
+                session.packages.push(package_name.clone());
+                self.upload_meshes(host, session, &package_name, &path, meshes, package.as_ref(), &directory, &mut world)?;
             }
         }
         if session.pending.is_empty() {
@@ -615,6 +626,27 @@ impl NaughtyDogVm {
         if !world.is_empty() {
             host.submit_engine(self.client, 1, &serde_json::to_vec(&json!({"layers": [], "world": world}))?)?;
         }
+        Ok(())
+    }
+
+    /// Upload a package's meshes as one model and spawn it; a model over
+    /// the host limit is split into two halves queued as separate steps.
+    #[allow(clippy::too_many_arguments)]
+    fn upload_meshes(&self, host: &mut dyn HostServices, session: &mut Session, name: &str, path: &str, mut meshes: Vec<crate::mesh::Mesh>, package: &dyn AssetReader, directory: &Directory, world: &mut Vec<serde_json::Value>) -> Result<()> {
+        // `to_glb` refuses a model over the import limit; split on either.
+        let glb = scene::document(name, &meshes, package, directory, MAX_TEXTURE)?.to_glb().ok().filter(|g| g.len() <= MODEL_LIMIT);
+        let Some(glb) = glb else {
+            ensure!(meshes.len() > 1, "{name}: one mesh exceeds the model limit");
+            let second = meshes.split_off(meshes.len() / 2);
+            session.pending.push_front(Load::Part(name.to_owned(), path.to_owned(), second));
+            session.pending.push_front(Load::Part(name.to_owned(), path.to_owned(), meshes));
+            return Ok(());
+        };
+        session.next_model += 1;
+        let asset = host.upload_model(self.client, 0x4e44_0000 + session.next_model, &glb)?;
+        let id = 0x100 + session.next_model;
+        world.push(json!({"op": "spawn", "entity": {"id": id, "name": name, "geometry": {"kind": "scene", "asset": asset.relative()}}}));
+        session.entities.push((id, asset));
         Ok(())
     }
 

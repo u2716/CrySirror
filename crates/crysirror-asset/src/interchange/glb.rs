@@ -463,7 +463,7 @@ impl Document {
         let total = 12 + 8 + json.len() + 8 + bin.len();
         ensure!(
             total <= crate::MAX_IMPORT_BYTES,
-            "converted model exceeds 64 MiB"
+            "converted model exceeds the import limit"
         );
         let mut out = Vec::with_capacity(total);
         out.extend_from_slice(b"glTF");
