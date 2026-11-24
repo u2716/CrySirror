@@ -26,7 +26,8 @@
 //!   N is the largest position depth of the mesh, raised when a kind-6
 //!   value needs more (one installed mesh reaches `4 · (2²⁰ − 1)` exactly
 //!   with depths up to 19). Inferred from data (SATD-nd-retail-runtime).
-//!   Texture coordinates (attribute 0x11) use the same two kinds. Normals
+//!   Texture coordinates (attribute 0x11) use the same two kinds and a
+//!   grid-dependent unit ([`uv_unit`]). Normals
 //!   (attribute 0x02) of kind 0 are three unsigned bytes mapped by
 //!   `q / 127.5 − 1`: on `menu-temple` they are unit length and agree with
 //!   the triangle winding. Other normal kinds are not decoded.
@@ -51,9 +52,22 @@ pub const ATTR_NORMAL: u8 = 0x02;
 /// Three unsigned bytes per vertex with 7–24 distinct values per fragment on
 /// `menu-temple`: layer blend masks of two-layer materials.
 pub const ATTR_LAYER_MASK: u8 = 0x15;
-/// Texture coordinates are stored in 1/256 of the texture: uniquely
-/// mapped statue fragments of `menu-temple` span at most 256 units.
-const UV_UNIT: f32 = 256.;
+/// Texture units per decoded coordinate unit of a mesh with an M-bit UV
+/// grid: 2^(M − 22), the grid dependence of positions ([`unit_of_grid`]).
+/// At M = 14 (level meshes) that is 1/256 of the texture: uniquely mapped
+/// statue fragments of `menu-temple` span at most 256 units. With one
+/// fixed 1/256 the 10-bit grids of the hero model and `train-wreck-car-b`
+/// spanned ±8 and ±480 textures where 2^(M − 22) gives ±0.5 and ±30
+/// (tiled rivet metal); the 14-bit crate and oil drum span ±0.5. Ranges
+/// are stored per material and symmetric about 0 (for example ±1793 raw
+/// units on the hero's arms): coordinates are centred on the texture, and
+/// adding 0.5 puts atlases (the hero's cloth and arm maps) on [0, 1]; with
+/// the centre at 0 their halves were swapped. Tiled textures are unchanged.
+const UV_CENTRE: f32 = 0.5;
+
+fn uv_unit(grid_bits: u32) -> f32 {
+    2f32.powi(grid_bits as i32 - 22)
+}
 
 pub struct Loaded {
     pub data: Vec<u8>,
@@ -391,7 +405,7 @@ pub fn prototype_meshes(p: &Loaded, payload: usize) -> Result<Vec<Mesh>> {
                     masks,
                     positions: resolve(&pos, pos_grid, 1.),
                     normals,
-                    uvs: uv.map(|u| resolve(&u, uv_grid, 1. / UV_UNIT)).unwrap_or_default(),
+                    uvs: uv.map(|u| resolve(&u, uv_grid, uv_unit(uv_grid)).into_iter().map(|t| t.map(|c| c + UV_CENTRE)).collect()).unwrap_or_default(),
                     triangles,
                 },
             })
