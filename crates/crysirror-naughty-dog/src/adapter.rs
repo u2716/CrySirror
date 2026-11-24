@@ -226,6 +226,9 @@ struct ScriptAnimation {
     duration: Option<f32>,
     /// Library asset and clip name, once loaded.
     source: Option<(String, String)>,
+    /// Clip-space root motion (`align` per frame at `fps`) and the world
+    /// transform of clip space, when the clip has an `align` channel.
+    root: Option<(Vec<(glam::Vec3, glam::Quat)>, f32, glam::Mat4)>,
     /// The clip could not be found or decoded: the animation ends at once.
     failed: bool,
 }
@@ -302,7 +305,7 @@ impl World for Stage {
             return false;
         }
         self.held.remove(&object);
-        self.animations.insert(object, ScriptAnimation { clip, options: options.clone(), start: self.now, duration: None, source: None, failed: false });
+        self.animations.insert(object, ScriptAnimation { clip, options: options.clone(), start: self.now, duration: None, source: None, root: None, failed: false });
         true
     }
     fn animation_phase(&self, object: u32) -> Option<f32> {
@@ -421,8 +424,19 @@ struct Session {
     own_rigs: HashMap<String, crate::skeleton::Skeleton>,
     /// Animation packages read for script animations.
     anim_packages: HashMap<String, Arc<crate::mesh::Loaded>>,
-    /// Uploaded single-clip libraries by (rig, clip): asset, name, seconds.
-    libraries: HashMap<(String, u32), Option<(String, String, f32)>>,
+    /// Uploaded single-clip libraries by (rig, clip).
+    libraries: HashMap<(String, u32), Option<LibraryClip>>,
+}
+
+/// A clip uploaded as a single-clip animation library.
+#[derive(Clone, Debug)]
+struct LibraryClip {
+    asset: String,
+    name: String,
+    seconds: f32,
+    fps: f32,
+    align: Vec<(glam::Vec3, glam::Quat)>,
+    ap_reference: Vec<(glam::Vec3, glam::Quat)>,
 }
 
 /// The skeleton an entity is skinned to.
@@ -1213,27 +1227,32 @@ impl NaughtyDogVm {
                 Some(rig) => self.animation_library(host, session, &rig, clip),
                 None => Err(anyhow::anyhow!("object has no skinned entity")),
             };
+            // The entity's transform now: the player's, else its spawner's.
+            let current = if object == sid("player") {
+                session.player.as_ref().map(|p| glam::Mat4::from_rotation_translation(glam::Quat::from_rotation_y(p.yaw), glam::Vec3::from_array(p.position)))
+            } else {
+                session.stage.spawners.get(&object).map(|s| glam::Mat4::from_rotation_translation(glam::Quat::from_array(s.rotation).normalize(), glam::Vec3::from_array(s.position)))
+            };
             let a = session.stage.animations.get_mut(&object).expect("animation");
             match loaded {
-                Ok((asset, name, seconds)) => {
-                    a.duration = Some(seconds);
-                    a.source = Some((asset, name.clone()));
+                Ok(lib) => {
+                    a.duration = Some(lib.seconds);
+                    a.source = Some((lib.asset.clone(), lib.name.clone()));
                     a.start = session.stage.now;
-                    let locator = a.options.locator;
-                    session.stage.log(format!("animate {object:08x} {name} {seconds:.2}s"));
-                    if let Some((pos, rot)) = locator {
-                        let yaw = yaw_of(rot);
-                        if let Some(p) = session.player.as_mut().filter(|p| entities.contains(&p.entity.unwrap_or(0))) {
-                            p.position = pos;
-                            p.yaw = yaw;
-                            if let Some(c) = p.anim.as_mut() {
-                                c.yaw = yaw;
-                            }
-                        }
-                        for e in &entities {
-                            world.push(json!({"op": "set_transform", "id": e, "transform": {"translation": pos, "rotation_degrees": [0.0, yaw.to_degrees(), 0.0], "scale": [1.0, 1.0, 1.0]}}));
-                        }
+                    // Clip space in the world: the locator stands where the
+                    // clip's `apReference` starts; without one, the root
+                    // starts where the entity stands.
+                    let frame = |(t, r): (glam::Vec3, glam::Quat)| glam::Mat4::from_rotation_translation(r, t);
+                    let base = match (a.options.locator, lib.ap_reference.first(), lib.align.first(), current) {
+                        (Some((pos, rot)), ap, _, _) => Some(glam::Mat4::from_rotation_translation(glam::Quat::from_array(rot).normalize(), glam::Vec3::from_array(pos)) * ap.map_or(glam::Mat4::IDENTITY, |a| frame(*a).inverse())),
+                        (None, _, Some(first), Some(now)) => Some(now * frame(*first).inverse()),
+                        _ => None,
+                    };
+                    if let Some(base) = base {
+                        let align = if lib.align.is_empty() { vec![(glam::Vec3::ZERO, glam::Quat::IDENTITY)] } else { lib.align.clone() };
+                        a.root = Some((align, lib.fps, base));
                     }
+                    session.stage.log(format!("animate {object:08x} {} {:.2}s", lib.name, lib.seconds));
                 }
                 Err(e) => {
                     a.failed = true;
@@ -1244,6 +1263,7 @@ impl NaughtyDogVm {
         let now = session.stage.now;
         let mut finished = Vec::new();
         let mut held = Vec::new();
+        let mut moves = Vec::new();
         for (object, a) in &session.stage.animations {
             let (Some((asset, name)), Some(d)) = (&a.source, a.duration) else {
                 if a.failed {
@@ -1266,6 +1286,15 @@ impl NaughtyDogVm {
             let w_out = if bout > 0. { (d - t) / bout } else { 1. };
             let w = w_in.min(w_out).clamp(0., 1.);
             let layer = json!({"clip": name, "source": asset, "time": t, "speed": 0.0, "weight": w.max(1e-3), "target_weight": w.max(1e-3), "looping": false});
+            if let Some((align, fps, base)) = &a.root {
+                let x = (t * fps).clamp(0., (align.len() - 1) as f32);
+                let (i, f) = (x.floor() as usize, x.fract());
+                let (t0, r0) = align[i];
+                let (t1, r1) = align[(i + 1).min(align.len() - 1)];
+                let m = *base * glam::Mat4::from_rotation_translation(r0.slerp(r1, f), t0.lerp(t1, f));
+                let (_, r, pos) = m.to_scale_rotation_translation();
+                moves.push((*object, pos.to_array(), r));
+            }
             for e in Self::animation_entities(session, *object) {
                 let found = world.iter_mut().rev().find(|op| op["op"] == "set_animation" && op["id"] == e);
                 match found {
@@ -1283,6 +1312,24 @@ impl NaughtyDogVm {
                     }
                     None => world.push(json!({"op": "set_animation", "id": e, "animation": {"layers": [layer.clone()]}})),
                 }
+            }
+        }
+        // Root motion: entities follow the clip's `align` channel; the
+        // player keeps the position for its controller.
+        for (object, pos, r) in moves {
+            let yaw = yaw_of(r.to_array());
+            if object == sid("player") {
+                if let Some(p) = session.player.as_mut() {
+                    p.position = pos;
+                    p.yaw = yaw;
+                    if let Some(c) = p.anim.as_mut() {
+                        c.yaw = yaw;
+                    }
+                }
+            }
+            let (x, y, z) = r.to_euler(glam::EulerRot::XYZ);
+            for e in Self::animation_entities(session, object) {
+                world.push(json!({"op": "set_transform", "id": e, "transform": {"translation": pos, "rotation_degrees": [x.to_degrees(), y.to_degrees(), z.to_degrees()], "scale": [1.0, 1.0, 1.0]}}));
             }
         }
         for o in finished {
@@ -1310,7 +1357,7 @@ impl NaughtyDogVm {
     /// `rig`'s skeleton, searched in the rig's packages and then the current
     /// task's level animation packages. Returns the asset, clip name and
     /// length.
-    fn animation_library(&self, host: &mut dyn HostServices, session: &mut Session, rig: &RigRef, clip: u32) -> Result<(String, String, f32)> {
+    fn animation_library(&self, host: &mut dyn HostServices, session: &mut Session, rig: &RigRef, clip: u32) -> Result<LibraryClip> {
         let key = (format!("{rig:?}"), clip);
         if let Some(found) = session.libraries.get(&key) {
             return found.clone().context("clip not found earlier");
@@ -1358,7 +1405,7 @@ impl NaughtyDogVm {
             let glb = scene::animation_library(&scene::Rig { skeleton, clips: std::slice::from_ref(&decoded) }).to_glb()?;
             session.next_model += 1;
             let asset = host.upload_model(self.client, 0x4e44_0000 + session.next_model, &glb)?;
-            result = Some((asset.relative().to_string(), decoded.name.clone(), seconds));
+            result = Some(LibraryClip { asset: asset.relative().to_string(), name: decoded.name.clone(), seconds, fps: decoded.fps.max(1.), align: decoded.align.clone(), ap_reference: decoded.ap_reference.clone() });
             break;
         }
         session.libraries.insert(key, result.clone());

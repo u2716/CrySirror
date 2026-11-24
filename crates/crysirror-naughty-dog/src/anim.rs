@@ -76,6 +76,11 @@ pub struct Clip {
     /// Horizontal root-motion speed (metres per second) of the `align`
     /// channel, 0 without one.
     pub root_speed: f32,
+    /// Per-frame `align` (the character root) and `apReference` (the
+    /// action-pack reference) transforms in clip space: translation,
+    /// rotation. Empty without the channel.
+    pub align: Vec<(Vec3, Quat)>,
+    pub ap_reference: Vec<(Vec3, Quat)>,
     /// Commands whose channels were skipped or decoded with an inferred rule.
     pub unsupported: Vec<&'static str>,
 }
@@ -396,31 +401,57 @@ pub fn decode(p: &Loaded, payload: usize, name: &str, animated: usize) -> Result
     }
     unsupported.sort_unstable();
     unsupported.dedup();
-    let root_speed = align_speed(p, payload, frames, fps).unwrap_or(0.);
-    Ok(Clip { name: name.to_owned(), hierarchy: u32_at(4)?, frames, fps, joints, root_speed, unsupported })
+    let align = raw_channel(p, payload, crate::dc::sid("align")).unwrap_or_default();
+    let ap_reference = raw_channel(p, payload, crate::dc::sid("apReference")).unwrap_or_default();
+    let root_speed = match (align.first(), align.last()) {
+        (Some(a), Some(b)) if align.len() > 1 => {
+            let d = b.0 - a.0;
+            (d.x * d.x + d.z * d.z).sqrt() / ((align.len() - 1) as f32 / fps.max(1.))
+        }
+        _ => 0.,
+    };
+    Ok(Clip { name: name.to_owned(), hierarchy: u32_at(4)?, frames, fps, joints, root_speed, align, ap_reference, unsupported })
 }
 
 /// `ANIM_RAWCHANNELS` (`ANIM` +0xc): `{count, fps, entry pointers}`, an
-/// entry `{StringId, data}`. The `align` channel's data is a rotation, a
-/// scale and from float 7 one translation per frame: `move` advances
-/// 1.87 m over 21 frames at 30 fps, `walk` 1.52 m over 31 frames,
-/// `walk-hurt` 0.78 m over 11 frames at 10 fps.
-fn align_speed(p: &Loaded, payload: usize, frames: usize, fps: f32) -> Option<f32> {
+/// entry `{StringId, data}`. A channel's data holds the first and last
+/// transforms (two 11-float `{quaternion, scale, translation, 0}` records)
+/// and at +88 `{samples, u16 record bytes, u16 components, u16 count, u16
+/// flags}`: one record per frame, 12 bytes (translation; components 4) or
+/// 28 bytes (quaternion then translation; components 6). `walk` advances
+/// 0.0633 m per frame (1.9 m/s), `move` 4.0 m/s, `move^turn-180^move`
+/// turns 180°, `jump-long` drops 3.25 m over 6.98 m.
+fn raw_channel(p: &Loaded, payload: usize, name: u32) -> Option<Vec<(Vec3, Quat)>> {
     let raw = p.ptr(payload + 0xc).ok()?;
     let count = p.u32(raw).ok()? as usize;
-    if frames < 2 || count > 64 {
+    if count > 64 {
         return None;
     }
     for i in 0..count {
         let entry = p.ptr(raw + 8 + 4 * i).ok()?;
-        if p.u32(entry).ok()? != crate::dc::sid("align") {
+        if p.u32(entry).ok()? != name {
             continue;
         }
         let data = p.ptr(entry + 4).ok()?;
-        let at = |k: usize, c: usize| p.f32(data + 4 * (7 + 3 * k + c)).ok();
-        let (dx, dz) = (at(frames - 1, 0)? - at(0, 0)?, at(frames - 1, 2)? - at(0, 2)?);
-        let seconds = (frames - 1) as f32 / fps.max(1.);
-        return Some((dx * dx + dz * dz).sqrt() / seconds);
+        let samples = p.ptr(data + 88).ok()?;
+        let (stride, components) = (usize::from(p.u16(data + 92).ok()?), p.u16(data + 94).ok()?);
+        let frames = usize::from(p.u16(data + 98).ok()?);
+        let rotation = components & 2 != 0;
+        if frames == 0 || frames > 1 << 14 || stride != if rotation { 28 } else { 12 } {
+            return None;
+        }
+        let f = |at: usize| p.f32(at).ok();
+        return (0..frames)
+            .map(|k| {
+                let r = samples + stride * k;
+                if rotation {
+                    let q = Quat::from_xyzw(f(r)?, f(r + 4)?, f(r + 8)?, f(r + 12)?).normalize();
+                    Some((Vec3::new(f(r + 16)?, f(r + 20)?, f(r + 24)?), q))
+                } else {
+                    Some((Vec3::new(f(r)?, f(r + 4)?, f(r + 8)?), Quat::IDENTITY))
+                }
+            })
+            .collect();
     }
     None
 }

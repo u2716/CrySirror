@@ -19,6 +19,7 @@ fn main() -> Result<()> {
     let (_, payload) = anim::items(&clips).find(|(n, _)| n == name).context("clip not found")?;
     let clip = anim::decode(&clips, payload, name, skel.animated)?;
     println!("skeleton {:08x}: {} joints ({} animated); clip {:08x} {} frames @ {} fps; unsupported {:?}", skel.hash, skel.names.len(), skel.animated, clip.hierarchy, clip.frames, clip.fps, clip.unsupported);
+    println!("root speed {:.2} m/s; align {} frames {:?} → {:?}; apReference {} frames", clip.root_speed, clip.align.len(), clip.align.first().map(|a| a.0.to_array()), clip.align.last().map(|a| (a.0.to_array(), a.1.to_array())), clip.ap_reference.len());
     let animated = clip.joints.iter().filter(|j| j.rotation.is_some() || j.translation.is_some()).count();
     println!("joints with channels: {animated}");
     let mut world = vec![Mat4::IDENTITY; skel.names.len()];
