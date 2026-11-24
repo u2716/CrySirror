@@ -57,9 +57,9 @@ impl GradientSky {
 /// A sky painted as a hemispherical latitude–longitude image: column
 /// `u = atan2(z, x) / 2π + u_offset` (wrapping) and row
 /// `v = zenith angle / zenith_span` (0 at the zenith; `zenith_span` π/2 puts
-/// the horizon at the bottom row). Directions past the last row repeat it,
-/// so the horizon colour continues below the horizon. Texels are sRGB and
-/// become linear radiance × `scale`.
+/// the horizon at the bottom row). Directions past the last row take the
+/// mean colour of that row (a uniform horizon haze rather than streaks of
+/// its texels). Texels are sRGB and become linear radiance × `scale`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ImageSky<'a> {
     pub width: u32,
@@ -82,6 +82,9 @@ impl ImageSky<'_> {
         let d = dir.normalize_or_zero();
         let u = d.z.atan2(d.x) / std::f32::consts::TAU + self.u_offset;
         let v = d.y.clamp(-1., 1.).acos() / self.zenith_span;
+        if v > 1. {
+            return self.horizon() * self.scale;
+        }
         let (w, h) = (self.width as i64, self.height as i64);
         let (x, y) = (u.rem_euclid(1.) * w as f32 - 0.5, (v.clamp(0., 1.) * h as f32 - 0.5).clamp(0., (h - 1) as f32));
         let (x0, y0) = (x.floor(), y.floor());
@@ -94,6 +97,16 @@ impl ImageSky<'_> {
         let top = texel(x0, y0).lerp(texel(x0 + 1, y0), fx);
         let bottom = texel(x0, y0 + 1).lerp(texel(x0 + 1, y0 + 1), fx);
         top.lerp(bottom, fy) * self.scale
+    }
+
+    /// Mean linear colour of the bottom row.
+    fn horizon(&self) -> Vec3 {
+        let row = ((self.height - 1) * self.width * 4) as usize;
+        let sum = (0..self.width as usize).fold(Vec3::ZERO, |a, x| {
+            let at = row + 4 * x;
+            a + Vec3::new(srgb_to_linear(self.rgba[at]), srgb_to_linear(self.rgba[at + 1]), srgb_to_linear(self.rgba[at + 2]))
+        });
+        sum / self.width as f32
     }
 
     /// The sky as a `w`×`h` equirectangular image (`w = 2h`).
@@ -150,11 +163,14 @@ mod tests {
         }
         let sky = ImageSky { width: 4, height: 2, rgba: &rgba, u_offset: 0., zenith_span: std::f32::consts::FRAC_PI_2, scale: 2. };
         assert!((sky.radiance(Vec3::Y) - Vec3::splat(2.)).length() < 1e-3);
-        // Below the horizon the last row repeats; u = atan2(z, x) / 2π.
-        let a = sky.radiance(Vec3::new(1., -0.5, 1.));
+        // Just above the horizon u = atan2(z, x) / 2π picks the bottom row's
+        // texels; below it the row's mean applies.
+        let a = sky.radiance(Vec3::new(1., 0.001, 1.));
         assert!(a.x > 1.5 && a.z < 0.5, "{a}");
-        let b = sky.radiance(Vec3::new(-1., -0.5, -1.));
+        let b = sky.radiance(Vec3::new(-1., 0.001, -1.));
         assert!(b.z > 1.5 && b.x < 0.5, "{b}");
+        let below = sky.radiance(Vec3::new(1., -0.5, 1.));
+        assert!((below - Vec3::new(1., 0., 1.)).length() < 1e-3, "{below}");
         let img = sky.render(16, 8).unwrap();
         assert_eq!(img.rgb.len(), 128);
     }

@@ -738,9 +738,11 @@ impl NaughtyDogVm {
         let lum = 0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2];
         let sun = session.light.as_ref().map_or(json!(null), |l| json!({"direction": l.direction, "color": l.color.map(|c| c.clamp(0., 4.)), "intensity": l.intensity.clamp(0.2, 4.0), "shadow_strength": 0.6}));
         let mut env = json!({"op": "set_environment", "environment": {"show_sky": session.sky.is_some(), "intensity": if session.sky.is_some() { 1. } else { (lum * 4.).clamp(0.02, 1.) }, "ambient": e.map(|v| v.clamp(0., 2.)), "sun": sun,
-            // The camera adapts to the scene like the original's tone mapping
-            // (exact native curve not recovered).
-            "auto_exposure": {"min_log2": -6.0, "max_log2": 2.0, "speed_up": 3.0, "speed_down": 1.0, "compensation": -1.5}}});
+            // Hable's filmic curve, published for this game; the camera
+            // adapts to the scene (the native exposure constants are set at
+            // runtime and not recovered).
+            "tonemap": "filmic",
+            "auto_exposure": {"min_log2": -6.0, "max_log2": 2.0, "speed_up": 3.0, "speed_down": 1.0, "compensation": 0.5}}});
         if let Some(sky) = &session.sky {
             env["environment"]["hdr"] = json!(sky.relative());
         }

@@ -6,7 +6,7 @@ Generated from the class registry, the command table, serde defaults and Rust do
 `CRYSIRROR_BLESS=1 cargo test --release -p crysirror-engine --test api_docs`.
 Policy and change log: [README](README.md), [CHANGES](CHANGES.md).
 
-API fingerprint: `01a2119f5ee7031e`
+API fingerprint: `9640ededc06f0fce`
 
 The same classes are exposed to Rust (`EngineContext` calls), to JavaScript/TypeScript (bindings generated from the registry, [crysirror.d.ts](crysirror.d.ts)) and to inspection tools.
 
@@ -6116,6 +6116,7 @@ Used by: `Environment.tonemap`.
 | `pbr_neutral` | — | Khronos PBR Neutral: hue-preserving, matches glTF sample viewers. |
 | `aces` | — | ACES filmic approximation (Narkowicz). |
 | `none` | — | Clamp only, for debugging linear output. |
+| `filmic` | — | Hable's filmic curve as published for Uncharted 2 (GDC 2010, "Uncharted 2: HDR Lighting"): shoulder 0.15, linear strength 0.50, linear angle 0.10, toe strength 0.20, toe numerator 0.02, toe denominator 0.30, white point 11.2, after a fixed 2× exposure bias. |
 
 ### EntitySpec
 

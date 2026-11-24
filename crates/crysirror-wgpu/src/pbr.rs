@@ -4628,6 +4628,7 @@ impl PbrRenderer {
             Tonemap::PbrNeutral => 0.,
             Tonemap::Aces => 1.,
             Tonemap::None => 2.,
+            Tonemap::Filmic => 3.,
         };
         self.gpu.queue.write_buffer(
             &self.post_buf,

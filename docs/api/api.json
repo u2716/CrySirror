@@ -22374,6 +22374,12 @@
           "doc": "Clamp only, for debugging linear output.",
           "name": "none",
           "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "Hable's filmic curve as published for Uncharted 2 (GDC 2010, \"Uncharted 2: HDR Lighting\"): shoulder 0.15, linear strength 0.50, linear angle 0.10, toe strength 0.20, toe numerator 0.02, toe denominator 0.30, white point 11.2, after a fixed 2× exposure bias.",
+          "name": "filmic",
+          "rust_type": ""
         }
       ],
       "name": "Tonemap",
@@ -30496,7 +30502,7 @@
       "used_by": "UiEvent.widget client/local identity"
     }
   ],
-  "fingerprint": "01a2119f5ee7031e",
+  "fingerprint": "9640ededc06f0fce",
   "generated_by": "crysirror-engine api_doc (tests/api_docs.rs)",
   "globals": [
     {
