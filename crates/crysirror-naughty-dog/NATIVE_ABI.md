@@ -122,6 +122,22 @@ Every opcode of `idle`, `walk`, `move` and `walk-hurt` decodes.
 
 `dc1.psarc/anim-player.bin` `anim-actor` `anim-player`: state count +0x30, inline 0x48-byte states +0x34, initial state +0x38 (`idle`); layout in `src/anim_state.rs`. 988 states; transitions `{request, flags, blend record, target, 0, 0, fade, -1, 0}` with `auto` taken at the end of the state's animation. Blend trees are nested blend nodes (type `0xb249ac72`), layer/select nodes (`0x1c3f471c`) and `anim-node-animation` leaves; the `run` tree's select node lists clips by movement type (`run-tense`, `walk-balance`, `walk-hurt`, `run-hurt-long`, …), the options of the `move` `player-overlay-info` that `set-walk-type`/`set-run-type` choose. Hurt clips live in `actor27.psarc/anim-proto-hurt.pak`. The `align` raw channel gives root motion (`move` 2.8 m/s, `walk` 1.5, `walk-hurt` 0.8, `run-hurt-long` 3.9).
 
+Blend-tree nodes (`src/anim_tree.rs`):
+
+- **Blend** `{left, right, flags, lambda, 1.0}`: the lambda `(node, info, phase, instance)` returns the right child's weight.
+- **Select** `{default, alternatives, flags, lambda, 0}`: the lambda `(node, info, instance)` returns the child to evaluate. DC arrays carry no length.
+
+The 6,131 tree lambdas only read two per-actor blocks and call `lerp-scale` (PPU 0x1416cc: `t = clamp((x − a)/(b − a), 0, 1)`, `c(1 − t) + d t`) and `minmax` (0x14ab64: `min(max(x, lo), hi)`).
+
+- **Instance block:** +48 is the movement-type index and +52 the weapon index.
+  - Movement types: the 39 records of `#b35a5e92`, 0x6c bytes each, with the `StringId` at +0x40, the name at +0x48 and the index at +0x4c. `run` 0, `walk` 2, `run-tense` 3, `run-stealth` 7, `run-mo` 9, `run-hurt` 11, `walk-hurt` 14, `relaxed-run` 38.
+  - Weapons: the `weapon-base` `player-overlay-info`: binoculars, no-weapon, pistol, long-gun, grenade, crossbow, rpg.
+- **Info block (locomotion states):** +28/+32 lean right/left, +40 uphill (`run-incline`), +44 downhill spine, +48/+52 stairs up/down. +0x228 is a cycle phase. These meanings are inferred from the clips the blends lead to.
+
+Every state evaluates. With zero inputs: `idle` is `idle` plus the additive `idle-base-big-add`, `walk-hurt` turns it into `idle-hurt` and `run` into `walk-hurt-long`, and a lean of 0.5 blends `move-lean-r`. Clips named `…-add` hold local deltas (near-identity rotations, untouched joints unanimated) and play as additive layers.
+
+The PPU locomotion controller is reproduced from the transition table in `src/player.rs`. Jumps, falls and landings have no incoming transitions and are entered directly.
+
 ## Foreground (art-group) meshes
 
 Art-group meshes use the same descriptors as level geometry (above); their `vis_sphere` tags (`TAG_VEC4`) bound the model, and spheres of animated objects cover their motion. Skinned player models carry no `JOINT_HIERARCHY`; they bind to the `proto.pak` rig (230 joints), whose `idle` clip the player renders.

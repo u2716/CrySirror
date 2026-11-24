@@ -178,14 +178,12 @@ struct Player {
     view_yaw: f32,
     view_pitch: f32,
     controls: bool,
-    /// Native animation state machine and the clip each layer plays.
-    anim: Option<PlayerAnim>,
-}
-
-/// The player's `anim-player` state machine instance and its presented clip.
-struct PlayerAnim {
-    machine: crate::anim_state::Machine,
-    clip: String,
+    /// Native animation state machine and blend-tree controller.
+    anim: Option<crate::player::Controller>,
+    /// Highest height since leaving the ground.
+    air_top: Option<f32>,
+    /// Current follow-camera distance (eases back out after obstruction).
+    view_distance: f32,
 }
 
 /// Engine side of the script natives: spawner entities, prints and fades.
@@ -347,21 +345,23 @@ struct Session {
     /// player uses), loaded with the first skinned model that has no
     /// skeleton of its own; `Some(None)` when unavailable.
     player_rig: Option<Option<(crate::skeleton::Skeleton, Vec<crate::anim::Clip>)>>,
-    /// `anim-player.bin` states.
+    /// `anim-player.bin` states and blend trees.
     anim_table: Option<crate::anim_state::StateTable>,
+    anim_graph: Option<crate::anim_tree::Graph>,
+    /// The player rig's clips by name `StringId`.
+    player_clips: HashMap<u32, crate::player::ClipInfo>,
     /// `spawn-character.bin` package lists, and the NPC rigs loaded from
     /// them by skeleton package.
     characters: Vec<crate::characters::Character>,
     npc_rigs: HashMap<String, Option<(crate::skeleton::Skeleton, Vec<crate::anim::Clip>)>>,
 }
 
-/// Player clips: `proto.pak` (standing pose, the `move` run and `walk`
-/// cycles, the start/stop/turn animations the `anim-player` states name)
-/// and the hurt movement types of `anim-proto-hurt.pak`.
-const PLAYER_CLIPS: &[(&str, &[&str])] = &[
-    ("proto.pak", &["idle", "move", "walk", "run-tense", "walk-tense", "idle^move-b", "move^idle2", "move^turn-180^move"]),
-    ("anim-proto-hurt.pak", &["idle-hurt", "walk-hurt", "walk-hurt-long", "run-hurt-long"]),
-];
+/// Packages holding the player rig's clips: `proto.pak` and the hurt
+/// movement types of `anim-proto-hurt.pak`.
+/// Follow-camera distance behind the player's head, metres.
+const FOLLOW_DISTANCE: f32 = 4.;
+
+const PLAYER_CLIP_PACKAGES: &[&str] = &["proto.pak", "anim-proto-hurt.pak"];
 
 /// The world environment: the level's directional light and ambient term
 /// when known. Native intensities (0.9–19 on the installed levels) are
@@ -542,6 +542,8 @@ impl NaughtyDogVm {
             logo: None,
             player_rig: None,
             anim_table: None,
+            anim_graph: None,
+            player_clips: HashMap::new(),
             characters: Vec::new(),
             npc_rigs: HashMap::new(),
         };
@@ -557,7 +559,16 @@ impl NaughtyDogVm {
             let modules = ArchiveMount::new(dc, context)?;
             let game = Game::boot(&modules, &mut session.stage)?;
             session.characters = crate::game::ModuleSource::read(&modules, "spawn-character").and_then(|b| crate::characters::parse(&b)).unwrap_or_default();
-            session.anim_table = crate::game::ModuleSource::read(&modules, "anim-player").and_then(|b| crate::anim_state::parse(&b)).map_err(|e| session.stage.log(format!("anim-player.bin: {e:#}"))).ok();
+            match crate::game::ModuleSource::read(&modules, "anim-player").and_then(|b| {
+                let graph = crate::anim_tree::Graph::new(&b)?;
+                Ok((crate::anim_state::parse_loaded(&graph.dc)?, graph))
+            }) {
+                Ok((table, graph)) => {
+                    session.anim_table = Some(table);
+                    session.anim_graph = Some(graph);
+                }
+                Err(e) => session.stage.log(format!("anim-player.bin: {e:#}")),
+            }
             session.menu_pages = crate::game::ModuleSource::read(&modules, "menu").and_then(|b| crate::menu::pages(&b)).unwrap_or_else(|e| {
                 session.stage.log(format!("menu.bin: {e:#}"));
                 Vec::new()
@@ -880,8 +891,10 @@ impl NaughtyDogVm {
         if let Some(s) = &spawner {
             session.stage.set_visible(sid(&s.name), true);
         }
-        let anim = session.anim_table.as_ref().filter(|_| entity.is_some()).map(|t| PlayerAnim { machine: crate::anim_state::Machine::new(t), clip: "idle".into() });
-        let mut player = Player { entity, position, yaw, fall: 0., view_yaw: yaw + std::f32::consts::PI, view_pitch: -0.25, controls: true, anim };
+        let anim = session.anim_table.as_ref().filter(|_| entity.is_some()).map(|t| crate::player::Controller::new(t, yaw));
+        // The camera starts behind the player (eye offset `(-sin, cos)` of
+        // the view yaw opposite the facing `(sin, cos)` of the yaw).
+        let mut player = Player { entity, position, yaw, fall: 0., view_yaw: std::f32::consts::PI - yaw, view_pitch: -0.25, controls: true, anim, air_top: None, view_distance: FOLLOW_DISTANCE };
         let below = session.ground.height(position[0], position[2], position[1] + 1.);
         // A spawn more than 8 m above the next surface is a climbing start
         // (hanging, not implemented): it keeps its height.
@@ -896,7 +909,7 @@ impl NaughtyDogVm {
             Err(e) => session.script_error = Some(format!("{e:#}")),
         }
         world.append(&mut session.stage.ops);
-        world.push(Self::follow(session.player.as_ref().expect("player"), &session.ground));
+        world.push(Self::follow(session.player.as_mut().expect("player"), &session.ground, 0.));
         session.started = true;
         Ok(())
     }
@@ -1048,8 +1061,9 @@ impl NaughtyDogVm {
         Ok(Some((skeleton, clips)))
     }
 
-    /// The player skeleton and clips from `actor27.psarc/proto.pak`.
-    fn player_rig(actors: &ArchiveMount) -> Result<Option<(crate::skeleton::Skeleton, Vec<crate::anim::Clip>)>> {
+    /// The player skeleton from `actor27.psarc/proto.pak` and the clips
+    /// named `wanted` (the controller states' blend-tree clips).
+    fn player_rig(actors: &ArchiveMount, wanted: &HashSet<u32>) -> Result<Option<(crate::skeleton::Skeleton, Vec<crate::anim::Clip>)>> {
         if !actors.exists("proto.pak") {
             return Ok(None);
         }
@@ -1059,12 +1073,15 @@ impl NaughtyDogVm {
         };
         let Some(skeleton) = crate::skeleton::of_package(&read("proto.pak")?)? else { return Ok(None) };
         let mut clips = Vec::new();
-        for (package, names) in PLAYER_CLIPS {
+        for package in PLAYER_CLIP_PACKAGES {
             if !actors.exists(package) {
                 continue;
             }
             let loaded = read(package)?;
-            for (n, at) in crate::anim::items(&loaded).filter(|(n, _)| names.contains(n)) {
+            for (n, at) in crate::anim::items(&loaded).filter(|(n, _)| wanted.contains(&sid(n))) {
+                if clips.iter().any(|c: &crate::anim::Clip| c.name == n) {
+                    continue;
+                }
                 let clip = crate::anim::decode(&loaded, at, n, skeleton.animated)?;
                 if clip.hierarchy == skeleton.hash {
                     clips.push(clip);
@@ -1155,14 +1172,17 @@ impl NaughtyDogVm {
     }
 
     /// Third-person camera behind and above the player, pulled in front of
-    /// the first surface between the player's head and the camera.
-    fn follow(p: &Player, ground: &Ground) -> serde_json::Value {
+    /// the first surface between the player's head and the camera at once
+    /// and easing back out (2 m/s).
+    fn follow(p: &mut Player, ground: &Ground, seconds: f32) -> serde_json::Value {
         let target = [p.position[0], p.position[1] + 1.5, p.position[2]];
         let cy = p.view_pitch.cos();
         let dir = [-p.view_yaw.sin() * cy, -p.view_pitch.sin(), p.view_yaw.cos() * cy];
-        let far = 4.;
+        let far = FOLLOW_DISTANCE;
         let want: [f32; 3] = std::array::from_fn(|k| target[k] + dir[k] * far);
-        let d = ground.raycast(target, want).map_or(far, |t| (t * far - 0.25).max(0.3));
+        let free = ground.raycast(target, want).map_or(far, |t| (t * far - 0.3).max(0.5));
+        p.view_distance = if free < p.view_distance { free } else { (p.view_distance + 2. * seconds).min(free) };
+        let d = p.view_distance;
         let eye: [f32; 3] = std::array::from_fn(|k| target[k] + dir[k] * d);
         json!({"op": "set_camera", "camera": {"eye": eye, "target": target, "up": [0.0, 1.0, 0.0], "fov_y_degrees": 60.0, "near": 0.1, "far": 20000.0}})
     }
@@ -1216,42 +1236,93 @@ impl NaughtyDogVm {
                 }
             }
             let len = (mv[0] * mv[0] + mv[1] * mv[1]).sqrt();
+            let heading = (len > 0.).then(|| mv[0].atan2(mv[1]));
             let movement = session.game.as_ref().map_or([0; 2], |g| g.rt.inner.movement);
-            let rig_clips = match &session.player_rig {
-                Some(Some((_, clips))) => clips.as_slice(),
-                _ => &[],
+            let below = session.ground.height(p.position[0], p.position[2], p.position[1] + 0.6);
+            let grounded = p.fall >= 0. && below.is_some_and(|h| h >= p.position[1] - p.fall.max(0.) * seconds - 0.05);
+            let dropped = p.air_top.map_or(0., |top| top - p.position[1]);
+            let ahead = |d: f32| session.ground.height(p.position[0] + p.yaw.sin() * d, p.position[2] + p.yaw.cos() * d, p.position[1] + 0.6);
+            let slope = match (below, ahead(0.5)) {
+                (Some(h0), Some(h1)) if grounded => (h1 - h0) / 0.5,
+                _ => 0.,
             };
             let mut ground_speed = None;
-            if let (Some(anim), Some(table), Some(id)) = (p.anim.as_mut(), session.anim_table.as_ref(), p.entity) {
-                let (speed, op) = drive_player_animation(anim, table, rig_clips, movement, len > 0., down(b::SHIFT), seconds, id);
-                ground_speed = speed;
-                if op.is_some() {
-                    session.stage.log(format!("player animation {}", anim.clip));
+            if let (Some(anim), Some(table), Some(graph), Some(id)) = (p.anim.as_mut(), session.anim_table.as_ref(), session.anim_graph.as_mut(), p.entity) {
+                let running = down(b::SHIFT);
+                let wanted = movement[usize::from(running)];
+                let wanted = if wanted == 0 { sid(if running { "run" } else { "walk" }) } else { wanted };
+                let frame = crate::player::Frame {
+                    heading,
+                    jump: input.buttons_pressed & b::SPACE != 0 && p.controls,
+                    grounded,
+                    dropped,
+                    slope,
+                    movement: graph.movement_index(wanted).or_else(|| graph.movement_index(sid("run"))).unwrap_or(0),
+                    weapon: graph.weapon_index(sid("no-weapon")).unwrap_or(1),
+                    seconds,
+                };
+                match anim.step(graph, table, &session.player_clips, &frame) {
+                    Ok(step) => {
+                        if let Some(state) = &step.state {
+                            session.stage.log(format!("player state {state} at {:?} yaw {:.2}: {}", p.position.map(|v| (v * 100.).round() / 100.), anim.yaw, step.layers.iter().map(|l| format!("{}×{:.2}", l.clip, l.weight)).collect::<Vec<_>>().join(" ")));
+                        }
+                        if let Some(lift) = step.lift {
+                            p.fall = -lift;
+                        }
+                        ground_speed = Some(step.speed);
+                        p.yaw = anim.yaw;
+                        let layers: Vec<_> = step.layers.iter().map(|l| json!({"clip": l.clip, "time": l.time, "speed": 0.0, "weight": l.weight, "target_weight": l.weight, "looping": true, "additive": l.additive})).collect();
+                        world.push(json!({"op": "set_animation", "id": id, "animation": {"layers": layers}}));
+                    }
+                    Err(e) => session.stage.log(format!("player animation: {e:#}")),
                 }
-                world.extend(op);
             }
-            if len > 0. {
-                let speed = ground_speed.unwrap_or(if down(b::SHIFT) { 6. } else { 2.5 }) * seconds / len;
-                let next = [p.position[0] + mv[0] * speed, p.position[2] + mv[1] * speed];
-                // Step up at most 0.6 m; a missing surface ahead blocks.
-                if let Some(h) = session.ground.height(next[0], next[1], p.position[1] + 0.6) {
-                    if h > p.position[1] - 3. || session.ground.is_empty() {
+            let speed = match ground_speed {
+                Some(v) => v,
+                None if len > 0. => {
+                    p.yaw = mv[0].atan2(mv[1]);
+                    if down(b::SHIFT) { 6. } else { 2.5 }
+                }
+                None => 0.,
+            };
+            if speed > 0.01 {
+                let step = speed * seconds;
+                let (dx, dz) = (p.yaw.sin() * step, p.yaw.cos() * step);
+                // Walls stop the player (rays at knee and chest height,
+                // 0.3 m ahead); blocked moves slide along one axis. Step up
+                // at most 0.6 m; a missing surface ahead blocks.
+                for (mx, mz) in [(dx, dz), (dx, 0.), (0., dz)] {
+                    if mx == 0. && mz == 0. {
+                        continue;
+                    }
+                    let next = [p.position[0] + mx, p.position[2] + mz];
+                    let len = (mx * mx + mz * mz).sqrt();
+                    let reach = (len + 0.3) / len;
+                    let wall = [0.4, 1.2].iter().any(|h| {
+                        let from = [p.position[0], p.position[1] + h, p.position[2]];
+                        session.ground.raycast(from, [from[0] + mx * reach, from[1], from[2] + mz * reach]).is_some()
+                    });
+                    let floor = session.ground.height(next[0], next[1], p.position[1] + 0.6);
+                    if !wall && (floor.is_some_and(|h| h > p.position[1] - 3. || !grounded) || session.ground.is_empty()) {
                         p.position[0] = next[0];
                         p.position[2] = next[1];
+                        break;
                     }
                 }
-                p.yaw = mv[0].atan2(mv[1]);
             }
             match session.ground.height(p.position[0], p.position[2], p.position[1] + 0.6) {
-                Some(h) if h >= p.position[1] - p.fall * seconds - 0.05 => {
+                Some(h) if p.fall >= 0. && h >= p.position[1] - p.fall * seconds - 0.05 => {
                     p.position[1] = h;
                     p.fall = 0.;
+                    p.air_top = None;
                 }
                 // Climbing and hanging are not implemented: standing still
                 // above a drop of more than 8 m (the hanging car at the
                 // start of `train-wreck-climb`) holds the player in place.
-                Some(h) if p.fall == 0. && p.position[1] - h > 8. => {}
+                Some(h) if p.fall == 0. && p.air_top.is_none() && p.position[1] - h > 8. => {}
                 Some(_) => {
+                    let top = p.air_top.get_or_insert(p.position[1]);
+                    *top = top.max(p.position[1]);
                     p.fall = (p.fall + 9.8 * seconds).min(30.);
                     p.position[1] -= p.fall * seconds;
                 }
@@ -1260,7 +1331,16 @@ impl NaughtyDogVm {
             if let Some(id) = p.entity {
                 world.push(json!({"op": "set_transform", "id": id, "transform": {"translation": p.position, "rotation_degrees": [0.0, p.yaw.to_degrees(), 0.0], "scale": [1.0, 1.0, 1.0]}}));
             }
-            world.push(Self::follow(p, &session.ground));
+            // The camera drifts behind a player moving away from it unless
+            // the view keys turn it.
+            if heading.is_some() && !(down(b::LEFT) || down(b::RIGHT)) {
+                let behind = std::f32::consts::PI - p.yaw;
+                let d = (behind - p.view_yaw + std::f32::consts::PI).rem_euclid(2. * std::f32::consts::PI) - std::f32::consts::PI;
+                if d.abs() < 2. {
+                    p.view_yaw += d * (1.5 * seconds).min(1.);
+                }
+            }
+            world.push(Self::follow(p, &session.ground, seconds));
         }
         if let (Some(game), Some(modules)) = (session.game.as_mut(), session.modules.as_ref()) {
             if session.script_error.is_none() {
@@ -1360,64 +1440,6 @@ impl NaughtyDogVm {
     }
 }
 
-/// The clip a player animation state presents. States play their logical
-/// animation (a clip of the player rig); locomotion follows the movement
-/// type the scripts set (`set-walk-type` walking, `set-run-type` with
-/// Shift), whose option names are clips (`walk-hurt`), else `walk` /
-/// `move`; hurt movement types stand in `idle-hurt` and skip the
-/// non-hurt start and stop animations.
-fn state_clip(state: &crate::anim_state::State, movement: [u32; 2], running: bool, clips: &[crate::anim::Clip]) -> String {
-    let by_sid = |id: u32| clips.iter().find(|c| sid(&c.name) == id).map(|c| c.name.clone());
-    let locomotion = by_sid(movement[usize::from(running)]).unwrap_or_else(|| if running { "move".into() } else { "walk".into() });
-    let hurt = locomotion.contains("hurt");
-    let rest = if hurt { "idle-hurt" } else { "idle" };
-    let normal_run = locomotion == "move";
-    match state.name.as_str() {
-        "idle" => rest.into(),
-        "run" => locomotion,
-        "idle-run-f" if normal_run => "idle^move-b".into(),
-        "idle-run-f" => locomotion,
-        "run-idle" if normal_run => "move^idle2".into(),
-        "run-idle" => rest.into(),
-        _ => by_sid(state.animation).unwrap_or_else(|| rest.into()),
-    }
-}
-
-/// One frame of the player's `anim-player` state machine: input becomes
-/// the native requests (`idle-run-f` when moving from rest, `run-idle`
-/// when stopping), the machine advances by the presented clip's length
-/// and takes its `auto` transitions, and a change of clip cross-fades the
-/// entity's animation layers over the transition's fade time. Returns the
-/// ground speed of a moving state (the clip's `align` root motion) and
-/// the world operation.
-#[allow(clippy::too_many_arguments)]
-fn drive_player_animation(anim: &mut PlayerAnim, table: &crate::anim_state::StateTable, clips: &[crate::anim::Clip], movement: [u32; 2], moving: bool, running: bool, seconds: f32, entity: u32) -> (Option<f32>, Option<serde_json::Value>) {
-    let name_of = |m: &crate::anim_state::Machine| table.get(m.state).map(|s| s.name.clone()).unwrap_or_default();
-    let current = name_of(&anim.machine);
-    let locomotion = matches!(current.as_str(), "run" | "idle-run-f");
-    if moving && !locomotion && !anim.machine.request(table, sid("idle-run-f")) {
-        anim.machine.force(sid("run"), 0.2);
-    } else if !moving && locomotion && !anim.machine.request(table, sid("run-idle")) {
-        anim.machine.force(sid("run-idle"), 0.2);
-    }
-    let clip_of = |state: u32| table.get(state).map(|s| state_clip(s, movement, running, clips));
-    let duration = |name: &str| clips.iter().find(|c| c.name == name).map_or(0., |c| if c.frames > 1 { c.frames as f32 / c.fps.max(1.) } else { 0. });
-    let presented = clip_of(anim.machine.state).unwrap_or_else(|| "idle".into());
-    anim.machine.advance(table, seconds, duration(&presented));
-    let clip = clip_of(anim.machine.state).unwrap_or_else(|| "idle".into());
-    let speed = matches!(name_of(&anim.machine).as_str(), "run" | "idle-run-f").then(|| clips.iter().find(|c| c.name == clip).map_or(0., |c| c.root_speed)).filter(|v| *v > 0.2);
-    if clip == anim.clip {
-        return (speed, None);
-    }
-    let fade = anim.machine.fade.max(0.05);
-    let layers = json!([
-        {"clip": anim.clip, "time": anim.machine.previous.map_or(0., |p| p.1), "weight": 1.0, "target_weight": 0.0, "fade": 1.0 / fade, "looping": true},
-        {"clip": clip, "time": 0.0, "weight": 0.0, "target_weight": 1.0, "fade": 1.0 / fade, "looping": true}
-    ]);
-    anim.clip = clip;
-    (speed, Some(json!({"op": "set_animation", "id": entity, "animation": {"layers": layers}})))
-}
-
 impl NaughtyDogVm {
     /// Upload an art group's meshes once and spawn an entity per spawner.
     /// An art group without an installed package or render meshes is
@@ -1442,10 +1464,25 @@ impl NaughtyDogVm {
         let own = crate::skeleton::of_package(&loaded)?;
         let binding = if skinned && own.is_none() { crate::characters::rig_of(&session.characters, art) } else { None };
         if matches!(binding, Some((None, _))) && session.player_rig.is_none() {
-            session.player_rig = Some(Self::player_rig(&session.actors).unwrap_or_else(|e| {
+            let mut wanted: HashSet<u32> = [sid("idle")].into();
+            if let (Some(graph), Some(table)) = (session.anim_graph.as_ref(), session.anim_table.as_ref()) {
+                for state in crate::player::STATES {
+                    if let Some(s) = table.get(sid(state)) {
+                        wanted.extend(graph.clips(s.tree));
+                    }
+                }
+            }
+            session.player_rig = Some(Self::player_rig(&session.actors, &wanted).unwrap_or_else(|e| {
                 session.stage.log(format!("player rig: {e:#}"));
                 None
             }));
+            if let Some(Some((_, clips))) = &session.player_rig {
+                session.player_clips = clips
+                    .iter()
+                    .map(|c| (sid(&c.name), crate::player::ClipInfo { name: c.name.clone(), duration: if c.frames > 1 { c.frames as f32 / c.fps.max(1.) } else { 0. }, speed: c.root_speed, additive: c.name.ends_with("-add") }))
+                    .collect();
+                session.stage.log(format!("player rig: {} of {} blend-tree clips", clips.len(), wanted.len()));
+            }
         }
         if let Some((Some(base), anims)) = &binding {
             if !session.npc_rigs.contains_key(base) {

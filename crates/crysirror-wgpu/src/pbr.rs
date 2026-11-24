@@ -3323,6 +3323,7 @@ impl PbrRenderer {
                         weight: l.weight,
                         looping: l.looping,
                         layer: l.blend_layer,
+                        additive: l.additive,
                     });
                 }
                 pose_keys.push(instance.key);

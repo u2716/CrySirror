@@ -13,11 +13,8 @@
 //! ends (`idle-run-f` → `run` in 0.2 s, `run-idle` → `idle` in 2 s) and a
 //! state whose `auto` targets itself loops (`run`).
 //!
-//! The blend trees (nested blend and select nodes whose weights come from
-//! script lambdas) are not evaluated: a state plays its logical animation,
-//! or the clip named by the movement type the scripts set (`set-walk-type`
-//! / `set-run-type`, the options of the `move` overlay) where the tree
-//! selects by it (SATD-nd-retail-runtime).
+//! The blend trees at +0x10 are evaluated by [`crate::anim_tree`]; the
+//! player's controller is [`crate::player`].
 use crate::dc::{Dc, sid};
 use anyhow::{Context, Result, ensure};
 
@@ -34,6 +31,8 @@ pub struct State {
     pub id: u32,
     /// Logical animation `StringId`.
     pub animation: u32,
+    /// Blend-tree node address in the module (see [`crate::anim_tree`]).
+    pub tree: u32,
     pub transitions: Vec<Transition>,
 }
 
@@ -62,7 +61,13 @@ impl StateTable {
 /// Parse `anim-player.bin`.
 pub fn parse(bytes: &[u8]) -> Result<StateTable> {
     let mut dc = Dc::default();
-    let module = dc.load(sid("anim-player"), bytes)?.clone();
+    dc.load(sid("anim-player"), bytes)?;
+    parse_loaded(&dc)
+}
+
+/// The states of an `anim-player` module already loaded into `dc`.
+pub fn parse_loaded(dc: &Dc) -> Result<StateTable> {
+    let module = dc.module(sid("anim-player")).context("anim-player module not loaded")?;
     let m = &dc.mem;
     let actor = module.entries.iter().map(|(_, a)| *a).find(|a| m.type_of(*a).ok() == Some(sid("anim-actor"))).context("anim-player.bin without anim-actor")?;
     let count = m.u32(actor + 0x30)?;
@@ -84,7 +89,7 @@ pub fn parse(bytes: &[u8]) -> Result<StateTable> {
                 transitions.push(Transition { request: m.u32(e)?, target: m.u32(e + 0xc)?, fade: m.f32(e + 0x18)? });
             }
         }
-        states.push(State { name, id: m.u32(s + 4)?, animation: m.u32(s + 0x14)?, transitions });
+        states.push(State { name, id: m.u32(s + 4)?, animation: m.u32(s + 0x14)?, tree: m.u32(s + 0x10)?, transitions });
     }
     Ok(StateTable { states, initial })
 }

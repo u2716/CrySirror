@@ -115,3 +115,10 @@ Player state machine (2026-11-25): `examples/anim_states anim-player.bin idle ru
 
 Log-space rotations (2026-11-25): with the `CalcInfluences` formulas, `FRAMES=1 examples/clip_pose proto.pak proto.pak walk` reports no unsupported opcodes; the left wrist stays at 0.85–0.87 m height and 0.26–0.29 m from the body axis over the cycle (the constant `idle` pose has 0.91 m and 0.26 m), the `l_shoulder` rotation equals `idle`'s to within 0.04 per component up to sign, and the knee flexes about 23° at frame 0. Before the change the wrist stayed 0.56 m out at 0.97 m (arms raised). In `museum-steam-vault`, with W held from frame 1000 and Shift from frame 1100, the log shows `player animation walk` then `move`; the frame-1060 capture shows the walk with arms at the sides. The frame-1160 capture shows the follow camera inside the player model and the railing during the run.
 
+Blend trees and controller (2026-11-25):
+
+- **Offline evaluation:** `examples/anim_tree anim-player.bin` evaluates all 988 states without errors. `anim_tree anim-player.bin run no-weapon idle run run@28=0.5` gives `idle` plus `idle-base-big-add` (additive), `move`, and `move` 0.5 / `move-lean-r` 0.5. With `walk-hurt` the same states give `idle-hurt` and `walk-hurt-long`.
+- **Museum run:** in `museum-steam-vault` with W, Shift, release, Space, Shift+W and Space, the log shows the states `ambient-casual`, `idle-run-f`, `run`, `run-idle`, `idle`, `jump-in-place`, `jump-in-place-land`, `idle-run-f`, `run-jump-long`, `jump-long` (0.8 m above the floor), `jump-long-land-run`, `run-idle` and `idle`. The rig loads 138 of the 206 blend-tree clips.
+- **Captures:** the frame-1180 capture shows the run behind the railing and the frame-1460 capture the long-jump pose, with the camera behind the player.
+- **Known defect:** stretched triangles at the shoulder and hip remain.
+

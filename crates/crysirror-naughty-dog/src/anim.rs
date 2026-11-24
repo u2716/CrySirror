@@ -208,7 +208,6 @@ pub fn decode(p: &Loaded, payload: usize, name: &str, animated: usize) -> Result
     let mut keys: Vec<Vec<Option<Value>>> = Vec::new();
     let mut outputs: Vec<(usize, usize)> = Vec::new();
     let mut unsupported = Vec::new();
-    let mut inferred: Vec<&'static str> = Vec::new();
     let mut sizes: Vec<u8> = Vec::new();
     let list = |off: usize, n: usize| -> Result<Vec<usize>> { (0..n).map(|i| Ok(usize::from(u16_at(base + off + 2 * i)?))).collect() };
     let mut at = program_block + 0x10;
@@ -389,7 +388,6 @@ pub fn decode(p: &Loaded, payload: usize, name: &str, animated: usize) -> Result
             }
         }
     }
-    unsupported.extend(inferred);
     unsupported.sort_unstable();
     unsupported.dedup();
     let root_speed = align_speed(p, payload, frames, fps).unwrap_or(0.);

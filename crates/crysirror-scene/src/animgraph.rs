@@ -241,6 +241,7 @@ fn motion_layers(
                 looping,
                 source: None,
                 blend_layer: 0,
+                additive: false,
             });
         }
     };
@@ -451,6 +452,7 @@ pub fn compose(
             looping: false,
             source: None,
             blend_layer: 0,
+            additive: false,
         });
     }
     layers.retain(|l| l.weight > 1e-4);

@@ -108,6 +108,7 @@ impl Skeleton {
                 weight: a.weight(now),
                 looping: a.looping,
                 layer: a.layer,
+                additive: false,
             })
             .collect();
         let local = anim::local_pose_layered(&self.model, &layers);
