@@ -40,7 +40,7 @@
 //!   installed materials; slot 0 and the last slot are runtime
 //!   placeholders.
 use crate::{geometry::decode_indices, package::Directory};
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use crysirror_core::service::AssetReader;
 use crysirror_resource::read_exact_at;
 use std::collections::HashSet;
@@ -48,6 +48,9 @@ use std::collections::HashSet;
 pub const ATTR_POSITION: u8 = 1;
 pub const ATTR_UV: u8 = 0x11;
 pub const ATTR_NORMAL: u8 = 0x02;
+/// Three unsigned bytes per vertex with 7–24 distinct values per fragment on
+/// `menu-temple`: layer blend masks of two-layer materials.
+pub const ATTR_LAYER_MASK: u8 = 0x15;
 /// Texture coordinates are stored in 1/256 of the texture: uniquely
 /// mapped statue fragments of `menu-temple` span at most 256 units.
 const UV_UNIT: f32 = 256.;
@@ -96,6 +99,11 @@ impl Loaded {
         Ok(Self { data, directory, pointers })
     }
 
+    /// Offsets of the relocated pointer words.
+    pub fn pointers(&self) -> impl Iterator<Item = usize> + '_ {
+        self.pointers.iter().copied()
+    }
+
     pub fn ptr(&self, at: usize) -> Result<usize> {
         ensure!(self.pointers.contains(&at), "ND word at {at:#x} is not a pointer");
         Ok(be32(&self.data, at)? as usize)
@@ -116,6 +124,9 @@ pub struct Fragment {
     pub positions: Vec<[f32; 3]>,
     /// Unit normals, or empty when the fragment's normal kind is unknown.
     pub normals: Vec<[f32; 3]>,
+    /// Layer masks (attribute 0x15) in 0..1, or empty when not stored per
+    /// vertex.
+    pub masks: Vec<[f32; 3]>,
     pub uvs: Vec<[f32; 2]>,
     pub triangles: Vec<[u16; 3]>,
 }
@@ -210,18 +221,29 @@ fn raw_attribute<const N: usize>(p: &Loaded, f: usize, id: u8, vertices: usize) 
 
 /// Kind-0 byte normals of fragment `f`, if present.
 fn byte_normals(p: &Loaded, f: usize, vertices: usize) -> Result<Option<Vec<[f32; 3]>>> {
+    Ok(bytes3(p, f, vertices, ATTR_NORMAL)?.map(|v| v.iter().map(|v| v.map(|x| x / 127.5 - 1.)).collect()))
+}
+
+/// Kind-0 layer masks of fragment `f` in 0..1, if present.
+fn layer_masks(p: &Loaded, f: usize, vertices: usize) -> Result<Option<Vec<[f32; 3]>>> {
+    Ok(bytes3(p, f, vertices, ATTR_LAYER_MASK)?.map(|v| v.iter().map(|v| v.map(|x| x / 255.)).collect()))
+}
+
+/// Attribute `id` stored as kind 0 with three 8-bit components, as raw
+/// byte values.
+fn bytes3(p: &Loaded, f: usize, vertices: usize, id: u8) -> Result<Option<Vec<[f32; 3]>>> {
     let desc = p.ptr(f + 0x28)?;
     for a in 0..p.data[f + 0x2f] as usize {
         let at = desc + 8 + 8 * a;
         let row: [u8; 8] = p.data.get(at..at + 8).context("ND descriptor outside package")?.try_into()?;
-        if row[0] != ATTR_NORMAL {
+        if row[0] != id {
             continue;
         }
         if row[1] != 0x03 || row[4..7] != [8, 8, 8] {
             return Ok(None);
         }
         let values = unpack(&p.data, p.ptr(f + 0x50 + 8 * a)?, vertices, &row[4..7])?;
-        return Ok(Some(values.iter().map(|v| std::array::from_fn(|k| v[k] as f32 / 127.5 - 1.)).collect()));
+        return Ok(Some(values.iter().map(|v| std::array::from_fn(|k| v[k] as f32)).collect()));
     }
     Ok(None)
 }
@@ -323,16 +345,18 @@ pub fn prototype_meshes(p: &Loaded, payload: usize) -> Result<Vec<Mesh>> {
             // coordinates in format 0xb8, not yet decoded: it keeps no UVs.
             let uv = raw_attribute::<2>(p, f, ATTR_UV, vertices).ok().flatten();
             let normals = byte_normals(p, f, vertices)?.unwrap_or_default();
+            let masks = layer_masks(p, f, vertices)?.unwrap_or_default();
             let triangles = decode_indices(&p.data[p.ptr(f + 0x48)?..], usize::from(p.u16(f + 0x40)?), vertices)?;
-            raws.push(Some((pos, uv, normals, triangles)));
+            raws.push(Some((pos, uv, normals, masks, triangles)));
         }
         let pos_grid = grid_bits(&raws.iter().flatten().map(|r| &r.0).collect::<Vec<_>>())?;
         let uv_grid = grid_bits(&raws.iter().flatten().filter_map(|r| r.1.as_ref()).collect::<Vec<_>>())?;
         let fragments = raws
             .into_iter()
             .map(|r| match r {
-                None => Fragment { positions: Vec::new(), normals: Vec::new(), uvs: Vec::new(), triangles: Vec::new() },
-                Some((pos, uv, normals, triangles)) => Fragment {
+                None => Fragment { positions: Vec::new(), normals: Vec::new(), masks: Vec::new(), uvs: Vec::new(), triangles: Vec::new() },
+                Some((pos, uv, normals, masks, triangles)) => Fragment {
+                    masks,
                     positions: resolve(&pos, pos_grid, 1.),
                     normals,
                     uvs: uv.map(|u| resolve(&u, uv_grid, 1. / UV_UNIT)).unwrap_or_default(),

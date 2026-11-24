@@ -37,9 +37,49 @@ pub struct Spawner {
     pub rotation: [f32; 4],
 }
 
-/// Spawners of a `SPAWNER_GROUP` payload (`u32 0`, spawner pointer table,
-/// count) that name an art group.
-pub fn spawners(p: &mesh::Loaded, payload: usize) -> Result<Vec<Spawner>> {
+/// Any `SPAWNER_GROUP` spawner with its process type (+0x30) and schema
+/// properties (+0x44: `{property array, count, 0}`; a property is
+/// `{StringId, value}` and a value `{u16 type, u16 size, data}` with types
+/// 1 integer, 4 float, 5 string (data is a text pointer) and 0xd
+/// `StringId`; other types are skipped).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SpawnerRecord {
+    pub name: String,
+    pub art_group: Option<String>,
+    pub process_type: u32,
+    pub flags: u32,
+    pub position: [f32; 3],
+    pub rotation: [f32; 4],
+    pub properties: Vec<(u32, crate::ss::Property)>,
+}
+
+fn text_at(p: &mesh::Loaded, at: usize) -> String {
+    let bytes = p.data.get(at..).unwrap_or_default();
+    let end = bytes.iter().take(256).position(|b| *b == 0).unwrap_or(0);
+    String::from_utf8_lossy(&bytes[..end]).into_owned()
+}
+
+/// A spawner's world placement: its locator composed with the parent
+/// spawner's (+0x40) world placement, recursively.
+fn spawner_world(p: &mesh::Loaded, s: usize, depth: u32) -> Result<Option<(glam::Vec3, glam::Quat)>> {
+    let f = |k: usize| p.f32(s + 4 * k);
+    let position = [f(0)?, f(1)?, f(2)?];
+    let rotation = [f(4)?, f(5)?, f(6)?, f(7)?];
+    if !position.iter().chain(&rotation).all(|v| v.is_finite()) {
+        return Ok(None);
+    }
+    let (t, q) = (glam::Vec3::from_array(position), glam::Quat::from_array(rotation).normalize());
+    match p.ptr(s + 0x40) {
+        Ok(parent) if parent != s && depth < 16 => Ok(spawner_world(p, parent, depth + 1)?.map(|(pt, pq)| (pt + pq * t, (pq * q).normalize()))),
+        _ => Ok(Some((t, q))),
+    }
+}
+
+/// Every spawner of a `SPAWNER_GROUP` payload (`u32 0`, spawner pointer
+/// table, count) with finite placement. Positions and rotations are in the
+/// world: a spawner with a parent (+0x40) is placed in its parent's frame.
+pub fn spawner_records(p: &mesh::Loaded, payload: usize) -> Result<Vec<SpawnerRecord>> {
+    use crate::ss::Property;
     let count = p.u32(payload + 8)? as usize;
     anyhow::ensure!(count <= 65536, "ND spawner count");
     let mut out = Vec::new();
@@ -47,24 +87,53 @@ pub fn spawners(p: &mesh::Loaded, payload: usize) -> Result<Vec<Spawner>> {
         return Ok(out);
     }
     let table = p.ptr(payload + 4)?;
-    let text = |at: usize| -> String {
-        let bytes = p.data.get(at..).unwrap_or_default();
-        let end = bytes.iter().take(256).position(|b| *b == 0).unwrap_or(0);
-        String::from_utf8_lossy(&bytes[..end]).into_owned()
-    };
     for i in 0..count {
         let s = p.ptr(table + 4 * i)?;
-        let Ok(art) = p.ptr(s + 0x34) else { continue };
-        let f = |k: usize| p.f32(s + 4 * k);
-        let position = [f(0)?, f(1)?, f(2)?];
-        let rotation = [f(4)?, f(5)?, f(6)?, f(7)?];
-        if !position.iter().chain(&rotation).all(|v| v.is_finite()) {
-            continue;
+        let Some((t, q)) = spawner_world(p, s, 0)? else { continue };
+        let (position, rotation) = (t.to_array(), q.to_array());
+        let mut properties = Vec::new();
+        if let Ok(schema) = p.ptr(s + 0x44) {
+            let n = p.u32(schema + 4)? as usize;
+            anyhow::ensure!(n <= 4096, "ND spawner property count");
+            if let Ok(props) = p.ptr(schema) {
+                for k in 0..n {
+                    let id = p.u32(props + 8 * k)?;
+                    let Ok(v) = p.ptr(props + 8 * k + 4) else { continue };
+                    let Ok(data) = p.ptr(v + 4) else { continue };
+                    let value = match p.u16(v)? {
+                        1 => Property::Int(p.u32(data)? as i32),
+                        4 => Property::Float(p.f32(data)?),
+                        // The string value holds a pointer to the text.
+                        5 => match p.ptr(data) {
+                            Ok(t) => Property::Str(text_at(p, t)),
+                            Err(_) => continue,
+                        },
+                        0xd => Property::Sid(p.u32(data)?),
+                        _ => continue,
+                    };
+                    properties.push((id, value));
+                }
+            }
         }
-        let name = p.ptr(s + 0x20).map(text).unwrap_or_default();
-        out.push(Spawner { name, art_group: text(art), position, rotation });
+        out.push(SpawnerRecord {
+            name: p.ptr(s + 0x20).map(|a| text_at(p, a)).unwrap_or_default(),
+            art_group: p.ptr(s + 0x34).ok().map(|a| text_at(p, a)),
+            process_type: p.u32(s + 0x30)?,
+            flags: p.u32(s + 0x38)?,
+            position,
+            rotation,
+            properties,
+        });
     }
     Ok(out)
+}
+
+/// Spawners of a `SPAWNER_GROUP` payload that name an art group.
+pub fn spawners(p: &mesh::Loaded, payload: usize) -> Result<Vec<Spawner>> {
+    Ok(spawner_records(p, payload)?
+        .into_iter()
+        .filter_map(|s| Some(Spawner { art_group: s.art_group?, name: s.name, position: s.position, rotation: s.rotation }))
+        .collect())
 }
 
 /// The level's directional light and ambient term from `LIGHT_TABLE_1`.
@@ -143,6 +212,19 @@ pub fn package_meshes(source: &dyn AssetReader, directory: &Directory, limit: u6
         meshes.extend(mesh::prototype_meshes(&loaded, item.payload_offset as usize)?);
     }
     Ok(meshes)
+}
+
+/// Art-group (actor) meshes carry no instance records: each is placed once
+/// in the spawner's frame. Give such meshes one identity instance without
+/// a culling sphere, so [`placement`] keeps the model origin.
+pub fn place_art_group(meshes: &mut [Mesh]) {
+    const IDENTITY: [f32; 16] = [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.];
+    for m in meshes {
+        if m.instances.is_empty() {
+            m.instances.push(IDENTITY);
+            m.spheres.clear();
+        }
+    }
 }
 
 /// Axis-aligned bounds of all positions, in native units.

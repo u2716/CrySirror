@@ -14,7 +14,7 @@ pub(super) fn detect(dir: &SourcePath, names: &[String], name: &str) -> Result<O
     ensure!(game == "PS3_GAME", "Naughty Dog data must be under PS3_GAME");
     Ok(Some(Plan {
         engine: "Naughty Dog (Uncharted 2)",
-        project: project(name, [1280, 720], crysirror_naughty_dog::ENGINE_ID, json!({"level": "menu-temple"})),
+        project: project(name, [1280, 720], crysirror_naughty_dog::ENGINE_ID, json!({})),
         profiles: std::collections::BTreeMap::new(),
         mounts: Vec::new(),
         evidence: Vec::new(),

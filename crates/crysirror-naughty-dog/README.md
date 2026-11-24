@@ -29,4 +29,18 @@ The command reads the level declaration, mounts the eight archives in place, dec
 
 The 0xa79 page/item layout was independently checked on the local installation against the [package layout research by icemesh at `3e3025c`](https://github.com/icemesh/big2-ps3-pak-research/blob/3e3025cc9afc2cbf8e6c0e5a36466d6a72004244/big2-ps3-pak-research/src/package/package-def.h). The PSARC layout was checked against its eight on-disc manifests and [libPSARC format notes](https://github.com/GaticusHax/libPSARC/wiki/Documentation-libPSARC-PSARC-File-Format). The implementation treats all offsets as checked integer data.
 
-Native PPU behaviour is analyzed from an owner-supplied decrypted `EBOOT.elf` beside the installed `EBOOT.BIN`. Neither file is distributed. `crysirror play GAME_DIR` detects the installation and opens a level viewer (`naughty-dog` adapter, `src/adapter.rs`). It starts at `menu-temple` and uses a level's `CAMERA_TABLE_1` start camera when one is installed. It loads the packages of the level's `cache` levels and places prototype instances by their world matrices. Page Down/Page Up step through the `pak22.txt` levels, WASD/QE move the camera, arrows turn it and Shift moves faster. The viewer presents the level packages' background and prototype meshes with base-colour textures. The level's original camera, lighting, actors and scripts are not used. Native boot, animation, collision, scripting and save semantics remain open. The disc is an input format. Desktop, browser and console gameplay are unverified. See [validated samples](../../docs/validation/uncharted2.md) and [SATD-nd-retail-runtime](SATD.md).
+Native PPU behaviour is analyzed from an owner-supplied decrypted `EBOOT.elf` beside the installed `EBOOT.BIN`. Neither file is distributed. The script ABI, opcode table and native entry points are recorded in [NATIVE_ABI.md](NATIVE_ABI.md).
+
+## Player
+
+`crysirror play GAME_DIR` detects the installation and starts the `naughty-dog` adapter (`src/adapter.rs`) in task mode:
+
+1. `src/game.rs` loads `dc1.psarc/startup.bin`, runs its `top-level` lambda in the script interpreter (`src/script.rs`) and loads the 86 modules it requests.
+2. The task graph (`src/task.rs`) selects the first story subnode (`{"task": NAME}` selects another). Its level, the level's `cache` levels and the node's world level load from `pak22.psarc`. The world package's load regions (`src/region.rs`) run their scheme lambda in the interpreter and add the displayed levels.
+3. Spawners are placed in world space (parent spawners applied) with their art groups from `actor27.psarc`. Spawners flagged 0x40000000 start hidden. The player model stands at the subnode's continue spawner.
+4. Every spawner with a `state-script` property runs as a process (`src/ss.rs`), and each frame advances these processes. Natives act on spawned entities, the screen fade, task state and process variables. Unimplemented natives return 0 and are listed in the session diagnostics.
+5. `task-subnode-complete` and movie subnodes advance the task. A movie plays `movie1/NAME.m2v` through the shared MPEG decoder. Enter or Escape skips it. A movie over the runtime's 64 MiB world-video read limit is skipped.
+
+Controls: WASD move the player on walkable level and prop surfaces (Shift runs), arrows orbit the camera, Page Down/Page Up step through task subnodes. `{"level": NAME}` without a task opens the free-camera level viewer (WASD/QE, arrows, Page Down/Up through `pak22.txt`).
+
+Native animation, collision, AI, audio banks, HUD, saves and most of the 833 natives are not executed. Desktop, browser and console gameplay are unverified. See [validated samples](../../docs/validation/uncharted2.md) and [SATD-nd-retail-runtime](SATD.md).
