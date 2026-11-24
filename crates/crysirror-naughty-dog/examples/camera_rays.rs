@@ -27,7 +27,7 @@ fn main() -> Result<()> {
                 for f in &m.fragments {
                     for tri in &f.triangles {
                         tris.push(tri.map(|v| {
-                            let p = f.positions[v as usize].map(|c| c * scene::METRES_PER_UNIT);
+                            let p = f.positions[v as usize].map(|c| c * m.unit);
                             std::array::from_fn(|c| p[0] * t[c] + p[1] * t[4 + c] + p[2] * t[8 + c] + t[12 + c])
                         }));
                     }

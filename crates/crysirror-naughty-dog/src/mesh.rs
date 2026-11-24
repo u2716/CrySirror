@@ -167,6 +167,12 @@ pub struct Mesh {
     /// Row-major world matrices in metres (`p' = p · M`, translation in
     /// row 3), one per placed instance.
     pub instances: Vec<[f32; 16]>,
+    /// Bits of the mesh's position grid (the deepest kind-4 depth or the
+    /// inferred kind-6 grid).
+    pub grid_bits: u32,
+    /// Metres per decoded position unit: centimetres for level meshes;
+    /// art-group meshes set theirs in [`crate::scene::place_art_group`].
+    pub unit: f32,
     /// Each instance's culling sphere (centre in metres, radius).
     pub spheres: Vec<[f32; 4]>,
 }
@@ -382,7 +388,7 @@ pub fn prototype_meshes(p: &Loaded, payload: usize) -> Result<Vec<Mesh>> {
             ensure!(first + n <= fragments.len(), "ND mesh group range");
             groups.push(Group { material: material(p, p.ptr(p.ptr(row)?)?)?, fragments: first..first + n });
         }
-        meshes.push(Mesh { fragments, groups, instances, spheres });
+        meshes.push(Mesh { fragments, groups, instances, spheres, grid_bits: pos_grid, unit: crate::scene::METRES_PER_UNIT });
     }
     Ok(meshes)
 }

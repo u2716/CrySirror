@@ -225,10 +225,17 @@ pub fn package_meshes(source: &dyn AssetReader, directory: &Directory, limit: u6
 
 /// Art-group (actor) meshes carry no instance records: each is placed once
 /// in the spawner's frame. Give such meshes one identity instance without
-/// a culling sphere, so [`placement`] keeps the model origin.
+/// a culling sphere, so [`placement`] keeps the model origin, and their
+/// unit: millimetres × 2^(N − 12) for an N-bit position grid. Checked
+/// against the art groups' `vis_sphere` tags (player models 1.01, crate
+/// 1.10, oil drum 0.94, chained lift 0.94; `ice-t-gear-8m` with an 18-bit
+/// and `ice-t-gear-8m-bevel` with a 12-bit grid both give 6.3 m) and the
+/// crate's collision box (1 m). Level meshes keep centimetres although
+/// they also use 18-bit grids.
 pub fn place_art_group(meshes: &mut [Mesh]) {
     const IDENTITY: [f32; 16] = [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.];
     for m in meshes {
+        m.unit = 2f32.powi(m.grid_bits as i32 - 12) * 0.001;
         if m.instances.is_empty() {
             m.instances.push(IDENTITY);
             m.spheres.clear();
@@ -266,7 +273,7 @@ pub fn placed_bounds(meshes: &[Mesh]) -> Option<([f32; 3], [f32; 3])> {
         for i in 0..mesh.instances.len() {
             let m = placement(mesh, i);
             for corner in 0..8 {
-                let p: [f32; 3] = std::array::from_fn(|k| (if corner >> k & 1 == 0 { lo[k] } else { hi[k] }) * METRES_PER_UNIT);
+                let p: [f32; 3] = std::array::from_fn(|k| (if corner >> k & 1 == 0 { lo[k] } else { hi[k] }) * mesh.unit);
                 let w: [f32; 3] = std::array::from_fn(|c| p[0] * m[c] + p[1] * m[4 + c] + p[2] * m[8 + c] + m[12 + c]);
                 out = Some(match out {
                     None => (w, w),
@@ -372,7 +379,7 @@ pub fn document_lit(name: &str, meshes: &[Mesh], source: &dyn AssetReader, direc
                 }
                 let normals = if f.normals.len() == f.positions.len() { f.normals.clone() } else { Vec::new() };
                 let aux = match bake {
-                    Some(field) => crate::probes::bake(field, &placement(mesh, 0), &f.positions, &normals, &f.triangles),
+                    Some(field) => crate::probes::bake(field, &placement(mesh, 0), mesh.unit, &f.positions, &normals, &f.triangles),
                     None => Vec::new(),
                 };
                 primitives.push(Primitive {
@@ -394,7 +401,7 @@ pub fn document_lit(name: &str, meshes: &[Mesh], source: &dyn AssetReader, direc
         for i in 0..mesh.instances.len() {
             let (translation, rotation, scale) = trs(&placement(mesh, i));
             let mut geometry = Node::named(format!("{name}/{index}/{i}/geometry"));
-            geometry.scale = [METRES_PER_UNIT; 3];
+            geometry.scale = [mesh.unit; 3];
             geometry.mesh = Some(mesh_index);
             doc.nodes.push(geometry);
             let mut placed = Node::named(format!("{name}/{index}/{i}"));

@@ -163,9 +163,9 @@ pub fn baked_material(base_color: Option<usize>) -> crysirror_asset::pbr::PbrMat
 pub const INTENSITY: f32 = 1.;
 
 /// Per-vertex irradiance (`_AUX`: RGB, 1) of a fragment placed by the
-/// row-major metre matrix `m` (positions in centimetres). Vertices without
+/// row-major metre matrix `m` (`unit` metres per position unit). Vertices without
 /// stored normals use area-weighted triangle normals.
-pub fn bake(field: &ProbeField, m: &[f32; 16], positions: &[[f32; 3]], normals: &[[f32; 3]], triangles: &[[u16; 3]]) -> Vec<[f32; 4]> {
+pub fn bake(field: &ProbeField, m: &[f32; 16], unit: f32, positions: &[[f32; 3]], normals: &[[f32; 3]], triangles: &[[u16; 3]]) -> Vec<[f32; 4]> {
     let normals: Vec<[f32; 3]> = if normals.len() == positions.len() {
         normals.to_vec()
     } else {
@@ -186,7 +186,7 @@ pub fn bake(field: &ProbeField, m: &[f32; 16], positions: &[[f32; 3]], normals: 
         .iter()
         .zip(&normals)
         .map(|(p, n)| {
-            let p = p.map(|c| c * crate::scene::METRES_PER_UNIT);
+            let p = p.map(|c| c * unit);
             let w: [f32; 3] = std::array::from_fn(|c| p[0] * m[c] + p[1] * m[4 + c] + p[2] * m[8 + c] + m[12 + c]);
             let wn: [f32; 3] = std::array::from_fn(|c| n[0] * m[c] + n[1] * m[4 + c] + n[2] * m[8 + c]);
             let len = (wn[0] * wn[0] + wn[1] * wn[1] + wn[2] * wn[2]).sqrt();
