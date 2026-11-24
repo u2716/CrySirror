@@ -349,6 +349,10 @@ struct Session {
     player_rig: Option<Option<(crate::skeleton::Skeleton, Vec<crate::anim::Clip>)>>,
     /// `anim-player.bin` states.
     anim_table: Option<crate::anim_state::StateTable>,
+    /// `spawn-character.bin` package lists, and the NPC rigs loaded from
+    /// them by skeleton package.
+    characters: Vec<crate::characters::Character>,
+    npc_rigs: HashMap<String, Option<(crate::skeleton::Skeleton, Vec<crate::anim::Clip>)>>,
 }
 
 /// Player clips: `proto.pak` (standing pose, the `move` run and `walk`
@@ -538,6 +542,8 @@ impl NaughtyDogVm {
             logo: None,
             player_rig: None,
             anim_table: None,
+            characters: Vec::new(),
+            npc_rigs: HashMap::new(),
         };
         if self.config.viewer() {
             let level = self.config.level.as_deref().unwrap_or("menu-temple");
@@ -550,6 +556,7 @@ impl NaughtyDogVm {
             let (_, dc) = registry.open(open("dc1.psarc")?, Some("sony/psarc"), &context)?;
             let modules = ArchiveMount::new(dc, context)?;
             let game = Game::boot(&modules, &mut session.stage)?;
+            session.characters = crate::game::ModuleSource::read(&modules, "spawn-character").and_then(|b| crate::characters::parse(&b)).unwrap_or_default();
             session.anim_table = crate::game::ModuleSource::read(&modules, "anim-player").and_then(|b| crate::anim_state::parse(&b)).map_err(|e| session.stage.log(format!("anim-player.bin: {e:#}"))).ok();
             session.menu_pages = crate::game::ModuleSource::read(&modules, "menu").and_then(|b| crate::menu::pages(&b)).unwrap_or_else(|e| {
                 session.stage.log(format!("menu.bin: {e:#}"));
@@ -628,7 +635,12 @@ impl NaughtyDogVm {
         }
         session.script_error = None;
         session.movie = None;
-        session.movie_video = false;
+        // A task left during its movie stops the video and its layer.
+        let mut layers = vec![json!({"op": "put", "layer": {"id": FADE_LAYER, "rect": [0, 0, SCREEN[0], SCREEN[1]], "paint": {"kind": "solid", "color": [0, 0, 0, 0]}}})];
+        if std::mem::take(&mut session.movie_video) {
+            world.push(json!({"op": "set_video", "name": "movie", "video": null}));
+            layers.push(json!({"op": "remove", "id": MOVIE_LAYER}));
+        }
         session.ui = None;
         session.stage.spawners.clear();
         session.stage.entities.clear();
@@ -658,7 +670,7 @@ impl NaughtyDogVm {
         } else {
             session.pending = session.levels[session.current].1.iter().cloned().map(Load::Package).collect();
         }
-        host.submit_engine(self.client, 1, &serde_json::to_vec(&json!({"layers": [{"op": "put", "layer": {"id": FADE_LAYER, "rect": [0, 0, SCREEN[0], SCREEN[1]], "paint": {"kind": "solid", "color": [0, 0, 0, 0]}}}], "world": world}))?)?;
+        host.submit_engine(self.client, 1, &serde_json::to_vec(&json!({"layers": layers, "world": world}))?)?;
         Ok(())
     }
 
@@ -1003,6 +1015,37 @@ impl NaughtyDogVm {
             }
         }
         out
+    }
+
+    /// An NPC skeleton from its `*-base` package and the `idle` clip of
+    /// the character's animation packages, when one fits the skeleton.
+    fn npc_rig(actors: &ArchiveMount, base: &str, anims: &[String]) -> Result<Option<(crate::skeleton::Skeleton, Vec<crate::anim::Clip>)>> {
+        let read = |name: &str| -> Result<crate::mesh::Loaded> {
+            let package = crysirror_core::service::MemoryAssetReader(read_all(actors.open(name)?.as_ref(), PACKAGE_LIMIT)?.into());
+            crate::mesh::Loaded::read(&package, PACKAGE_LIMIT)
+        };
+        let path = format!("{base}.pak");
+        if !actors.exists(&path) {
+            return Ok(None);
+        }
+        let Some(skeleton) = crate::skeleton::of_package(&read(&path)?)? else { return Ok(None) };
+        let mut clips = Vec::new();
+        let packages = std::iter::once(path.clone()).chain(anims.iter().map(|a| format!("{a}.pak")));
+        for package in packages {
+            if !clips.is_empty() || !actors.exists(&package) {
+                continue;
+            }
+            let loaded = read(&package)?;
+            if let Some((n, at)) = crate::anim::items(&loaded).find(|(n, _)| *n == "idle") {
+                // A clip the decoder cannot read leaves the rest pose.
+                if let Ok(clip) = crate::anim::decode(&loaded, at, n, skeleton.animated) {
+                    if clip.hierarchy == skeleton.hash {
+                        clips.push(clip);
+                    }
+                }
+            }
+        }
+        Ok(Some((skeleton, clips)))
     }
 
     /// The player skeleton and clips from `actor27.psarc/proto.pak`.
@@ -1392,21 +1435,36 @@ impl NaughtyDogVm {
             return Ok(());
         }
         scene::place_art_group(&mut meshes);
-        // Skinned models without their own skeleton are player models bound
-        // to the `proto.pak` rig.
+        // Skinned models without their own skeleton bind to their
+        // character's skeleton package (`spawn-character.bin`): the player
+        // models to the `proto.pak` rig, NPCs to their `*-base` package.
         let skinned = meshes.iter().any(|m| m.skinned);
         let own = crate::skeleton::of_package(&loaded)?;
-        if skinned && own.is_none() && session.player_rig.is_none() {
+        let binding = if skinned && own.is_none() { crate::characters::rig_of(&session.characters, art) } else { None };
+        if matches!(binding, Some((None, _))) && session.player_rig.is_none() {
             session.player_rig = Some(Self::player_rig(&session.actors).unwrap_or_else(|e| {
                 session.stage.log(format!("player rig: {e:#}"));
                 None
             }));
         }
-        let rig = match (&own, &session.player_rig) {
-            (None, Some(Some((skeleton, clips)))) if skinned => Some(scene::Rig { skeleton, clips }),
+        if let Some((Some(base), anims)) = &binding {
+            if !session.npc_rigs.contains_key(base) {
+                let rig = Self::npc_rig(&session.actors, base, anims).unwrap_or_else(|e| {
+                    session.stage.log(format!("rig {base}: {e:#}"));
+                    None
+                });
+                session.npc_rigs.insert(base.clone(), rig);
+            }
+        }
+        let rig = match (&binding, &session.player_rig) {
+            (Some((None, _)), Some(Some((skeleton, clips)))) => Some(scene::Rig { skeleton, clips }),
+            (Some((Some(base), _)), _) => session.npc_rigs.get(base).and_then(|r| r.as_ref()).map(|(skeleton, clips)| scene::Rig { skeleton, clips }),
             _ => None,
         };
         let idle = rig.as_ref().and_then(|r| r.clips.iter().find(|c| c.name == "idle")).map(|c| c.name.clone());
+        if skinned && own.is_none() {
+            session.stage.log(format!("art {art}: rig {:?}, {} clips", binding.as_ref().map(|b| b.0.clone().unwrap_or_else(|| "proto".into())), rig.as_ref().map_or(0, |r| r.clips.len())));
+        }
         let glb = scene::document_lit(art, &meshes, package.as_ref(), &directory, MAX_TEXTURE, None, rig.as_ref())?.to_glb()?;
         session.next_model += 1;
         let asset = host.upload_model(self.client, 0x4e44_0000 + session.next_model, &glb)?;

@@ -2595,7 +2595,9 @@ impl Runtime {
                 p.asset != spec.asset || p.looping != spec.looping || spec.time_ms < p.synced_ms
             });
             if stale {
-                let bytes = self.assets.read_for(ClientId(client), &spec.asset)?;
+                // Videos are decoded by one playback and can exceed the
+                // asset cache budget (Uncharted 2's 352 MB movies).
+                let bytes = self.assets.read_uncached_for(ClientId(client), &spec.asset)?;
                 let stream = crysirror_video::open(bytes.to_vec())
                     .with_context(|| format!("video {name}: {}", spec.asset))?;
                 let player = crysirror_video::Player::new(stream, spec.looping)?;

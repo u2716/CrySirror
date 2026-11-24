@@ -34,13 +34,18 @@
 //!
 //! - `Dec3VecRange` items: per-component widths from a `[a, b, a + b, c]`
 //!   table after the 16-byte records, `minimum + q · step` (see
-//!   [`range_record`]).
+//!   [`range_record`]), plus the predictor the width flags select.
 //!
 //! - `PostDecompressQuatLog`/`LogPca`: the range vectors are half-angle
-//!   logarithms, `q = exp(v)` (on `idle^roll-fw` they give a 116° elbow
-//!   bend and 30° finger curls). Their per-item parameters (8 and 16 bytes:
-//!   not a 48-bit or 16-bit-per-component centre quaternion) are not
-//!   applied (SATD-nd-retail-runtime).
+//!   logarithms turned into `e = (s(t)·v, c(t))`, `t = v·v`, with the
+//!   decoder's cubic sine and cosine series, then `q = q0 ⊗ e` (Log) or
+//!   `q = P ⊗ e ⊗ Q` (LogPca) with per-item quaternions from the
+//!   parameter block (see [`log_params`]).
+//!
+//! The op handlers live in the `CalcInfluences` SPU job (loaded at LS
+//! 0x4000; 62-entry handler table at listing 0xA850, op 27 at 0x30C0, op
+//! 29 at 0x6C80, op 30 at 0x6E90); the formulas were checked by running
+//! those handlers on controlled keys.
 //!
 //! Not decoded: the non-uniform key caches; those joints keep the rest
 //! pose.
@@ -125,14 +130,36 @@ fn s3_key(v: u64, a: u32, b: u32, c: u32) -> Quat {
     Quat::from_array(q).normalize()
 }
 
-/// `exp` of a pure quaternion `(v, 0)`.
+/// The decoder's `exp` of a half-angle log `v`: cubic series in `t = v·v`
+/// for `cos|v|` and `sin|v| / |v|` (constants at `CalcInfluences` listing
+/// 0xA7F0 and 0xA800). It is not renormalised.
 fn quat_exp(v: Vec3) -> Quat {
-    let a = v.length();
-    if a < 1e-9 {
-        return Quat::from_xyzw(v.x, v.y, v.z, 1.).normalize();
-    }
-    let s = a.sin() / a;
-    Quat::from_xyzw(v.x * s, v.y * s, v.z * s, a.cos())
+    let t = v.length_squared();
+    let c = 1. + t * (-0.5 + t * (0.041_523_72 + t * -0.001_271_407_7));
+    let s = 1. + t * (-0.166_666_67 + t * (0.008_317_291 + t * -0.000_185_261_76));
+    Quat::from_xyzw(v.x * s, v.y * s, v.z * s, c)
+}
+
+/// Per-item quaternions of a `PostDecompressQuatLog` (`pca` false: `q0`)
+/// or `LogPca` (`(P, Q)`) parameter block, as `s16 / 32768`. Log blocks
+/// are 16 bytes per item pair with interleaved halfwords
+/// `[x0 x1 y0 y1 z0 z1 w0 w1]`; LogPca blocks are 16 bytes per item,
+/// `[Px Qx Py Qy Pz Qz Pw Qw]`.
+fn log_params(data: &[u8], at: usize, count: usize, pca: bool) -> Result<Vec<(Quat, Quat)>> {
+    let h = |o: usize| -> Result<f32> { Ok(f32::from(i16::from_be_bytes(data.get(o..o + 2).context("ND log parameters")?.try_into()?)) / 32768.) };
+    (0..count)
+        .map(|i| {
+            if pca {
+                let b = at + 16 * i;
+                let c = |k: usize| h(b + 4 * k);
+                let d = |k: usize| h(b + 4 * k + 2);
+                Ok((Quat::from_xyzw(c(0)?, c(1)?, c(2)?, c(3)?), Quat::from_xyzw(d(0)?, d(1)?, d(2)?, d(3)?)))
+            } else {
+                let b = at + 16 * (i / 2) + 2 * (i % 2);
+                Ok((Quat::from_xyzw(h(b)?, h(b + 4)?, h(b + 8)?, h(b + 12)?), Quat::IDENTITY))
+            }
+        })
+        .collect()
 }
 
 /// Bits `p..p + w` (MSB first) of a 128-bit record as a float with sign,
@@ -149,8 +176,12 @@ fn small_float(r: u128, p: u32, w: u32) -> f32 {
 /// minimum. The field starts (bits 21, 42, 64, 86, 107) are where 98–99.5 %
 /// of 4,000 records have plausible exponents; the minimum lies within
 /// millimetres of the joints' rest translations; the per-component bit
-/// widths `[a, b, a + b, c]` follow the records (they sum to every item's
-/// size). Which field steps which component is inferred.
+/// widths `[a, b, a + b, c]` follow the records (their low six bits sum to
+/// every item's size; the top two bits are flags, set only on items a
+/// `PostDecompressQuatLog` later converts). A flag `f` (1–3) on the
+/// width byte of component x, y or z (bytes 0, 1, 3) adds component `f − 1`
+/// of the previous item's decoded vector of the same frame: a predictor
+/// chaining the log rotations. Which field steps which component is inferred.
 fn range_record(r: u128) -> ([f32; 3], [f32; 3]) {
     let header = ((r >> 107) & 0x1f_ffff) as u32;
     let s0 = f32::from_bits((header >> 13) << 23 | (header & 0x1fff) << 10);
@@ -270,37 +301,45 @@ pub fn decode(p: &Loaded, payload: usize, name: &str, animated: usize) -> Result
                 let widths = records + 16 * count;
                 for i in 0..count {
                     let w = data.get(widths + 4 * i..widths + 4 * i + 4).context("ND range widths")?;
-                    let (wa, wb, wc) = (u32::from(w[0]), u32::from(w[1]), u32::from(w[3]));
+                    let (wa, wb, wc) = (u32::from(w[0] & 0x3f), u32::from(w[1] & 0x3f), u32::from(w[3] & 0x3f));
                     if wa + wb + wc != u32::from(sizes.get(first + i).copied().unwrap_or(0)) {
                         continue;
                     }
                     let r = u128::from_be_bytes(data.get(records + 16 * i..records + 16 * i + 16).context("ND range record")?.try_into()?);
                     let (step, min) = range_record(r);
+                    let flags = [w[0] >> 6, w[1] >> 6, w[3] >> 6];
                     for (f, k) in keys.iter_mut().enumerate() {
                         let v = item_bits[f].get(first + i).copied().unwrap_or(0);
                         let q = [(v >> (wb + wc)) & ((1 << wa) - 1), (v >> wc) & ((1 << wb) - 1), v & ((1 << wc) - 1)];
+                        let previous = match (i > 0).then(|| k.get(first + i - 1)).flatten() {
+                            Some(Some(Value::Vec(p))) => *p,
+                            _ => Vec3::ZERO,
+                        };
+                        let value = Vec3::from_array(std::array::from_fn(|c| {
+                            let predicted = if flags[c] == 0 { 0. } else { previous[usize::from(flags[c]) - 1] };
+                            min[c] + q[c] as f32 * step[c] + predicted
+                        }));
                         if let Some(slot) = k.get_mut(first + i) {
-                            *slot = Some(Value::Vec(Vec3::from_array(std::array::from_fn(|c| min[c] + q[c] as f32 * step[c]))));
+                            *slot = Some(Value::Vec(value));
                         }
                     }
                 }
             }
             // PostDecompressQuatLog / LogPca(count, buffer, parameters, key
-            // slot): range-decoded vectors become rotations `exp(v)` with
-            // `v` the half-angle log. The per-item parameters (8 and 16
-            // bytes) are not applied.
+            // slot): `q0 ⊗ exp(v)` / `P ⊗ exp(v) ⊗ Q` in place.
             29 | 30 => {
                 let first = args[3] / SLOT;
+                let params = log_params(data, base + args[2], count, op == 30)?;
                 for k in keys.iter_mut() {
-                    for i in 0..count {
+                    for (i, (p, q)) in params.iter().enumerate() {
                         if let Some(slot) = k.get_mut(first + i) {
                             if let Some(Value::Vec(v)) = slot {
-                                *slot = Some(Value::Quat(quat_exp(*v)));
+                                let e = quat_exp(*v);
+                                *slot = Some(Value::Quat(if op == 29 { *p * e } else { *p * e * *q }));
                             }
                         }
                     }
                 }
-                inferred.push(if op == 29 { "PostDecompressQuatLog parameters" } else { "PostDecompressQuatLogPca parameters" });
             }
             // KeyCacheUniformLerp / Slerp(count, buffer, outputs, key slot).
             15 | 16 => {

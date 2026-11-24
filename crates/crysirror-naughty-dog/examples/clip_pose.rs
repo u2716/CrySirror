@@ -49,6 +49,14 @@ fn main() -> Result<()> {
             println!("frame {f:2} l_ankle {:?} r_ankle {:?} l_wrist {:?} head {:?}", at("l_ankle"), at("r_ankle"), at("l_wrist"), at("head"));
         }
     }
+    if let Ok(list) = std::env::var("LOCAL") {
+        for n in list.split(',') {
+            if let Some(j) = skel.names.iter().position(|x| x == n) {
+                let r = clip.joints.get(j).and_then(|t| t.rotation.as_ref()).map(|v| v[0]);
+                println!("local {n} {:?}", r.map(|q| q.to_array().map(|v| (v * 1e4).round() / 1e4)));
+            }
+        }
+    }
     let pick: Vec<&str> = if args.len() > 3 { args[3..].iter().map(String::as_str).collect() } else { vec!["root", "pelvis", "l_ankle", "r_ankle", "spined", "head", "l_wrist", "r_wrist"] };
     for n in pick {
         if let Some(j) = skel.names.iter().position(|x| x == n) {

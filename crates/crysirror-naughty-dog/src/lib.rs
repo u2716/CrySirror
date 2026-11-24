@@ -7,6 +7,7 @@ pub use adapter::{Config, ENGINE_ID};
 pub mod adapter;
 pub mod anim;
 pub mod anim_state;
+pub mod characters;
 pub mod dc;
 pub mod game;
 pub mod ground;
