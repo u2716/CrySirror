@@ -25,7 +25,7 @@ fn main() -> Result<()> {
                 for i in 0..usize::from(p.u16(header + 6)?) {
                     let f = p.ptr(array + 4 * i)?;
                     let desc = p.ptr(f + 0x28)?;
-                    for a in 0..p.data[f + 0x2f] as usize {
+                    for a in 0..p.data[f + 0x20] as usize {
                         let r = &p.data[desc + 8 + 8 * a..desc + 16 + 8 * a];
                         *census.entry((r[0], r[1], [r[4], r[5], r[6], r[7]])).or_default() += 1;
                     }

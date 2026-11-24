@@ -298,10 +298,20 @@ fn unpack(data: &[u8], at: usize, count: usize, depths: &[u8]) -> Result<Vec<[u3
     Ok(out)
 }
 
+/// Rows of the fragment's attribute descriptor (byte +0x20). Byte +0x2f
+/// counts all vertex streams: skinned fragments add five streams of joint
+/// data after the described attributes (the hero's 6 described of 11), and
+/// the descriptor's parameter floats follow its rows.
+fn described(p: &Loaded, f: usize) -> Result<usize> {
+    let (rows, streams) = (p.data[f + 0x20] as usize, p.data[f + 0x2f] as usize);
+    ensure!((1..=32).contains(&rows) && rows <= streams, "ND fragment attribute count");
+    Ok(rows)
+}
+
 /// Decode attribute `id` with `N` components of fragment `f`, if present.
 fn raw_attribute<const N: usize>(p: &Loaded, f: usize, id: u8, vertices: usize) -> Result<Option<Raw<N>>> {
     let desc = p.ptr(f + 0x28)?;
-    let attributes = p.data[f + 0x2f] as usize;
+    let attributes = described(p, f)?;
     ensure!((1..=32).contains(&attributes), "ND fragment attribute count");
     for a in 0..attributes {
         let at = desc + 8 + 8 * a;
@@ -340,7 +350,7 @@ fn layer_masks(p: &Loaded, f: usize, vertices: usize) -> Result<Option<Vec<[f32;
 /// byte values.
 fn bytes3(p: &Loaded, f: usize, vertices: usize, id: u8) -> Result<Option<Vec<[f32; 3]>>> {
     let desc = p.ptr(f + 0x28)?;
-    for a in 0..p.data[f + 0x2f] as usize {
+    for a in 0..described(p, f)? {
         let at = desc + 8 + 8 * a;
         let row: [u8; 8] = p.data.get(at..at + 8).context("ND descriptor outside package")?.try_into()?;
         if row[0] != id {
