@@ -146,3 +146,9 @@ Root motion and rig libraries (2026-11-25):
 - **Prologue capture:** after the change the hanging car stands over the cliff with the player inside it.
 - **Bench-climb track:** boot, then two Page Down presses (`train-wreck-climb` → `load-tw-a-high` → `train-wreck-treadmill`). Before the shared libraries this aborted with "asset cache exceeds 256 MiB" (255 MiB generated). Afterwards the run completes and logs `rig library Player: 138 clips, 15631 KiB` once, plus the treadmill animations `idle-04-car-a`/`-car-b`, `shift-03-door`, `drake-tight-motor` and `drake-tight-beam`. The museum run still shows the player states and Flynn's idle.
 
+Cameras and prop collision (2026-11-25):
+
+- **Prologue run:** the log shows `camera ada068bf` (`cam-railing-center-intro-1`, whose spawner exists) followed by `camera release None`.
+- **Prologue capture:** the final capture still shows the camera against the player inside the hanging car.
+- **Museum and treadmill:** the museum run is unchanged, and the bench and treadmill runs complete with exit code 0.
+

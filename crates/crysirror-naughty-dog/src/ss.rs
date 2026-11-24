@@ -57,6 +57,8 @@ pub trait World {
     /// Fade the screen to `color` at `alpha` (1 opaque) over `seconds`.
     fn fade(&mut self, color: [f32; 3], alpha: f32, seconds: f32);
     fn camera(&mut self, name: u32, seconds: f32);
+    /// Release scripted camera `name` (`None`: every scripted camera).
+    fn camera_disable(&mut self, _name: Option<u32>) {}
     fn player_controls(&mut self, enabled: bool);
     /// Left and right stick (x, y in −1…1) of a controller.
     fn sticks(&self, pad: u32) -> [f32; 4];
@@ -739,6 +741,14 @@ impl Natives for Ctx<'_> {
             }
             "camera-enable" => {
                 self.world.camera(a[0], if n > 2 { Self::arg_f(a, 2) } else { 0. });
+                ok(0)
+            }
+            "camera-disable" | "camera-abandon" => {
+                self.world.camera_disable((n > 0 && a[0] != 0).then_some(a[0]));
+                ok(0)
+            }
+            "camera-disable-all" => {
+                self.world.camera_disable(None);
                 ok(0)
             }
             // The argument is a control mask (`player-controls-all` returns

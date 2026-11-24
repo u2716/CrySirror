@@ -293,6 +293,13 @@ impl World for Stage {
     }
     fn camera(&mut self, name: u32, _seconds: f32) {
         self.camera = Some(name);
+        self.log(format!("camera {name:08x}{}", if self.spawners.contains_key(&name) { "" } else { " (no spawner)" }));
+    }
+    fn camera_disable(&mut self, name: Option<u32>) {
+        self.log(format!("camera release {:?}", name.map(|n| format!("{n:08x}"))));
+        if name.is_none() || name == self.camera {
+            self.camera = None;
+        }
     }
     fn player_controls(&mut self, enabled: bool) {
         self.controls = Some(enabled);
@@ -791,6 +798,7 @@ impl NaughtyDogVm {
         session.npcs.clear();
         session.stage.animations.clear();
         session.stage.held.clear();
+        session.stage.camera = None;
         session.entity_rigs.clear();
         session.stage.visible.clear();
         session.stage.ops.clear();
@@ -999,6 +1007,24 @@ impl NaughtyDogVm {
         let (eye, forward) = session.start.as_ref().map_or(([0.; 3], [0., 0., 1.]), |c| (c.position, c.forward));
         let target: [f32; 3] = std::array::from_fn(|k| eye[k] + forward[k]);
         json!({"op": "set_camera", "camera": {"eye": eye, "target": target, "up": [0.0, 1.0, 0.0], "fov_y_degrees": vertical, "near": 0.1, "far": 20000.0}})
+    }
+
+    /// A scripted camera spawner: the eye at the spawner looking along its
+    /// local +z (`cam-railing-center-intro-1` faces the climb start), up
+    /// along its local +y, with its horizontal `fov` (75° without one).
+    /// Blend times and camera types are not modelled.
+    fn spawner_camera(cam: &SpawnerRecord) -> serde_json::Value {
+        let q = glam::Quat::from_array(cam.rotation).normalize();
+        let (forward, up) = (q * glam::Vec3::Z, q * glam::Vec3::Y);
+        let fov = cam.properties.iter().find(|(k, _)| *k == sid("fov")).and_then(|(_, v)| match v {
+            crate::ss::Property::Float(f) => Some(*f),
+            crate::ss::Property::Int(i) => Some(*i as f32),
+            _ => None,
+        });
+        let h = fov.filter(|f| *f > 1. && *f < 170.).unwrap_or(75.);
+        let vertical = (2. * ((h.to_radians() * 0.5).tan() * SCREEN[1] as f32 / SCREEN[0] as f32).atan()).to_degrees();
+        let eye = glam::Vec3::from_array(cam.position);
+        json!({"op": "set_camera", "camera": {"eye": eye.to_array(), "target": (eye + forward).to_array(), "up": up.to_array(), "fov_y_degrees": vertical, "near": 0.1, "far": 20000.0}})
     }
 
     /// Place the player and start the level's state-script processes.
@@ -1336,7 +1362,9 @@ impl NaughtyDogVm {
                 }
             }
             let (x, y, z) = r.to_euler(glam::EulerRot::XYZ);
+            let m = glam::Mat4::from_rotation_translation(r, glam::Vec3::from_array(pos)).to_cols_array();
             for e in Self::animation_entities(session, object) {
+                session.ground.move_body(e, m);
                 world.push(json!({"op": "set_transform", "id": e, "transform": {"translation": pos, "rotation_degrees": [x.to_degrees(), y.to_degrees(), z.to_degrees()], "scale": [1.0, 1.0, 1.0]}}));
             }
         }
@@ -1575,11 +1603,27 @@ impl NaughtyDogVm {
     /// and easing back out (2 m/s).
     fn follow(p: &mut Player, ground: &Ground, seconds: f32) -> serde_json::Value {
         let target = [p.position[0], p.position[1] + 1.5, p.position[2]];
-        let cy = p.view_pitch.cos();
-        let dir = [-p.view_yaw.sin() * cy, -p.view_pitch.sin(), p.view_yaw.cos() * cy];
         let far = FOLLOW_DISTANCE;
-        let want: [f32; 3] = std::array::from_fn(|k| target[k] + dir[k] * far);
-        let free = ground.raycast(target, want).map_or(far, |t| (t * far - 0.3).max(0.5));
+        // Blocked closer than 2.5 m (inside rooms or the hanging car), the
+        // camera rises over the player toward the clearest pitch.
+        let free_at = |pitch: f32| {
+            let cy = pitch.cos();
+            let dir = [-p.view_yaw.sin() * cy, -pitch.sin(), p.view_yaw.cos() * cy];
+            let want: [f32; 3] = std::array::from_fn(|k| target[k] + dir[k] * far);
+            (dir, ground.raycast(target, want).map_or(far, |t| (t * far - 0.3).max(0.5)))
+        };
+        let (mut dir, mut free) = free_at(p.view_pitch);
+        if free < 2.5 {
+            for k in 1..=4 {
+                let (d, f) = free_at((p.view_pitch - 0.3 * k as f32).max(-1.4));
+                if f > free + 0.25 {
+                    (dir, free) = (d, f);
+                }
+                if free >= 2.5 {
+                    break;
+                }
+            }
+        }
         p.view_distance = if free < p.view_distance { free } else { (p.view_distance + 2. * seconds).min(free) };
         let d = p.view_distance;
         let eye: [f32; 3] = std::array::from_fn(|k| target[k] + dir[k] * d);
@@ -1740,7 +1784,12 @@ impl NaughtyDogVm {
                     p.view_yaw += d * (1.5 * seconds).min(1.);
                 }
             }
-            world.push(Self::follow(p, &session.ground, seconds));
+            // A camera the scripts enabled (`cam-…` spawners) replaces the
+            // follow camera.
+            match session.stage.camera.and_then(|c| session.stage.spawners.get(&c)) {
+                Some(cam) => world.push(Self::spawner_camera(cam)),
+                None => world.push(Self::follow(p, &session.ground, seconds)),
+            }
         }
         session.stage.player_locator = session.player.as_ref().map(|p| (p.position, glam::Quat::from_rotation_y(p.yaw).to_array()));
         if let Some((graph, table)) = session.npc_anim.as_mut() {
@@ -1768,6 +1817,13 @@ impl NaughtyDogVm {
             }
         }
         self.script_animations(host, session, &mut world);
+        // Props collide while spawned.
+        for (name, ids) in &session.stage.entities {
+            let on = session.stage.visible.contains(name);
+            for id in ids {
+                session.ground.enable_body(*id, on);
+            }
+        }
         world.append(&mut session.stage.ops);
         let skip = input.buttons_pressed & (b::ENTER | b::ESCAPE) != 0;
         let mut change = session.game.as_mut().and_then(|g| g.rt.inner.task_change.take());
@@ -1975,9 +2031,10 @@ impl NaughtyDogVm {
             let q = glam::Quat::from_array(s.rotation).normalize();
             let (x, y, z) = q.to_euler(glam::EulerRot::XYZ);
             let visible = !task || s.flags & NO_AUTO_BIRTH == 0;
-            if task && visible {
+            // Props collide (as movable bodies); characters do not.
+            if task && binding.is_none() {
                 let m = glam::Mat4::from_rotation_translation(q, glam::Vec3::from_array(s.position));
-                session.ground.add_placed(&meshes, Some(m.to_cols_array()));
+                session.ground.add_body(id, &meshes, m.to_cols_array(), visible);
             }
             world.push(json!({"op": "spawn", "entity": {"id": id, "name": format!("{art}:{}", s.name), "visible": visible, "transform": {"translation": s.position, "rotation_degrees": [x.to_degrees(), y.to_degrees(), z.to_degrees()], "scale": [1.0, 1.0, 1.0]}, "geometry": {"kind": "scene", "asset": asset.relative()}}}));
             let driven = npc_key.as_ref().filter(|k| session.npc_clips.get(*k).is_some_and(|c| !c.is_empty()) && session.npc_anim.is_some());

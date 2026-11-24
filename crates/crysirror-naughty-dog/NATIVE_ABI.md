@@ -156,6 +156,12 @@ Task continuation records (subnode +0x28) are `{string, StringId}` slots: the pl
 - **Clips from other rigs:** story clips for the player (`anim-train-wreck`) name the `npc-normal-base` hierarchy (`6077142a`, 124 joints), while the player models skin to the `proto.pak` rig (230 joints, 106 joint names shared). Such clips decode with the rig whose hash they name and bind to the entity by joint name.
 - **Prologue:** `train-wreck-climb` plays `idle-00-car-a`, `idle-00-car-b`, `idle-00-undercarriage` and `idle-00-ladder` (10.07 s), the 1.2 s `drake-platform-drop-door` and the single-frame `broken` pose. Props hold the last frame of a finished animation.
 
+## Scripted cameras
+
+- **`camera-enable`:** `(camera-enable 'cam-name …)` selects a camera spawner (`cam-railing-center-intro-1`). The camera looks along the spawner's local +z: from the climb start camera, +z points at the player's spawn with a dot product of 0.996. Up is local +y, and the spawner's `fov` property (75–110 in `train-wreck-climb-fg`) is horizontal.
+- **Release:** `camera-disable` / `camera-abandon` / `camera-disable-all` return to the follow camera. In `train-wreck-climb` the intro camera is released right after it is enabled.
+- **Not implemented:** `camera-local-space` (6,900 calls) and `camera-animation-enable` (1,495), the object-relative and animated cameras.
+
 ## Foreground (art-group) meshes
 
 Art-group meshes use the same descriptors as level geometry (above); their `vis_sphere` tags (`TAG_VEC4`) bound the model, and spheres of animated objects cover their motion. Skinned player models carry no `JOINT_HIERARCHY`; they bind to the `proto.pak` rig (230 joints), whose `idle` clip the player renders.

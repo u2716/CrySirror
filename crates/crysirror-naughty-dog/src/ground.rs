@@ -2,7 +2,8 @@
 //! Walkable surfaces of the placed level meshes for keeping the player on
 //! the ground: upward-facing triangles bucketed in a horizontal grid.
 //! Native collision (Havok data in the level packages) is not used; this
-//! is the viewer's ground model (SATD-nd-retail-runtime).
+//! is the viewer's ground model (SATD-nd-retail-runtime). Spawned art
+//! groups are movable bodies tested at their current transform.
 use crate::{mesh::Mesh, scene};
 use std::collections::HashMap;
 
@@ -19,7 +20,36 @@ pub struct Ground {
     /// hierarchy (built by [`Ground::prepare`]).
     solid: Vec<[[f32; 3]; 3]>,
     nodes: Vec<Node>,
+    /// Spawned art groups, which scripts can move (`animate` root motion):
+    /// tested at their current transform.
+    bodies: HashMap<u32, Body>,
 }
+
+/// A movable set of triangles (an entity's meshes).
+struct Body {
+    local: Vec<[[f32; 3]; 3]>,
+    world: Vec<[[f32; 3]; 3]>,
+    lo: [f32; 3],
+    hi: [f32; 3],
+    enabled: bool,
+}
+
+impl Body {
+    fn place(&mut self, m: [f32; 16]) {
+        let tf = |p: [f32; 3]| -> [f32; 3] { std::array::from_fn(|c| p[0] * m[c] + p[1] * m[4 + c] + p[2] * m[8 + c] + m[12 + c]) };
+        self.world = self.local.iter().map(|t| t.map(tf)).collect();
+        self.lo = [f32::MAX; 3];
+        self.hi = [f32::MIN; 3];
+        for v in self.world.iter().flatten() {
+            for k in 0..3 {
+                self.lo[k] = self.lo[k].min(v[k]);
+                self.hi[k] = self.hi[k].max(v[k]);
+            }
+        }
+    }
+}
+
+const MAX_BODY_TRIANGLES: usize = 1 << 18;
 
 const MAX_SOLID: usize = 8 << 20;
 const LEAF: usize = 8;
@@ -104,6 +134,47 @@ impl Ground {
         }
     }
 
+    /// Add an entity's meshes as a movable body at column-major `world`.
+    pub fn add_body(&mut self, id: u32, meshes: &[Mesh], world: [f32; 16], enabled: bool) {
+        let mut local = Vec::new();
+        for m in meshes {
+            for i in 0..m.instances.len() {
+                let t = scene::placement(m, i);
+                for f in &m.fragments {
+                    for tri in &f.triangles {
+                        if local.len() >= MAX_BODY_TRIANGLES {
+                            break;
+                        }
+                        local.push(tri.map(|v| {
+                            let p = f.positions[v as usize];
+                            std::array::from_fn(|c| p[0] * t[c] + p[1] * t[4 + c] + p[2] * t[8 + c] + t[12 + c])
+                        }));
+                    }
+                }
+            }
+        }
+        let mut body = Body { local, world: Vec::new(), lo: [0.; 3], hi: [0.; 3], enabled };
+        body.place(world);
+        self.bodies.insert(id, body);
+    }
+
+    /// Move a body to column-major `world`.
+    pub fn move_body(&mut self, id: u32, world: [f32; 16]) {
+        if let Some(b) = self.bodies.get_mut(&id) {
+            b.place(world);
+        }
+    }
+
+    pub fn enable_body(&mut self, id: u32, enabled: bool) {
+        if let Some(b) = self.bodies.get_mut(&id) {
+            b.enabled = enabled;
+        }
+    }
+
+    fn live_bodies(&self) -> impl Iterator<Item = &Body> {
+        self.bodies.values().filter(|b| b.enabled)
+    }
+
     /// Build the ray hierarchy over the triangles added so far.
     pub fn prepare(&mut self) {
         if !self.nodes.is_empty() || self.solid.is_empty() {
@@ -149,6 +220,33 @@ impl Ground {
     /// Fraction along `from → to` of the first triangle hit, if any
     /// (requires [`Ground::prepare`]).
     pub fn raycast(&self, from: [f32; 3], to: [f32; 3]) -> Option<f32> {
+        let d = sub(to, from);
+        let mut nearest: Option<f32> = None;
+        for b in self.live_bodies() {
+            let (mut t0, mut t1) = (0f32, 1f32);
+            for k in 0..3 {
+                let inv = 1. / d[k];
+                let (a, c) = ((b.lo[k] - from[k]) * inv, (b.hi[k] - from[k]) * inv);
+                t0 = t0.max(a.min(c));
+                t1 = t1.min(a.max(c));
+            }
+            if t0 > t1 {
+                continue;
+            }
+            for t in &b.world {
+                if let Some(h) = ray_triangle(from, d, *t).filter(|h| *h <= 1.) {
+                    nearest = Some(nearest.map_or(h, |n| n.min(h)));
+                }
+            }
+        }
+        let fixed = self.raycast_static(from, to);
+        match (fixed, nearest) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
+    }
+
+    fn raycast_static(&self, from: [f32; 3], to: [f32; 3]) -> Option<f32> {
         if self.nodes.is_empty() {
             return None;
         }
@@ -188,8 +286,9 @@ impl Ground {
     /// The highest walkable surface at `(x, z)` not above `top`.
     pub fn height(&self, x: f32, z: f32, top: f32) -> Option<f32> {
         let mut best: Option<f32> = None;
-        for id in self.cells.get(&(cell(x), cell(z))).into_iter().flatten() {
-            let [a, b, c] = self.tris[*id as usize];
+        let bodies = self.live_bodies().filter(|b| (b.lo[0]..=b.hi[0]).contains(&x) && (b.lo[2]..=b.hi[2]).contains(&z)).flat_map(|b| b.world.iter().filter(|t| walkable(t)));
+        let fixed = self.cells.get(&(cell(x), cell(z))).into_iter().flatten().map(|id| &self.tris[*id as usize]);
+        for &[a, b, c] in fixed.chain(bodies) {
             let d = (b[2] - c[2]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[2] - c[2]);
             if d.abs() < 1e-9 {
                 continue;
@@ -207,6 +306,13 @@ impl Ground {
         }
         best
     }
+}
+
+fn walkable(p: &[[f32; 3]; 3]) -> bool {
+    let (u, w) = (sub(p[1], p[0]), sub(p[2], p[0]));
+    let n = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
+    let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+    len > 1e-8 && (n[1] / len).abs() >= MIN_UP
 }
 
 fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
