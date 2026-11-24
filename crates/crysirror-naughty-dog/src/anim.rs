@@ -70,6 +70,9 @@ pub struct Clip {
     pub fps: f32,
     /// Per animated joint.
     pub joints: Vec<JointTrack>,
+    /// Horizontal root-motion speed (metres per second) of the `align`
+    /// channel, 0 without one.
+    pub root_speed: f32,
     /// Commands whose channels were skipped or decoded with an inferred rule.
     pub unsupported: Vec<&'static str>,
 }
@@ -350,7 +353,33 @@ pub fn decode(p: &Loaded, payload: usize, name: &str, animated: usize) -> Result
     unsupported.extend(inferred);
     unsupported.sort_unstable();
     unsupported.dedup();
-    Ok(Clip { name: name.to_owned(), hierarchy: u32_at(4)?, frames, fps, joints, unsupported })
+    let root_speed = align_speed(p, payload, frames, fps).unwrap_or(0.);
+    Ok(Clip { name: name.to_owned(), hierarchy: u32_at(4)?, frames, fps, joints, root_speed, unsupported })
+}
+
+/// `ANIM_RAWCHANNELS` (`ANIM` +0xc): `{count, fps, entry pointers}`, an
+/// entry `{StringId, data}`. The `align` channel's data is a rotation, a
+/// scale and from float 7 one translation per frame: `move` advances
+/// 1.87 m over 21 frames at 30 fps, `walk` 1.52 m over 31 frames,
+/// `walk-hurt` 0.78 m over 11 frames at 10 fps.
+fn align_speed(p: &Loaded, payload: usize, frames: usize, fps: f32) -> Option<f32> {
+    let raw = p.ptr(payload + 0xc).ok()?;
+    let count = p.u32(raw).ok()? as usize;
+    if frames < 2 || count > 64 {
+        return None;
+    }
+    for i in 0..count {
+        let entry = p.ptr(raw + 8 + 4 * i).ok()?;
+        if p.u32(entry).ok()? != crate::dc::sid("align") {
+            continue;
+        }
+        let data = p.ptr(entry + 4).ok()?;
+        let at = |k: usize, c: usize| p.f32(data + 4 * (7 + 3 * k + c)).ok();
+        let (dx, dz) = (at(frames - 1, 0)? - at(0, 0)?, at(frames - 1, 2)? - at(0, 2)?);
+        let seconds = (frames - 1) as f32 / fps.max(1.);
+        return Some((dx * dx + dz * dz).sqrt() / seconds);
+    }
+    None
 }
 
 /// Every `ANIM` item of a relocated package, by name.

@@ -178,6 +178,14 @@ struct Player {
     view_yaw: f32,
     view_pitch: f32,
     controls: bool,
+    /// Native animation state machine and the clip each layer plays.
+    anim: Option<PlayerAnim>,
+}
+
+/// The player's `anim-player` state machine instance and its presented clip.
+struct PlayerAnim {
+    machine: crate::anim_state::Machine,
+    clip: String,
 }
 
 /// Engine side of the script natives: spawner entities, prints and fades.
@@ -339,11 +347,17 @@ struct Session {
     /// player uses), loaded with the first skinned model that has no
     /// skeleton of its own; `Some(None)` when unavailable.
     player_rig: Option<Option<(crate::skeleton::Skeleton, Vec<crate::anim::Clip>)>>,
+    /// `anim-player.bin` states.
+    anim_table: Option<crate::anim_state::StateTable>,
 }
 
-/// Player clips decoded from `proto.pak` (the standing pose is a constant
-/// one-frame clip).
-const PLAYER_CLIPS: &[&str] = &["idle"];
+/// Player clips: `proto.pak` (standing pose, the `move` run and `walk`
+/// cycles, the start/stop/turn animations the `anim-player` states name)
+/// and the hurt movement types of `anim-proto-hurt.pak`.
+const PLAYER_CLIPS: &[(&str, &[&str])] = &[
+    ("proto.pak", &["idle", "move", "walk", "run-tense", "walk-tense", "idle^move-b", "move^idle2", "move^turn-180^move"]),
+    ("anim-proto-hurt.pak", &["idle-hurt", "walk-hurt", "walk-hurt-long", "run-hurt-long"]),
+];
 
 /// The world environment: the level's directional light and ambient term
 /// when known. Native intensities (0.9–19 on the installed levels) are
@@ -523,6 +537,7 @@ impl NaughtyDogVm {
             menu_pages: Vec::new(),
             logo: None,
             player_rig: None,
+            anim_table: None,
         };
         if self.config.viewer() {
             let level = self.config.level.as_deref().unwrap_or("menu-temple");
@@ -535,6 +550,7 @@ impl NaughtyDogVm {
             let (_, dc) = registry.open(open("dc1.psarc")?, Some("sony/psarc"), &context)?;
             let modules = ArchiveMount::new(dc, context)?;
             let game = Game::boot(&modules, &mut session.stage)?;
+            session.anim_table = crate::game::ModuleSource::read(&modules, "anim-player").and_then(|b| crate::anim_state::parse(&b)).map_err(|e| session.stage.log(format!("anim-player.bin: {e:#}"))).ok();
             session.menu_pages = crate::game::ModuleSource::read(&modules, "menu").and_then(|b| crate::menu::pages(&b)).unwrap_or_else(|e| {
                 session.stage.log(format!("menu.bin: {e:#}"));
                 Vec::new()
@@ -852,8 +868,12 @@ impl NaughtyDogVm {
         if let Some(s) = &spawner {
             session.stage.set_visible(sid(&s.name), true);
         }
-        let mut player = Player { entity, position, yaw, fall: 0., view_yaw: yaw + std::f32::consts::PI, view_pitch: -0.25, controls: true };
-        if let Some(h) = session.ground.height(position[0], position[2], position[1] + 1.) {
+        let anim = session.anim_table.as_ref().filter(|_| entity.is_some()).map(|t| PlayerAnim { machine: crate::anim_state::Machine::new(t), clip: "idle".into() });
+        let mut player = Player { entity, position, yaw, fall: 0., view_yaw: yaw + std::f32::consts::PI, view_pitch: -0.25, controls: true, anim };
+        let below = session.ground.height(position[0], position[2], position[1] + 1.);
+        // A spawn more than 8 m above the next surface is a climbing start
+        // (hanging, not implemented): it keeps its height.
+        if let Some(h) = below.filter(|h| position[1] - h <= 8.) {
             player.position[1] = h;
         }
         session.player = Some(player);
@@ -990,10 +1010,24 @@ impl NaughtyDogVm {
         if !actors.exists("proto.pak") {
             return Ok(None);
         }
-        let package = crysirror_core::service::MemoryAssetReader(read_all(actors.open("proto.pak")?.as_ref(), PACKAGE_LIMIT)?.into());
-        let loaded = crate::mesh::Loaded::read(&package, PACKAGE_LIMIT)?;
-        let Some(skeleton) = crate::skeleton::of_package(&loaded)? else { return Ok(None) };
-        let clips = crate::anim::items(&loaded).filter(|(n, _)| PLAYER_CLIPS.contains(n)).map(|(n, at)| crate::anim::decode(&loaded, at, n, skeleton.animated)).collect::<Result<Vec<_>>>()?;
+        let read = |name: &str| -> Result<crate::mesh::Loaded> {
+            let package = crysirror_core::service::MemoryAssetReader(read_all(actors.open(name)?.as_ref(), PACKAGE_LIMIT)?.into());
+            crate::mesh::Loaded::read(&package, PACKAGE_LIMIT)
+        };
+        let Some(skeleton) = crate::skeleton::of_package(&read("proto.pak")?)? else { return Ok(None) };
+        let mut clips = Vec::new();
+        for (package, names) in PLAYER_CLIPS {
+            if !actors.exists(package) {
+                continue;
+            }
+            let loaded = read(package)?;
+            for (n, at) in crate::anim::items(&loaded).filter(|(n, _)| names.contains(n)) {
+                let clip = crate::anim::decode(&loaded, at, n, skeleton.animated)?;
+                if clip.hierarchy == skeleton.hash {
+                    clips.push(clip);
+                }
+            }
+        }
         Ok(Some((skeleton, clips)))
     }
 
@@ -1139,8 +1173,22 @@ impl NaughtyDogVm {
                 }
             }
             let len = (mv[0] * mv[0] + mv[1] * mv[1]).sqrt();
+            let movement = session.game.as_ref().map_or([0; 2], |g| g.rt.inner.movement);
+            let rig_clips = match &session.player_rig {
+                Some(Some((_, clips))) => clips.as_slice(),
+                _ => &[],
+            };
+            let mut ground_speed = None;
+            if let (Some(anim), Some(table), Some(id)) = (p.anim.as_mut(), session.anim_table.as_ref(), p.entity) {
+                let (speed, op) = drive_player_animation(anim, table, rig_clips, movement, len > 0., down(b::SHIFT), seconds, id);
+                ground_speed = speed;
+                if op.is_some() {
+                    session.stage.log(format!("player animation {}", anim.clip));
+                }
+                world.extend(op);
+            }
             if len > 0. {
-                let speed = if down(b::SHIFT) { 6. } else { 2.5 } * seconds / len;
+                let speed = ground_speed.unwrap_or(if down(b::SHIFT) { 6. } else { 2.5 }) * seconds / len;
                 let next = [p.position[0] + mv[0] * speed, p.position[2] + mv[1] * speed];
                 // Step up at most 0.6 m; a missing surface ahead blocks.
                 if let Some(h) = session.ground.height(next[0], next[1], p.position[1] + 0.6) {
@@ -1156,6 +1204,10 @@ impl NaughtyDogVm {
                     p.position[1] = h;
                     p.fall = 0.;
                 }
+                // Climbing and hanging are not implemented: standing still
+                // above a drop of more than 8 m (the hanging car at the
+                // start of `train-wreck-climb`) holds the player in place.
+                Some(h) if p.fall == 0. && p.position[1] - h > 8. => {}
                 Some(_) => {
                     p.fall = (p.fall + 9.8 * seconds).min(30.);
                     p.position[1] -= p.fall * seconds;
@@ -1263,6 +1315,64 @@ impl NaughtyDogVm {
         }
         Ok(())
     }
+}
+
+/// The clip a player animation state presents. States play their logical
+/// animation (a clip of the player rig); locomotion follows the movement
+/// type the scripts set (`set-walk-type` walking, `set-run-type` with
+/// Shift), whose option names are clips (`walk-hurt`), else `walk` /
+/// `move`; hurt movement types stand in `idle-hurt` and skip the
+/// non-hurt start and stop animations.
+fn state_clip(state: &crate::anim_state::State, movement: [u32; 2], running: bool, clips: &[crate::anim::Clip]) -> String {
+    let by_sid = |id: u32| clips.iter().find(|c| sid(&c.name) == id).map(|c| c.name.clone());
+    let locomotion = by_sid(movement[usize::from(running)]).unwrap_or_else(|| if running { "move".into() } else { "walk".into() });
+    let hurt = locomotion.contains("hurt");
+    let rest = if hurt { "idle-hurt" } else { "idle" };
+    let normal_run = locomotion == "move";
+    match state.name.as_str() {
+        "idle" => rest.into(),
+        "run" => locomotion,
+        "idle-run-f" if normal_run => "idle^move-b".into(),
+        "idle-run-f" => locomotion,
+        "run-idle" if normal_run => "move^idle2".into(),
+        "run-idle" => rest.into(),
+        _ => by_sid(state.animation).unwrap_or_else(|| rest.into()),
+    }
+}
+
+/// One frame of the player's `anim-player` state machine: input becomes
+/// the native requests (`idle-run-f` when moving from rest, `run-idle`
+/// when stopping), the machine advances by the presented clip's length
+/// and takes its `auto` transitions, and a change of clip cross-fades the
+/// entity's animation layers over the transition's fade time. Returns the
+/// ground speed of a moving state (the clip's `align` root motion) and
+/// the world operation.
+#[allow(clippy::too_many_arguments)]
+fn drive_player_animation(anim: &mut PlayerAnim, table: &crate::anim_state::StateTable, clips: &[crate::anim::Clip], movement: [u32; 2], moving: bool, running: bool, seconds: f32, entity: u32) -> (Option<f32>, Option<serde_json::Value>) {
+    let name_of = |m: &crate::anim_state::Machine| table.get(m.state).map(|s| s.name.clone()).unwrap_or_default();
+    let current = name_of(&anim.machine);
+    let locomotion = matches!(current.as_str(), "run" | "idle-run-f");
+    if moving && !locomotion && !anim.machine.request(table, sid("idle-run-f")) {
+        anim.machine.force(sid("run"), 0.2);
+    } else if !moving && locomotion && !anim.machine.request(table, sid("run-idle")) {
+        anim.machine.force(sid("run-idle"), 0.2);
+    }
+    let clip_of = |state: u32| table.get(state).map(|s| state_clip(s, movement, running, clips));
+    let duration = |name: &str| clips.iter().find(|c| c.name == name).map_or(0., |c| if c.frames > 1 { c.frames as f32 / c.fps.max(1.) } else { 0. });
+    let presented = clip_of(anim.machine.state).unwrap_or_else(|| "idle".into());
+    anim.machine.advance(table, seconds, duration(&presented));
+    let clip = clip_of(anim.machine.state).unwrap_or_else(|| "idle".into());
+    let speed = matches!(name_of(&anim.machine).as_str(), "run" | "idle-run-f").then(|| clips.iter().find(|c| c.name == clip).map_or(0., |c| c.root_speed)).filter(|v| *v > 0.2);
+    if clip == anim.clip {
+        return (speed, None);
+    }
+    let fade = anim.machine.fade.max(0.05);
+    let layers = json!([
+        {"clip": anim.clip, "time": anim.machine.previous.map_or(0., |p| p.1), "weight": 1.0, "target_weight": 0.0, "fade": 1.0 / fade, "looping": true},
+        {"clip": clip, "time": 0.0, "weight": 0.0, "target_weight": 1.0, "fade": 1.0 / fade, "looping": true}
+    ]);
+    anim.clip = clip;
+    (speed, Some(json!({"op": "set_animation", "id": entity, "animation": {"layers": layers}})))
 }
 
 impl NaughtyDogVm {
