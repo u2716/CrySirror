@@ -36,11 +36,14 @@
 //!   table after the 16-byte records, `minimum + q · step` (see
 //!   [`range_record`]).
 //!
-//! Not decoded (SATD-nd-retail-runtime): `PostDecompressQuatLog` (8 bytes
-//! of parameters per item, not a 48-bit quaternion) and
-//! `PostDecompressQuatLogPca` (16 bytes per item), which turn range
-//! vectors into rotations, and the non-uniform key caches. Those joints
-//! keep the skeleton's rest pose.
+//! - `PostDecompressQuatLog`/`LogPca`: the range vectors are half-angle
+//!   logarithms, `q = exp(v)` (on `idle^roll-fw` they give a 116° elbow
+//!   bend and 30° finger curls). Their per-item parameters (8 and 16 bytes:
+//!   not a 48-bit or 16-bit-per-component centre quaternion) are not
+//!   applied (SATD-nd-retail-runtime).
+//!
+//! Not decoded: the non-uniform key caches; those joints keep the rest
+//! pose.
 use crate::mesh::Loaded;
 use anyhow::{Context, Result, ensure};
 use glam::{Quat, Vec3};
@@ -67,7 +70,7 @@ pub struct Clip {
     pub fps: f32,
     /// Per animated joint.
     pub joints: Vec<JointTrack>,
-    /// Commands whose channels were skipped.
+    /// Commands whose channels were skipped or decoded with an inferred rule.
     pub unsupported: Vec<&'static str>,
 }
 
@@ -119,6 +122,16 @@ fn s3_key(v: u64, a: u32, b: u32, c: u32) -> Quat {
     Quat::from_array(q).normalize()
 }
 
+/// `exp` of a pure quaternion `(v, 0)`.
+fn quat_exp(v: Vec3) -> Quat {
+    let a = v.length();
+    if a < 1e-9 {
+        return Quat::from_xyzw(v.x, v.y, v.z, 1.).normalize();
+    }
+    let s = a.sin() / a;
+    Quat::from_xyzw(v.x * s, v.y * s, v.z * s, a.cos())
+}
+
 /// Bits `p..p + w` (MSB first) of a 128-bit record as a float with sign,
 /// eight exponent bits and `w − 9` mantissa bits.
 fn small_float(r: u128, p: u32, w: u32) -> f32 {
@@ -161,6 +174,7 @@ pub fn decode(p: &Loaded, payload: usize, name: &str, animated: usize) -> Result
     let mut keys: Vec<Vec<Option<Value>>> = Vec::new();
     let mut outputs: Vec<(usize, usize)> = Vec::new();
     let mut unsupported = Vec::new();
+    let mut inferred: Vec<&'static str> = Vec::new();
     let mut sizes: Vec<u8> = Vec::new();
     let list = |off: usize, n: usize| -> Result<Vec<usize>> { (0..n).map(|i| Ok(usize::from(u16_at(base + off + 2 * i)?))).collect() };
     let mut at = program_block + 0x10;
@@ -268,8 +282,23 @@ pub fn decode(p: &Loaded, payload: usize, name: &str, animated: usize) -> Result
                     }
                 }
             }
-            29 => unsupported.push("PostDecompressQuatLog"),
-            30 => unsupported.push("PostDecompressQuatLogPca"),
+            // PostDecompressQuatLog / LogPca(count, buffer, parameters, key
+            // slot): range-decoded vectors become rotations `exp(v)` with
+            // `v` the half-angle log. The per-item parameters (8 and 16
+            // bytes) are not applied.
+            29 | 30 => {
+                let first = args[3] / SLOT;
+                for k in keys.iter_mut() {
+                    for i in 0..count {
+                        if let Some(slot) = k.get_mut(first + i) {
+                            if let Some(Value::Vec(v)) = slot {
+                                *slot = Some(Value::Quat(quat_exp(*v)));
+                            }
+                        }
+                    }
+                }
+                inferred.push(if op == 29 { "PostDecompressQuatLog parameters" } else { "PostDecompressQuatLogPca parameters" });
+            }
             // KeyCacheUniformLerp / Slerp(count, buffer, outputs, key slot).
             15 | 16 => {
                 let first = args[3] / SLOT;
@@ -318,6 +347,7 @@ pub fn decode(p: &Loaded, payload: usize, name: &str, animated: usize) -> Result
             }
         }
     }
+    unsupported.extend(inferred);
     unsupported.sort_unstable();
     unsupported.dedup();
     Ok(Clip { name: name.to_owned(), hierarchy: u32_at(4)?, frames, fps, joints, unsupported })

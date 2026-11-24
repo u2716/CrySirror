@@ -32,6 +32,23 @@ fn main() -> Result<()> {
         let local = Mat4::from_scale_rotation_translation(s, r, t);
         world[j] = skel.parents[j].map_or(local, |p| world[p] * local);
     }
+    if std::env::var_os("FRAMES").is_some() {
+        for f in 0..clip.frames {
+            let mut w = vec![Mat4::IDENTITY; skel.names.len()];
+            for j in skel.order() {
+                let (mut t, mut r, mut sc) = skel.rest[j];
+                if let Some(tr) = clip.joints.get(j) {
+                    t = tr.translation.as_ref().map_or(t, |v| v[f]);
+                    r = tr.rotation.as_ref().map_or(r, |v| v[f]);
+                    sc = tr.scale.as_ref().map_or(sc, |v| v[f]);
+                }
+                let l = Mat4::from_scale_rotation_translation(sc, r, t);
+                w[j] = skel.parents[j].map_or(l, |p| w[p] * l);
+            }
+            let at = |n: &str| skel.names.iter().position(|x| x == n).map(|j| w[j].transform_point3(Vec3::ZERO).to_array().map(|v| (v * 100.).round() / 100.));
+            println!("frame {f:2} l_ankle {:?} r_ankle {:?} l_wrist {:?} head {:?}", at("l_ankle"), at("r_ankle"), at("l_wrist"), at("head"));
+        }
+    }
     let pick: Vec<&str> = if args.len() > 3 { args[3..].iter().map(String::as_str).collect() } else { vec!["root", "pelvis", "l_ankle", "r_ankle", "spined", "head", "l_wrist", "r_wrist"] };
     for n in pick {
         if let Some(j) = skel.names.iter().position(|x| x == n) {
