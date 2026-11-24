@@ -53,6 +53,9 @@ const NO_AUTO_BIRTH: u32 = 0x4000_0000;
 const MOVIE_LAYER: u32 = 0x4e44_0002;
 /// Message dialog and main-menu text layers.
 const UI_LAYER: u32 = 0x4e44_0010;
+const MENU_LEVEL: &str = "menu-temple";
+/// Front-end layers: logo, title and up to ten buttons.
+const UI_LAYERS: u32 = 12;
 /// The world assigns the first video the first video surface slot.
 const MOVIE_SURFACE: &str = "__surface/1000";
 /// World videos are read whole (`crysirror_runtime::vfs::MAX_FILE`).
@@ -272,6 +275,9 @@ struct TaskPlan {
     levels: Vec<String>,
     /// Load regions evaluated: `(region, scheme, displayed, not displayed)`.
     regions: Vec<(String, u32, Vec<String>, Vec<String>)>,
+    /// `TaskManagerMainMenu`: no player; the menu camera looks at
+    /// `menu-temple`.
+    menu: bool,
 }
 
 /// The mounted disc data and the presented level.
@@ -325,6 +331,10 @@ struct Session {
     free: bool,
     /// The level's sky (`sky-…` package) as an uploaded environment image.
     sky: Option<VfsPath>,
+    /// Front-end pages of `menu.bin` and the title logo (`menu.pak`
+    /// `logo2` with its `logo2-alpha` mask) as an uploaded image.
+    menu_pages: Vec<crate::menu::Page>,
+    logo: Option<(VfsPath, u32, u32)>,
 }
 
 /// The world environment: the level's directional light and ambient term
@@ -383,8 +393,28 @@ fn movie_seconds(reader: &dyn AssetReader) -> Result<f64> {
 enum Ui {
     /// `TaskManagerMessageDialog`: dismissed with Enter.
     Message(String),
-    /// `TaskManagerMainMenu`: New Game, Continue.
-    Menu { items: Vec<String>, selected: usize },
+    /// `TaskManagerMainMenu`: the `menu.bin` page stack (indices into
+    /// `Session::menu_pages`) and the selected visible button.
+    Menu { stack: Vec<usize>, selected: usize },
+}
+
+/// What a front-end button does in the player. Pages are entered by the
+/// button names the EBOOT dispatches on; buttons without a player action
+/// (multiplayer, saves) are drawn dimmed.
+enum MenuAction {
+    Page(&'static str),
+    NewGame,
+    None,
+}
+
+fn menu_action(button: &str) -> MenuAction {
+    match button {
+        "BUTTON_TITLE_START" => MenuAction::Page("PAGE_NEWPROFILE"),
+        "BUTTON_NEWGAME" => MenuAction::Page("PAGE_NEWGAME"),
+        "BUTTON_OPTIONS" => MenuAction::Page("PAGE_OPTIONS"),
+        b if b.starts_with("BUTTON_NEWGAME_") => MenuAction::NewGame,
+        _ => MenuAction::None,
+    }
 }
 
 /// The task after `at` in the session's task graph.
@@ -394,8 +424,9 @@ fn game_next(session: &Session, at: (usize, usize)) -> Option<(usize, usize)> {
 
 impl Session {
     /// A text catalog entry by key (its `StringId`), or the key itself.
+    /// Catalog text marks line breaks with `\`.
     fn text(&self, key: &str) -> String {
-        self.catalog.as_deref().and_then(|b| crate::Strings::parse(b).ok()).and_then(|s| s.get(sid(key)).map(str::to_owned)).unwrap_or_else(|| key.to_owned())
+        self.catalog.as_deref().and_then(|b| crate::Strings::parse(b).ok()).and_then(|s| s.get(sid(key)).map(|t| t.replace('\\', "\n"))).unwrap_or_else(|| key.to_owned())
     }
 }
 
@@ -481,6 +512,8 @@ impl NaughtyDogVm {
             catalog: None,
             free: false,
             sky: None,
+            menu_pages: Vec::new(),
+            logo: None,
         };
         if self.config.viewer() {
             let level = self.config.level.as_deref().unwrap_or("menu-temple");
@@ -493,6 +526,17 @@ impl NaughtyDogVm {
             let (_, dc) = registry.open(open("dc1.psarc")?, Some("sony/psarc"), &context)?;
             let modules = ArchiveMount::new(dc, context)?;
             let game = Game::boot(&modules, &mut session.stage)?;
+            session.menu_pages = crate::game::ModuleSource::read(&modules, "menu").and_then(|b| crate::menu::pages(&b)).unwrap_or_else(|e| {
+                session.stage.log(format!("menu.bin: {e:#}"));
+                Vec::new()
+            });
+            session.logo = match Self::menu_logo(host, self.client, &session.mount) {
+                Ok(logo) => logo,
+                Err(e) => {
+                    session.stage.log(format!("menu logo: {e:#}"));
+                    None
+                }
+            };
             let g = &game.rt.inner.tasks;
             session.tasks = g.order.iter().filter_map(|id| g.node(*id)).flat_map(|n| n.order.iter().filter_map(|s| n.subnodes.iter().find(|x| x.id == *s)).map(|s| s.name.clone())).collect();
             let task = self.config.task.clone().or_else(|| game.default_task()).context("the task graph has no story task")?;
@@ -513,7 +557,15 @@ impl NaughtyDogVm {
         let s = &n.subnodes[sub];
         // A subnode without a level (most movies) loads nothing.
         if s.level.is_empty() {
-            return Ok(TaskPlan { name, level: String::new(), continue_player: None, levels: Vec::new(), regions: Vec::new() });
+            return Ok(TaskPlan { name, level: String::new(), continue_player: None, levels: Vec::new(), regions: Vec::new(), menu: false });
+        }
+        // The EBOOT's main-menu manager (`sub_98478`) loads `menu-temple`
+        // and views it through a fixed camera (`sub_98634`,
+        // `CameraControlFixed`); the subnode's own level `menu` only holds
+        // the localized logo board drawn as 2D art. `menu-temple`'s `cache`
+        // list preloads the first story level and is not displayed.
+        if matches!(s.manager, crate::task::Manager::MainMenu) {
+            return Ok(TaskPlan { name, level: MENU_LEVEL.into(), continue_player: None, levels: vec![MENU_LEVEL.into()], regions: Vec::new(), menu: true });
         }
         let mut levels = vec![s.level.clone()];
         for c in session.all_levels.get(&s.level).map(|l| l.caches.as_slice()).unwrap_or_default() {
@@ -524,7 +576,7 @@ impl NaughtyDogVm {
         if !n.world.is_empty() && !levels.contains(&n.world) {
             levels.push(n.world.clone());
         }
-        Ok(TaskPlan { name, level: s.level.clone(), continue_player: s.continue_player.clone(), levels, regions: Vec::new() })
+        Ok(TaskPlan { name, level: s.level.clone(), continue_player: s.continue_player.clone(), levels, regions: Vec::new(), menu: false })
     }
 
     /// Unload the presented level and queue the packages of the current
@@ -749,6 +801,21 @@ impl NaughtyDogVm {
         Some(env)
     }
 
+    /// The main menu's fixed camera: `menu-temple`'s `CAMERA_TABLE_1` start
+    /// camera (`|_cam_start_1`, at the `menu-camera-1` spawner) with the
+    /// spawner's `fov` property (75°), taken as horizontal for 16:9.
+    fn menu_camera(session: &Session) -> serde_json::Value {
+        let fov = session.stage.spawners.values().find(|s| s.name.starts_with("menu-camera")).and_then(|s| s.properties.iter().find(|(k, _)| *k == sid("fov"))).and_then(|(_, v)| match v {
+            crate::ss::Property::Float(f) => Some(*f),
+            crate::ss::Property::Int(i) => Some(*i as f32),
+            _ => None,
+        });
+        let vertical = fov.map_or(46.8, |h| (2. * ((h.to_radians() * 0.5).tan() * SCREEN[1] as f32 / SCREEN[0] as f32).atan()).to_degrees());
+        let (eye, forward) = session.start.as_ref().map_or(([0.; 3], [0., 0., 1.]), |c| (c.position, c.forward));
+        let target: [f32; 3] = std::array::from_fn(|k| eye[k] + forward[k]);
+        json!({"op": "set_camera", "camera": {"eye": eye, "target": target, "up": [0.0, 1.0, 0.0], "fov_y_degrees": vertical, "near": 0.1, "far": 20000.0}})
+    }
+
     /// Place the player and start the level's state-script processes.
     fn start_task(&self, session: &mut Session, world: &mut Vec<serde_json::Value>) -> Result<()> {
         session.ground.prepare();
@@ -756,6 +823,17 @@ impl NaughtyDogVm {
             world.push(env);
         }
         let plan = session.plan.as_ref().context("task plan")?;
+        if plan.menu {
+            world.push(Self::menu_camera(session));
+            session.stage.log(format!("task {} level {}: menu camera", plan.name, plan.level));
+            let (Some(game), Some(modules)) = (session.game.as_mut(), session.modules.as_ref()) else { return Ok(()) };
+            if let Err(e) = game.start(modules, &mut session.stage, &session.records) {
+                session.script_error = Some(format!("{e:#}"));
+            }
+            world.append(&mut session.stage.ops);
+            session.started = true;
+            return Ok(());
+        }
         let spawner = plan.continue_player.as_deref().and_then(|n| session.stage.spawners.get(&sid(n))).cloned();
         let (position, yaw) = match &spawner {
             Some(s) => (s.position, yaw_of(s.rotation)),
@@ -836,8 +914,8 @@ impl NaughtyDogVm {
                 session.ui = Some(Ui::Message(text));
             }
             Manager::MainMenu => {
-                let items = ["MENU_NEWGAME", "MENU_CONTINUE"].map(|k| session.text(k)).to_vec();
-                session.ui = Some(Ui::Menu { items, selected: 0 });
+                let root = session.menu_pages.iter().position(|p| p.name == "PAGE_ROOT_MAIN");
+                session.ui = Some(Ui::Menu { stack: root.into_iter().collect(), selected: 0 });
             }
             Manager::None | Manager::Other(_) => {
                 if sub.level.is_empty() {
@@ -848,33 +926,87 @@ impl NaughtyDogVm {
                 }
             }
         }
-        layers.extend(Self::ui_layers(session.ui.as_ref()));
+        layers.extend(Self::ui_layers(session));
         host.submit_engine(self.client, 1, &serde_json::to_vec(&json!({"layers": layers, "world": world}))?)?;
         Ok(())
     }
 
     /// Message dialog or main-menu layers (text from the disc catalog).
-    fn ui_layers(ui: Option<&Ui>) -> Vec<serde_json::Value> {
-        let text = |id: u32, y: i32, line: &str, color: [u8; 4], size: u16| {
-            json!({"op": "put", "layer": {"id": id, "rect": [160, y, SCREEN[0] - 320, 200], "paint": {"kind": "text", "text": line, "font": "default", "size": size, "color": color, "layout": crysirror_core::service::SIMPLE_TEXT_LAYOUT}}})
+    fn ui_layers(session: &Session) -> Vec<serde_json::Value> {
+        let text = |id: u32, rect: [i32; 4], line: &str, color: [u8; 4], size: u16| {
+            json!({"op": "put", "layer": {"id": id, "rect": rect, "paint": {"kind": "text", "text": line, "font": "default", "size": size, "color": color, "layout": crysirror_core::service::SIMPLE_TEXT_LAYOUT}}})
         };
-        // The three layers always exist; unused ones are transparent.
-        let mut out: Vec<serde_json::Value> = (0..3).map(|i| json!({"op": "put", "layer": {"id": UI_LAYER + i, "rect": [0, 0, 1, 1], "paint": {"kind": "solid", "color": [0, 0, 0, 0]}}})).collect();
-        match ui {
+        // A fixed set of layers always exists; unused ones are transparent.
+        let mut out: Vec<serde_json::Value> = (0..UI_LAYERS).map(|i| json!({"op": "put", "layer": {"id": UI_LAYER + i, "rect": [0, 0, 1, 1], "paint": {"kind": "solid", "color": [0, 0, 0, 0]}}})).collect();
+        match session.ui.as_ref() {
             None => {}
-            Some(Ui::Message(t)) => out[0] = text(UI_LAYER, 260, t, [255, 255, 255, 255], 28),
-            Some(Ui::Menu { items, selected }) => {
-                for (i, item) in items.iter().enumerate().take(2) {
+            Some(Ui::Message(t)) => out[0] = text(UI_LAYER, [160, 260, SCREEN[0] as i32 - 320, 200], t, [255, 255, 255, 255], 28),
+            Some(Ui::Menu { stack, selected }) => {
+                let Some(page) = stack.last().and_then(|i| session.menu_pages.get(*i)) else { return out };
+                if let Some((asset, w, h)) = &session.logo {
+                    // Title logo, upper left, at half its texture width.
+                    let (w, h) = (*w as i32 / 2, *h as i32 / 2);
+                    out[0] = json!({"op": "put", "layer": {"id": UI_LAYER, "rect": [96, 64, w, h], "paint": {"kind": "image", "asset": asset.relative()}}});
+                }
+                let root = page.name == "PAGE_ROOT_MAIN";
+                if let Some(t) = page.title.as_deref().filter(|_| !root) {
+                    out[1] = text(UI_LAYER + 1, [128, 340, 900, 60], &session.text(t), [235, 225, 200, 255], 30);
+                }
+                if root {
+                    if let Some(t) = page.title.as_deref() {
+                        out[1] = text(UI_LAYER + 1, [128, 650, 1100, 40], &session.text(t), [200, 200, 200, 255], 14);
+                    }
+                }
+                let visible: Vec<&crate::menu::Button> = page.buttons.iter().filter(|b| b.condition == 0).collect();
+                for (i, button) in visible.iter().enumerate().take(UI_LAYERS as usize - 2) {
                     let on = i == *selected;
-                    out[1 + i] = text(UI_LAYER + 1 + i as u32, 440 + 56 * i as i32, &format!("{}{item}", if on { "> " } else { "  " }), if on { [255, 230, 160, 255] } else { [200, 200, 200, 255] }, 34);
+                    let enabled = !matches!(menu_action(&button.name), MenuAction::None);
+                    let color = match (on, enabled) {
+                        (true, true) => [255, 230, 160, 255],
+                        (true, false) => [190, 170, 130, 255],
+                        (false, true) => [225, 225, 225, 255],
+                        (false, false) => [130, 130, 130, 255],
+                    };
+                    let y = if root { 520 } else { 400 + 46 * i as i32 };
+                    let x = if root { 520 } else { 128 };
+                    out[2 + i] = text(UI_LAYER + 2 + i as u32, [x, y, 700, 50], &format!("{}{}", if on && !root { "> " } else { "" }, session.text(&button.text)), color, if root { 30 } else { 32 });
                 }
             }
         }
         out
     }
 
-    /// Apply a task change: a subnode with the same levels keeps the
-    /// running scripts; otherwise its levels load.
+    /// The English title logo of `menu.pak` (`logo2`, alpha from
+    /// `logo2-alpha`), uploaded once.
+    fn menu_logo(host: &mut dyn HostServices, client: ClientId, mount: &ArchiveMount) -> Result<Option<(VfsPath, u32, u32)>> {
+        let Some(path) = package_path(mount, "menu") else { return Ok(None) };
+        let package = crysirror_core::service::MemoryAssetReader(read_all(mount.open(&path)?.as_ref(), PACKAGE_LIMIT)?.into());
+        let directory = Directory::read(&package)?;
+        let mut colour = None;
+        let mut alpha = None;
+        for item in directory.items.iter().filter(|i| i.kind == "VRAM_DESC") {
+            let d = crate::texture::VramDesc::read(&package, item.payload_offset)?;
+            if d.name.contains("/menu/logo2.tga") {
+                colour = Some(d.decode(&package, directory.texture_base)?);
+            } else if d.name.contains("/menu/logo2-alpha.tga") {
+                alpha = Some(d.decode(&package, directory.texture_base)?);
+            }
+        }
+        let (Some(mut c), Some(a)) = (colour, alpha) else { return Ok(None) };
+        ensure!(c.width == a.width && c.height == a.height, "logo mask size");
+        for (px, m) in c.rgba.chunks_exact_mut(4).zip(a.rgba.chunks_exact(4)) {
+            px[3] = m[0];
+        }
+        // The logo is stored bottom row first (the menu board's texture
+        // coordinates flip it): "AMONG THIEVES" sits above the title
+        // otherwise.
+        let row = c.width as usize * 4;
+        let flipped: Vec<u8> = c.rgba.chunks_exact(row).rev().flatten().copied().collect();
+        c.rgba = flipped;
+        let asset = host.upload_rgba(client, 0x4e44_4c00, c.width, c.height, &c.rgba)?;
+        Ok(Some((asset, c.width, c.height)))
+    }
+
     fn change_task(&self, host: &mut dyn HostServices, session: &mut Session, at: (usize, usize)) -> Result<()> {
         let Some(game) = session.game.as_mut() else { return Ok(()) };
         let name = game.rt.inner.tasks.nodes[at.0].subnodes[at.1].name.clone();
@@ -1036,25 +1168,48 @@ impl NaughtyDogVm {
                 let at = session.game.as_ref().and_then(|g| g.rt.inner.task);
                 change = change.or_else(|| at.and_then(|at| game_next(session, at)));
             }
-            Some(Ui::Menu { selected, items }) => {
-                if pressed(b::UP) || pressed(b::DOWN) {
-                    *selected = (*selected + 1) % items.len().max(1);
+            Some(Ui::Menu { stack, selected }) => {
+                let page = stack.last().and_then(|i| session.menu_pages.get(*i));
+                let visible: Vec<String> = page.map(|p| p.buttons.iter().filter(|b| b.condition == 0).map(|b| b.name.clone()).collect()).unwrap_or_default();
+                let n = visible.len().max(1);
+                if pressed(b::DOWN) {
+                    *selected = (*selected + 1) % n;
                     ui_changed = true;
                 }
-                // Continue needs a native save (not implemented): both
-                // entries start the story.
-                if pressed(b::ENTER) {
-                    session.ui = None;
+                if pressed(b::UP) {
+                    *selected = (*selected + n - 1) % n;
                     ui_changed = true;
-                    if let Some(game) = session.game.as_ref() {
-                        change = game.story_task().and_then(|t| game.rt.inner.tasks.find(sid(&t)));
+                }
+                if pressed(b::ESCAPE) && stack.len() > 1 {
+                    stack.pop();
+                    *selected = 0;
+                    ui_changed = true;
+                }
+                if pressed(b::ENTER) {
+                    match visible.get(*selected).map(|b| menu_action(b)) {
+                        Some(MenuAction::Page(target)) => {
+                            if let Some(i) = session.menu_pages.iter().position(|p| p.name == target) {
+                                stack.push(i);
+                                // The difficulty page opens on Normal.
+                                *selected = session.menu_pages[i].buttons.iter().filter(|b| b.condition == 0).position(|b| b.name.ends_with("_NORMAL")).unwrap_or(0);
+                                ui_changed = true;
+                            }
+                        }
+                        Some(MenuAction::NewGame) => {
+                            session.ui = None;
+                            ui_changed = true;
+                            if let Some(game) = session.game.as_ref() {
+                                change = game.story_task().and_then(|t| game.rt.inner.tasks.find(sid(&t)));
+                            }
+                        }
+                        Some(MenuAction::None) | None => {}
                     }
                 }
             }
             _ => {}
         }
         if ui_changed {
-            layers.extend(Self::ui_layers(session.ui.as_ref()));
+            layers.extend(Self::ui_layers(session));
         }
         if let Some(end) = session.movie {
             if skip || session.stage.now >= end {

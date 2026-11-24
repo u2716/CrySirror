@@ -13,6 +13,7 @@ pub mod script;
 pub mod ss;
 pub mod task;
 pub mod geometry;
+pub mod menu;
 pub mod mesh;
 pub mod package;
 pub mod probes;
