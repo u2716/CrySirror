@@ -8,9 +8,13 @@
 //! - a select node (`0x1c3f471c`): `{default, alternatives array, flags,
 //!   selector lambda, 0}`; the lambda gets `(node, info, instance)` and
 //!   returns the child to evaluate (`default` or an element of the array);
-//! - `anim-node-animation`: `{clip StringId, …}`.
+//! - `anim-node-animation`: `{clip StringId, ?, ?, phase lambda, ?, clip
+//!   lambda}`; the phase lambda `(node, info, instance, state phase, 0)`
+//!   returns the phase to sample (look sweeps read it from `info`: the
+//!   NPCs' +144), the clip lambda `(node, info, instance)` a clip
+//!   `StringId` replacing the stored one (`face-reaction`).
 //!
-//! The lambdas only read two blocks the PPU fills per actor. `info` holds
+//! The lambdas read two blocks the PPU fills per actor. `info` holds
 //! the state's floats: for the locomotion states (from the clips their
 //! blends lead to) +28/+32 lean right/left, +40 the walk blend, +44 the
 //! downhill spine, +48/+52 stairs up/down; `+0x228` is a cycle phase.
@@ -40,6 +44,9 @@ pub struct Leaf {
     pub clip: u32,
     pub weight: f32,
     pub additive: bool,
+    /// Sample phase (0–1) from the leaf's phase lambda; `None` follows the
+    /// state's phase.
+    pub phase: Option<f32>,
 }
 
 /// Per-frame inputs: `(byte offset, value)` writes into the two blocks.
@@ -52,6 +59,8 @@ pub struct Inputs {
 
 pub struct Graph {
     pub dc: Dc,
+    /// The module's name `StringId` (`anim-player`, `anim-npc`).
+    pub module: u32,
     info: u32,
     instance: u32,
     /// Movement-type `StringId` by index.
@@ -60,14 +69,15 @@ pub struct Graph {
     pub weapons: Vec<u32>,
 }
 
-/// `lerp-scale` and `minmax`, the only natives the tree lambdas call
-/// (PPU 0x1416cc and 0x14ab64).
+/// `lerp-scale`, `minmax` and `angle-mod`, the only natives the tree
+/// lambdas call (PPU 0x1416cc, 0x14ab64 and 0x2db59c).
 struct TreeNatives {
     errors: Vec<String>,
 }
 
 const LERP_SCALE: u32 = 0;
 const MINMAX: u32 = 1;
+const ANGLE_MOD: u32 = 2;
 
 impl Natives for TreeNatives {
     fn call(&mut self, _dc: &mut Dc, id: u32, a: &[u32; MAX_ARGS], argc: u32) -> Result<(u32, Status)> {
@@ -81,6 +91,17 @@ impl Natives for TreeNatives {
             }
             // `min(max(x, lo), hi)`.
             (MINMAX, 3) => f(0).max(f(1)).min(f(2)),
+            // `fmod(x, 360)` brought into [−180, 180].
+            (ANGLE_MOD, 1) => {
+                let r = f(0) % 360.;
+                if r < -180. {
+                    r + 360.
+                } else if r <= 180. {
+                    r
+                } else {
+                    r - 360.
+                }
+            }
             _ => bail!("anim tree native {id} with {argc} arguments"),
         };
         Ok((v.to_bits(), Status::Continue))
@@ -90,6 +111,8 @@ impl Natives for TreeNatives {
             Some(LERP_SCALE)
         } else if s == sid("minmax") {
             Some(MINMAX)
+        } else if s == sid("angle-mod") {
+            Some(ANGLE_MOD)
         } else {
             None
         }
@@ -100,20 +123,31 @@ impl Natives for TreeNatives {
 }
 
 impl Graph {
+    /// Load the player's `anim-player.bin`.
     pub fn new(bytes: &[u8]) -> Result<Self> {
+        let graph = Self::load("anim-player", bytes)?;
+        ensure!(!graph.movement_types.is_empty(), "anim-player.bin without its movement-type table");
+        Ok(graph)
+    }
+
+    /// Load an animation module (`anim-player`, `anim-npc`). Only
+    /// `anim-player` defines the movement-type table.
+    pub fn load(name: &str, bytes: &[u8]) -> Result<Self> {
         let mut dc = Dc::default();
-        let module = dc.load(sid("anim-player"), bytes)?.clone();
+        let module = dc.load(sid(name), bytes)?.clone();
         let entry = |name: u32| module.entries.iter().find(|(n, _)| *n == name).map(|(_, a)| *a);
         let m = &dc.mem;
-        let table = entry(MOVEMENT_TYPES).context("anim-player.bin without its movement-type table")?;
-        let (array, count) = (m.u32(table)?, m.u32(table + 4)?);
-        ensure!(count <= 256, "ND movement-type count");
-        let mut movement_types = vec![0; count as usize];
-        for i in 0..count {
-            let r = array + 0x6c * i;
-            let index = m.u32(r + 0x4c)? as usize;
-            ensure!(index < movement_types.len(), "ND movement-type index");
-            movement_types[index] = m.u32(r + 0x40)?;
+        let mut movement_types = Vec::new();
+        if let Some(table) = entry(MOVEMENT_TYPES) {
+            let (array, count) = (m.u32(table)?, m.u32(table + 4)?);
+            ensure!(count <= 256, "ND movement-type count");
+            movement_types = vec![0; count as usize];
+            for i in 0..count {
+                let r = array + 0x6c * i;
+                let index = m.u32(r + 0x4c)? as usize;
+                ensure!(index < movement_types.len(), "ND movement-type index");
+                movement_types[index] = m.u32(r + 0x40)?;
+            }
         }
         let mut weapons = Vec::new();
         for (_, a) in &module.entries {
@@ -126,7 +160,7 @@ impl Graph {
         }
         let info = dc.mem.alloc(INFO_BYTES)?;
         let instance = dc.mem.alloc(INSTANCE_BYTES)?;
-        Ok(Self { dc, info, instance, movement_types, weapons })
+        Ok(Self { dc, module: sid(name), info, instance, movement_types, weapons })
     }
 
     pub fn movement_index(&self, name: u32) -> Option<u32> {
@@ -224,7 +258,7 @@ impl Graph {
         self.node(node, 1., inputs.phase, additive, 0, &mut out)?;
         let mut merged: Vec<Leaf> = Vec::with_capacity(out.len());
         for l in out {
-            match merged.iter_mut().find(|m| m.clip == l.clip && m.additive == l.additive) {
+            match merged.iter_mut().find(|m| m.clip == l.clip && m.additive == l.additive && m.phase == l.phase) {
                 Some(m) => m.weight += l.weight,
                 None => merged.push(l),
             }
@@ -255,7 +289,12 @@ impl Graph {
                 let target = if lambda == 0 { default } else { self.call(lambda, &[node, self.info, self.instance])? };
                 self.node(if target == 0 { default } else { target }, weight, phase, additive, depth + 1, out)?;
             }
-            TYPE_ANIMATION => out.push(Leaf { clip: m.u32(node)?, weight, additive: false }),
+            TYPE_ANIMATION => {
+                let (stored, phase_lambda, clip_lambda) = (m.u32(node)?, m.u32(node + 0xc)?, m.u32(node + 0x14)?);
+                let clip = if clip_lambda == 0 { stored } else { Some(self.call(clip_lambda, &[node, self.info, self.instance])?).filter(|c| *c != 0).unwrap_or(stored) };
+                let phase = if phase_lambda == 0 { None } else { Some(f32::from_bits(self.call(phase_lambda, &[node, self.info, self.instance, phase.to_bits(), 0])?)).filter(|p| p.is_finite()).map(|p| p.clamp(0., 1.)) };
+                out.push(Leaf { clip, weight, additive: false, phase });
+            }
             other => bail!("ND anim node type {other:08x}"),
         }
         Ok(())
@@ -282,6 +321,9 @@ mod tests {
         assert_eq!(call(LERP_SCALE, &[0.4, 1., 2., 4., 5.]), 4.);
         assert_eq!(call(MINMAX, &[1.5, 0., 1.]), 1.);
         assert_eq!(call(MINMAX, &[-0.5, 0., 1.]), 0.);
+        assert_eq!(call(ANGLE_MOD, &[270.]), -90.);
+        assert_eq!(call(ANGLE_MOD, &[-540.]), -180.);
+        assert_eq!(call(ANGLE_MOD, &[90.]), 90.);
         let n = TreeNatives { errors: Vec::new() };
         assert_eq!(n.lookup(sid("lerp-scale")), Some(LERP_SCALE));
         assert_eq!(n.lookup(sid("set-walk-type")), None);

@@ -138,6 +138,14 @@ Every state evaluates. With zero inputs: `idle` is `idle` plus the additive `idl
 
 The PPU locomotion controller is reproduced from the transition table in `src/player.rs`. Jumps, falls and landings have no incoming transitions and are entered directly.
 
+Animation leaves are `{clip, ?, ?, phase lambda, ?, clip lambda}`. The phase lambda `(node, info, instance, state phase, 0)` returns the sample phase; look sweeps read it from the info block (NPC +140 left–right, +144 up–down; aim +92/+96). The clip lambda `(node, info, instance)` replaces the clip (`face-reaction`).
+
+`anim-npc.bin` has the same `anim-actor` layout: 264 states, initial `s_ambient-gunout-idle`. Its lambdas also call `angle-mod` (PPU 0x2db59c: `fmod(x, 360)` brought into [−180, 180] with the TOC constants 360, 180 and −180).
+
+NPC leaves are logical animations that `anim-sets.bin` `anim-set`s (`{array, count}` of `{logical, clip}`) map to the character's clips. Example: `*flynn-anim-set*` maps 274 of its 276 leaves into `anim-flynn.pak`, and `*flynn-heist-anim-set*` overrides 4 of them. No module or EBOOT string links characters to sets. The `*NAME-anim-set*` names match 11 art-group and character names, which is the rule used here.
+
+Task continuation records (subnode +0x28) are `{string, StringId}` slots: the player's spawner at +0, allies' at +0x08 to +0x48 (`continue-flynn-…` in 24 records, `continue-rescuer-…`, `continue-ally-…`) and the camera's at +0x50.
+
 ## Foreground (art-group) meshes
 
 Art-group meshes use the same descriptors as level geometry (above); their `vis_sphere` tags (`TAG_VEC4`) bound the model, and spheres of animated objects cover their motion. Skinned player models carry no `JOINT_HIERARCHY`; they bind to the `proto.pak` rig (230 joints), whose `idle` clip the player renders.

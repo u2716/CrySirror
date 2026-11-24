@@ -45,15 +45,21 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Character>> {
         .collect()
 }
 
+/// The character an art group belongs to: by model name, then by a listed
+/// model the art group extends (`flynn-heist` → `flynn`).
+pub fn character_of<'a>(characters: &'a [Character], art: &str) -> Option<&'a Character> {
+    characters.iter().find(|c| c.models.iter().any(|m| m == art)).or_else(|| {
+        characters.iter().filter(|c| c.models.iter().any(|m| art.starts_with(&format!("{m}-")))).max_by_key(|c| c.models.iter().filter(|m| art.starts_with(&format!("{m}-"))).map(String::len).max())
+    })
+}
+
 /// Where a skinned art group without its own skeleton gets one: the
 /// skeleton package (`None` for the player rig in `proto.pak`) and the
 /// character's animation packages. Matched by model name, then by a
 /// listed model the art group extends (`flynn-heist` → `flynn`), then
 /// `hero-…` as the player and `…pistol…` as `pistol-base`.
 pub fn rig_of(characters: &[Character], art: &str) -> Option<(Option<String>, Vec<String>)> {
-    let found = characters.iter().find(|c| c.models.iter().any(|m| m == art)).or_else(|| {
-        characters.iter().filter(|c| c.models.iter().any(|m| art.starts_with(&format!("{m}-")))).max_by_key(|c| c.models.iter().filter(|m| art.starts_with(&format!("{m}-"))).map(String::len).max())
-    });
+    let found = character_of(characters, art);
     let anims = |c: &Character| c.packages.iter().filter(|p| p.starts_with("anim-")).cloned().collect::<Vec<_>>();
     match found {
         Some(c) if c.name == "Player" => Some((None, anims(c))),

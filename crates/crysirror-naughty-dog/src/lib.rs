@@ -6,6 +6,7 @@ pub use adapter::register;
 pub use adapter::{Config, ENGINE_ID};
 pub mod adapter;
 pub mod anim;
+pub mod anim_sets;
 pub mod anim_state;
 pub mod anim_tree;
 pub mod characters;

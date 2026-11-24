@@ -2,15 +2,17 @@
 //! Evaluate player blend trees from an extracted `anim-player.bin`.
 //! `anim_tree ANIM_PLAYER_BIN [MOVEMENT WEAPON [STATE[@INFO_OFFSET=VALUE,…]…]]`
 //! Without states, every state is evaluated with zero inputs and failures
-//! are listed. `NAMES=a.pak:b.pak` adds clip names from packages.
+//! are listed. `NAMES=a.pak:b.pak` adds clip names from packages;
+//! `MODULE=anim-npc` reads another animation module.
 use anyhow::{Context, Result};
 use crysirror_naughty_dog::{anim_state, anim_tree, dc::sid};
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let bytes = std::fs::read(args.first().context("ANIM_PLAYER_BIN")?)?;
-    let mut graph = anim_tree::Graph::new(&bytes)?;
-    let table = anim_state::parse_loaded(&graph.dc)?;
+    let module = std::env::var("MODULE").unwrap_or_else(|_| "anim-player".into());
+    let mut graph = anim_tree::Graph::load(&module, &bytes)?;
+    let table = anim_state::parse_module(&graph.dc, graph.module)?;
     let mut names = sid_names(&bytes);
     for p in std::env::var("NAMES").unwrap_or_default().split(':').filter(|p| !p.is_empty()) {
         names.extend(sid_names(&std::fs::read(p)?));
@@ -30,11 +32,14 @@ fn main() -> Result<()> {
                 }
             }
         }
-        println!("{ok} states evaluated, {failed} failed");
+        println!("{ok} states evaluated, {failed} failed; initial {}", name(table.initial));
+        if std::env::var_os("LIST").is_some() {
+            println!("{}", table.states.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(" "));
+        }
         return Ok(());
     }
-    let movement = graph.movement_index(sid(&args[1])).context("unknown movement type")?;
-    let weapon = graph.weapon_index(sid(&args[2])).context("unknown weapon")?;
+    let movement = graph.movement_index(sid(&args[1])).or_else(|| args[1].parse().ok()).context("unknown movement type")?;
+    let weapon = graph.weapon_index(sid(&args[2])).or_else(|| args[2].parse().ok()).context("unknown weapon")?;
     for spec in &args[3..] {
         let mut parts = spec.split('@');
         let state = parts.next().unwrap_or_default();
@@ -44,6 +49,9 @@ fn main() -> Result<()> {
             inputs.info.push((k.parse()?, v.parse()?));
         }
         let s = table.get(sid(state)).context("no such state")?;
+        if std::env::var_os("LIST").is_some() {
+            println!("  transitions: {}", s.transitions.iter().map(|t| format!("{}→{}", name(t.request), name(t.target))).collect::<Vec<_>>().join(" "));
+        }
         println!("{spec}: {} reachable clips", graph.clips(s.tree).len());
         for l in graph.evaluate(s.tree, &inputs, &additive)? {
             println!("  {:6.3} {}{}", l.weight, name(l.clip), if l.additive { " (additive)" } else { "" });

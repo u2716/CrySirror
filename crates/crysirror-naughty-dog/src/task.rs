@@ -37,8 +37,12 @@ pub struct Subnode {
     pub id: u32,
     /// `pak22.txt` level of the subnode.
     pub level: String,
+    /// Continuation spawners (subnode +0x28: `{string, StringId}` slots):
+    /// the player's at +0, allies' (`continue-flynn-…`, `continue-ally-…`,
+    /// `continue-rescuer-…`) at +0x08…+0x48 and the camera's at +0x50.
     pub continue_player: Option<String>,
-    pub continue_buddy: Option<String>,
+    pub continue_allies: Vec<String>,
+    pub continue_camera: Option<String>,
     pub manager: Manager,
     /// Script lambda run when the subnode starts (+0x38).
     pub on_start: Option<u32>,
@@ -126,7 +130,7 @@ impl Graph {
                     0 => None,
                     l => (dc.mem.type_of(l)? == crate::dc::TYPE_SCRIPT_LAMBDA).then_some(l),
                 };
-                subnodes.push(Subnode { name: string(dc, s)?, id: sid_, level: string(dc, s + 0x10)?, continue_player: opt(0)?, continue_buddy: opt(0x38)?, manager, on_start, address: s });
+                subnodes.push(Subnode { name: string(dc, s)?, id: sid_, level: string(dc, s + 0x10)?, continue_player: opt(0)?, continue_allies: (0x08..=0x48).step_by(8).map(opt).collect::<Result<Vec<_>>>()?.into_iter().flatten().collect(), continue_camera: opt(0x50)?, manager, on_start, address: s });
             }
             let edges = map(dc, dc.mem.u32(n + 0x1c)?)?;
             nodes.push(Node { name: string(dc, n)?, id, world: string(dc, n + 8)?, ss_module: string(dc, n + 0x10)?, subnodes, order: order(&edges), edges, address: n });

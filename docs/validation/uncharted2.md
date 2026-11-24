@@ -122,3 +122,9 @@ Blend trees and controller (2026-11-25):
 - **Captures:** the frame-1180 capture shows the run behind the railing and the frame-1460 capture the long-jump pose, with the camera behind the player.
 - **Known defect:** stretched triangles at the shoulder and hip remain.
 
+NPC animation (2026-11-25):
+
+- **Offline evaluation:** `MODULE=anim-npc examples/anim_tree anim-npc.bin` evaluates all 264 states.
+- **Museum binding:** in `museum-steam-vault` the log shows `ally continue-flynn-steam-vault-1`, and `flynn-heist` binds to `flynn-base` with the sets `*flynn-heist-anim-set*` and `*flynn-anim-set*`. Flynn's layers are `idle` plus the additive `look-add--left-right` and `look-add--up-down` at their centre phase.
+- **Capture:** the frame-940 capture shows Flynn standing on the lower walkway with his arms at his sides, and the player in `ambient-casual` after ten seconds at rest, framed from the continue camera's direction.
+

@@ -17,10 +17,7 @@
 //! chain the rest (`run-jump-long` → `jump-long`, `jump-in-place` →
 //! `jump-in-place-land` → `idle`).
 //!
-//! Each frame the current state's blend tree is evaluated
-//! ([`crate::anim_tree`]); its clips play phase-locked to the heaviest
-//! one, whose length times the state for `auto`. A state change fades the
-//! previous state's clips out over the transition's fade time. Ground
+//! Each frame the current state is presented by an [`Animator`]. Ground
 //! speed is the blended clips' root motion (`align`) along the facing
 //! direction. Thresholds and rates in this module are not native values
 //! (SATD-nd-retail-runtime).
@@ -119,13 +116,68 @@ pub struct Step {
     pub state: Option<String>,
 }
 
-pub struct Controller {
+/// Presents an `anim-actor` state machine: the current state's tree
+/// evaluated each frame, its clips phase-locked to the heaviest one (whose
+/// length times the state for `auto`), and the previous state's clips
+/// faded out over the transition's fade time. Shared by the player and
+/// the NPCs; `map` turns tree leaves into clips (an NPC's anim set).
+pub struct Animator {
     pub machine: Machine,
-    pub yaw: f32,
     current: Vec<Layer>,
     previous: Vec<Layer>,
     fade_time: f32,
     duration: f32,
+}
+
+impl Animator {
+    pub fn new(machine: Machine) -> Self {
+        Self { machine, current: Vec::new(), previous: Vec::new(), fade_time: 0., duration: 0. }
+    }
+
+    /// Advance by `seconds` (taking `auto` transitions) and present.
+    /// `before` is the state at the start of the frame, before any request.
+    /// Returns the layers and the blended root speed.
+    #[allow(clippy::too_many_arguments)]
+    pub fn present(&mut self, graph: &mut Graph, table: &StateTable, clips: &HashMap<u32, ClipInfo>, map: &dyn Fn(u32) -> u32, mut inputs: Inputs, before: u32, seconds: f32) -> Result<(Vec<Layer>, f32)> {
+        let duration = self.duration;
+        self.machine.advance(table, seconds, duration);
+        if self.machine.state != before {
+            self.previous = std::mem::take(&mut self.current).into_iter().filter(|l| l.weight > 1e-3).collect();
+            self.fade_time = 0.;
+        }
+        inputs.phase = if duration > 0. { (self.machine.time / duration).min(1.) } else { 0. };
+        let tree = table.get(self.machine.state).map_or(0, |s| s.tree);
+        let leaves = graph.evaluate(tree, &inputs, &|c| clips.get(&map(c)).is_some_and(|i| i.additive))?;
+        let present: Vec<_> = leaves.into_iter().filter_map(|l| clips.get(&map(l.clip)).map(|i| (l, i))).collect();
+        let base: f32 = present.iter().filter(|(l, _)| !l.additive).map(|(l, _)| l.weight).sum();
+        let main = present.iter().filter(|(l, _)| !l.additive).max_by(|a, b| a.0.weight.total_cmp(&b.0.weight)).map(|(_, i)| i.duration).unwrap_or(0.);
+        self.duration = main;
+        let phase = if main > 0. { self.machine.time / main } else { 0. };
+        self.current = present
+            .iter()
+            .map(|(l, i)| Layer { clip: i.name.clone(), time: l.phase.unwrap_or(phase) * i.duration, weight: if l.additive || base <= 1e-4 { l.weight } else { l.weight / base }, additive: l.additive })
+            .collect();
+        self.fade_time += seconds;
+        let fade = self.machine.fade.max(0.05);
+        let t = (self.fade_time / fade).min(1.);
+        for l in &mut self.previous {
+            l.time += seconds;
+        }
+        if t >= 1. {
+            self.previous.clear();
+        }
+        let mut layers: Vec<Layer> = self.previous.iter().map(|l| Layer { weight: l.weight * (1. - t), ..l.clone() }).collect();
+        layers.extend(self.current.iter().map(|l| Layer { weight: if self.previous.is_empty() { l.weight } else { l.weight * t }, ..l.clone() }));
+        layers.retain(|l| l.weight > 1e-4);
+        let by_name = |n: &str| clips.values().find(|i| i.name == n);
+        let speed = layers.iter().filter(|l| !l.additive).map(|l| l.weight * by_name(&l.clip).map_or(0., |i| i.speed)).sum::<f32>();
+        Ok((layers, speed))
+    }
+}
+
+pub struct Controller {
+    pub anim: Animator,
+    pub yaw: f32,
     rest_time: f32,
     yaw_rate: f32,
     ambient: usize,
@@ -137,24 +189,24 @@ fn wrap(a: f32) -> f32 {
 
 impl Controller {
     pub fn new(table: &StateTable, yaw: f32) -> Self {
-        Self { machine: Machine::new(table), yaw, current: Vec::new(), previous: Vec::new(), fade_time: 0., duration: 0., rest_time: 0., yaw_rate: 0., ambient: 0 }
+        Self { anim: Animator::new(Machine::new(table)), yaw, rest_time: 0., yaw_rate: 0., ambient: 0 }
     }
 
     fn name(&self, table: &StateTable) -> String {
-        table.get(self.machine.state).map(|s| s.name.clone()).unwrap_or_default()
+        table.get(self.anim.machine.state).map(|s| s.name.clone()).unwrap_or_default()
     }
 
     /// Take transition `request`, else enter `fallback` directly.
     fn go(&mut self, table: &StateTable, request: &str, fallback: Option<&str>, fade: f32) {
-        if !self.machine.request(table, sid(request)) {
+        if !self.anim.machine.request(table, sid(request)) {
             if let Some(target) = fallback.filter(|t| table.get(sid(t)).is_some()) {
-                self.machine.force(sid(target), fade);
+                self.anim.machine.force(sid(target), fade);
             }
         }
     }
 
     pub fn step(&mut self, graph: &mut Graph, table: &StateTable, clips: &HashMap<u32, ClipInfo>, f: &Frame) -> Result<Step> {
-        let before = self.machine.state;
+        let before = self.anim.machine.state;
         let state = self.name(table);
         let airborne = matches!(state.as_str(), "run-jump-long" | "jump-long" | "fall" | "jump-in-place");
         let at_rest = state == "idle" || state == "run-idle" || state.starts_with("ambient-") || state.starts_with("idle-turn-") || state.ends_with("-land-idle") || state == "jump-in-place-land" || state.starts_with("fall-land-") && state.ends_with("-idle");
@@ -172,21 +224,21 @@ impl Controller {
                         "hard"
                     };
                     let target = format!("fall-land-{grade}-{}", if f.heading.is_some() { "run" } else { "idle" });
-                    self.machine.force(sid(&target), 0.1);
+                    self.anim.machine.force(sid(&target), 0.1);
                 } else if f.heading.is_some() {
-                    self.machine.force(sid("jump-long-land-run"), 0.1);
+                    self.anim.machine.force(sid("jump-long-land-run"), 0.1);
                 } else {
                     self.go(table, "idle", Some("jump-long-land-idle"), 0.1);
                 }
             }
         } else if !f.grounded && f.dropped > FALL_AFTER {
-            self.machine.force(sid("fall"), 0.2);
+            self.anim.machine.force(sid("fall"), 0.2);
         } else if f.jump {
             if f.heading.is_some() {
-                self.machine.force(sid("run-jump-long"), 0.1);
+                self.anim.machine.force(sid("run-jump-long"), 0.1);
                 lift = Some(JUMP_LIFT);
             } else {
-                self.machine.force(sid("jump-in-place"), 0.1);
+                self.anim.machine.force(sid("jump-in-place"), 0.1);
             }
         } else if let Some(a) = relative {
             if at_rest {
@@ -232,47 +284,14 @@ impl Controller {
         }
         let rate = if f.seconds > 0. { wrap(self.yaw - old_yaw) / f.seconds } else { 0. };
         self.yaw_rate += (rate - self.yaw_rate) * (f.seconds * 8.).min(1.);
-        // Advance by the presented clip's length; `auto` transitions follow.
-        let duration = self.duration;
-        self.machine.advance(table, f.seconds, duration);
-        let changed = self.machine.state != before;
-        if self.machine.state != before {
-            self.previous = std::mem::take(&mut self.current).into_iter().filter(|l| l.weight > 1e-3).collect();
-            self.fade_time = 0.;
-        }
-        // Evaluate the current tree.
         let lean = (self.yaw_rate / LEAN_RATE).clamp(-1., 1.);
         let inputs = Inputs {
             info: vec![(28, lean.max(0.)), (32, (-lean).max(0.)), (40, (f.slope * 2.).clamp(0., 1.)), (44, (-f.slope * 2.).clamp(0., 1.))],
             instance: vec![(48, f.movement), (52, f.weapon)],
-            phase: if duration > 0. { (self.machine.time / duration).min(1.) } else { 0. },
+            phase: 0.,
         };
-        let tree = table.get(self.machine.state).map_or(0, |s| s.tree);
-        let leaves = graph.evaluate(tree, &inputs, &|c| clips.get(&c).is_some_and(|i| i.additive))?;
-        let present: Vec<_> = leaves.into_iter().filter_map(|l| clips.get(&l.clip).map(|i| (l, i))).collect();
-        let base: f32 = present.iter().filter(|(l, _)| !l.additive).map(|(l, _)| l.weight).sum();
-        let main = present.iter().filter(|(l, _)| !l.additive).max_by(|a, b| a.0.weight.total_cmp(&b.0.weight)).map(|(_, i)| i.duration).unwrap_or(0.);
-        self.duration = main;
-        let phase = if main > 0. { self.machine.time / main } else { 0. };
-        self.current = present
-            .iter()
-            .map(|(l, i)| Layer { clip: i.name.clone(), time: phase * i.duration, weight: if l.additive || base <= 1e-4 { l.weight } else { l.weight / base }, additive: l.additive })
-            .collect();
-        // Fade out the previous state's clips.
-        self.fade_time += f.seconds;
-        let fade = self.machine.fade.max(0.05);
-        let t = (self.fade_time / fade).min(1.);
-        for l in &mut self.previous {
-            l.time += f.seconds;
-        }
-        if t >= 1. {
-            self.previous.clear();
-        }
-        let mut layers: Vec<Layer> = self.previous.iter().map(|l| Layer { weight: l.weight * (1. - t), ..l.clone() }).collect();
-        layers.extend(self.current.iter().map(|l| Layer { weight: if self.previous.is_empty() { l.weight } else { l.weight * t }, ..l.clone() }));
-        layers.retain(|l| l.weight > 1e-4);
-        let by_name = |n: &str| clips.values().find(|i| i.name == n);
-        let speed = layers.iter().filter(|l| !l.additive).map(|l| l.weight * by_name(&l.clip).map_or(0., |i| i.speed)).sum::<f32>();
+        let (layers, speed) = self.anim.present(graph, table, clips, &|c| c, inputs, before, f.seconds)?;
+        let changed = self.anim.machine.state != before;
         Ok(Step { layers, speed, lift, state: changed.then(|| self.name(table)) })
     }
 }

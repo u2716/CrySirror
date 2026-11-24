@@ -67,9 +67,15 @@ pub fn parse(bytes: &[u8]) -> Result<StateTable> {
 
 /// The states of an `anim-player` module already loaded into `dc`.
 pub fn parse_loaded(dc: &Dc) -> Result<StateTable> {
-    let module = dc.module(sid("anim-player")).context("anim-player module not loaded")?;
+    parse_module(dc, sid("anim-player"))
+}
+
+/// The states of the `anim-actor` in loaded module `name` (`anim-player`,
+/// `anim-npc`, which share the layout).
+pub fn parse_module(dc: &Dc, name: u32) -> Result<StateTable> {
+    let module = dc.module(name).context("animation module not loaded")?;
     let m = &dc.mem;
-    let actor = module.entries.iter().map(|(_, a)| *a).find(|a| m.type_of(*a).ok() == Some(sid("anim-actor"))).context("anim-player.bin without anim-actor")?;
+    let actor = module.entries.iter().map(|(_, a)| *a).find(|a| m.type_of(*a).ok() == Some(sid("anim-actor"))).context("animation module without anim-actor")?;
     let count = m.u32(actor + 0x30)?;
     ensure!(count <= 4096, "ND anim state count");
     let array = m.u32(actor + 0x34)?;

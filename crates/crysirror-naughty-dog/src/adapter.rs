@@ -276,6 +276,10 @@ struct TaskPlan {
     name: String,
     level: String,
     continue_player: Option<String>,
+    /// Allies' continue spawners (`continue-flynn-steam-vault-1`) and the
+    /// camera's.
+    continue_allies: Vec<String>,
+    continue_camera: Option<String>,
     /// Level names whose packages load (subnode level, caches, world,
     /// then the displayed levels of the world's load regions).
     levels: Vec<String>,
@@ -354,7 +358,25 @@ struct Session {
     /// them by skeleton package.
     characters: Vec<crate::characters::Character>,
     npc_rigs: HashMap<String, Option<(crate::skeleton::Skeleton, Vec<crate::anim::Clip>)>>,
+    /// `anim-npc.bin` states and trees, `anim-sets.bin`, the NPCs they
+    /// drive and each NPC rig's clips by name `StringId`.
+    npc_anim: Option<(crate::anim_tree::Graph, crate::anim_state::StateTable)>,
+    anim_sets: crate::anim_sets::AnimSets,
+    npcs: Vec<Npc>,
+    npc_clips: HashMap<String, HashMap<u32, crate::player::ClipInfo>>,
 }
+
+/// An NPC entity presented by the `anim-npc` state machine.
+struct Npc {
+    entity: u32,
+    animator: crate::player::Animator,
+    sets: Vec<u32>,
+    rig: String,
+}
+
+/// NPC states presented without AI: the ambient idle (the state the
+/// demeanour and move natives would leave is not modelled).
+const NPC_STATES: &[&str] = &["s_ambient-idle"];
 
 /// Packages holding the player rig's clips: `proto.pak` and the hurt
 /// movement types of `anim-proto-hurt.pak`.
@@ -546,6 +568,10 @@ impl NaughtyDogVm {
             player_clips: HashMap::new(),
             characters: Vec::new(),
             npc_rigs: HashMap::new(),
+            npc_anim: None,
+            anim_sets: Default::default(),
+            npcs: Vec::new(),
+            npc_clips: HashMap::new(),
         };
         if self.config.viewer() {
             let level = self.config.level.as_deref().unwrap_or("menu-temple");
@@ -559,6 +585,17 @@ impl NaughtyDogVm {
             let modules = ArchiveMount::new(dc, context)?;
             let game = Game::boot(&modules, &mut session.stage)?;
             session.characters = crate::game::ModuleSource::read(&modules, "spawn-character").and_then(|b| crate::characters::parse(&b)).unwrap_or_default();
+            match crate::game::ModuleSource::read(&modules, "anim-npc").and_then(|b| {
+                let graph = crate::anim_tree::Graph::load("anim-npc", &b)?;
+                Ok((crate::anim_state::parse_module(&graph.dc, graph.module)?, graph))
+            }) {
+                Ok((table, graph)) => session.npc_anim = Some((graph, table)),
+                Err(e) => session.stage.log(format!("anim-npc.bin: {e:#}")),
+            }
+            session.anim_sets = crate::game::ModuleSource::read(&modules, "anim-sets").and_then(|b| crate::anim_sets::AnimSets::parse(&b)).unwrap_or_else(|e| {
+                session.stage.log(format!("anim-sets.bin: {e:#}"));
+                Default::default()
+            });
             match crate::game::ModuleSource::read(&modules, "anim-player").and_then(|b| {
                 let graph = crate::anim_tree::Graph::new(&b)?;
                 Ok((crate::anim_state::parse_loaded(&graph.dc)?, graph))
@@ -600,7 +637,7 @@ impl NaughtyDogVm {
         let s = &n.subnodes[sub];
         // A subnode without a level (most movies) loads nothing.
         if s.level.is_empty() {
-            return Ok(TaskPlan { name, level: String::new(), continue_player: None, levels: Vec::new(), regions: Vec::new(), menu: false });
+            return Ok(TaskPlan { name, level: String::new(), continue_player: None, continue_allies: Vec::new(), continue_camera: None, levels: Vec::new(), regions: Vec::new(), menu: false });
         }
         // The EBOOT's main-menu manager (`sub_98478`) loads `menu-temple`
         // and views it through a fixed camera (`sub_98634`,
@@ -608,7 +645,7 @@ impl NaughtyDogVm {
         // the localized logo board drawn as 2D art. `menu-temple`'s `cache`
         // list preloads the first story level and is not displayed.
         if matches!(s.manager, crate::task::Manager::MainMenu) {
-            return Ok(TaskPlan { name, level: MENU_LEVEL.into(), continue_player: None, levels: vec![MENU_LEVEL.into()], regions: Vec::new(), menu: true });
+            return Ok(TaskPlan { name, level: MENU_LEVEL.into(), continue_player: None, continue_allies: Vec::new(), continue_camera: None, levels: vec![MENU_LEVEL.into()], regions: Vec::new(), menu: true });
         }
         let mut levels = vec![s.level.clone()];
         for c in session.all_levels.get(&s.level).map(|l| l.caches.as_slice()).unwrap_or_default() {
@@ -619,7 +656,7 @@ impl NaughtyDogVm {
         if !n.world.is_empty() && !levels.contains(&n.world) {
             levels.push(n.world.clone());
         }
-        Ok(TaskPlan { name, level: s.level.clone(), continue_player: s.continue_player.clone(), levels, regions: Vec::new(), menu: false })
+        Ok(TaskPlan { name, level: s.level.clone(), continue_player: s.continue_player.clone(), continue_allies: s.continue_allies.clone(), continue_camera: s.continue_camera.clone(), levels, regions: Vec::new(), menu: false })
     }
 
     /// Unload the presented level and queue the packages of the current
@@ -655,6 +692,7 @@ impl NaughtyDogVm {
         session.ui = None;
         session.stage.spawners.clear();
         session.stage.entities.clear();
+        session.npcs.clear();
         session.stage.visible.clear();
         session.stage.ops.clear();
         session.stage.fade = 0.;
@@ -891,10 +929,29 @@ impl NaughtyDogVm {
         if let Some(s) = &spawner {
             session.stage.set_visible(sid(&s.name), true);
         }
+        // The task's allies (Flynn in the museum) appear at their continue
+        // spawners.
+        for ally in &plan.continue_allies {
+            if session.stage.spawners.contains_key(&sid(ally)) {
+                session.stage.set_visible(sid(ally), true);
+                session.stage.log(format!("ally {ally}"));
+            }
+        }
+        let camera = plan.continue_camera.as_deref().and_then(|n| session.stage.spawners.get(&sid(n))).map(|c| c.position);
         let anim = session.anim_table.as_ref().filter(|_| entity.is_some()).map(|t| crate::player::Controller::new(t, yaw));
         // The camera starts behind the player (eye offset `(-sin, cos)` of
         // the view yaw opposite the facing `(sin, cos)` of the yaw).
         let mut player = Player { entity, position, yaw, fall: 0., view_yaw: std::f32::consts::PI - yaw, view_pitch: -0.25, controls: true, anim, air_top: None, view_distance: FOLLOW_DISTANCE };
+        // The continue camera spawner sets the starting view direction
+        // (eye offset `(-sin y · cos p, -sin p, cos y · cos p)` from the head).
+        if let Some(c) = camera {
+            let d = [c[0] - position[0], c[1] - position[1] - 1.5, c[2] - position[2]];
+            let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            if len > 0.5 {
+                player.view_yaw = (-d[0]).atan2(d[2]);
+                player.view_pitch = (-d[1] / len).asin().clamp(-1.2, 0.6);
+            }
+        }
         let below = session.ground.height(position[0], position[2], position[1] + 1.);
         // A spawn more than 8 m above the next surface is a climbing start
         // (hanging, not implemented): it keeps its height.
@@ -1030,9 +1087,10 @@ impl NaughtyDogVm {
         out
     }
 
-    /// An NPC skeleton from its `*-base` package and the `idle` clip of
-    /// the character's animation packages, when one fits the skeleton.
-    fn npc_rig(actors: &ArchiveMount, base: &str, anims: &[String]) -> Result<Option<(crate::skeleton::Skeleton, Vec<crate::anim::Clip>)>> {
+    /// An NPC skeleton from its `*-base` package and the clips named
+    /// `wanted` (and `idle`) in it and the character's animation packages
+    /// that fit the skeleton; clips the decoder cannot read are skipped.
+    fn npc_rig(actors: &ArchiveMount, base: &str, anims: &[String], wanted: &HashSet<u32>) -> Result<Option<(crate::skeleton::Skeleton, Vec<crate::anim::Clip>)>> {
         let read = |name: &str| -> Result<crate::mesh::Loaded> {
             let package = crysirror_core::service::MemoryAssetReader(read_all(actors.open(name)?.as_ref(), PACKAGE_LIMIT)?.into());
             crate::mesh::Loaded::read(&package, PACKAGE_LIMIT)
@@ -1045,12 +1103,14 @@ impl NaughtyDogVm {
         let mut clips = Vec::new();
         let packages = std::iter::once(path.clone()).chain(anims.iter().map(|a| format!("{a}.pak")));
         for package in packages {
-            if !clips.is_empty() || !actors.exists(&package) {
+            if !actors.exists(&package) {
                 continue;
             }
             let loaded = read(&package)?;
-            if let Some((n, at)) = crate::anim::items(&loaded).find(|(n, _)| *n == "idle") {
-                // A clip the decoder cannot read leaves the rest pose.
+            for (n, at) in crate::anim::items(&loaded).filter(|(n, _)| *n == "idle" || wanted.contains(&sid(n))) {
+                if clips.iter().any(|c: &crate::anim::Clip| c.name == n) {
+                    continue;
+                }
                 if let Ok(clip) = crate::anim::decode(&loaded, at, n, skeleton.animated) {
                     if clip.hierarchy == skeleton.hash {
                         clips.push(clip);
@@ -1342,6 +1402,21 @@ impl NaughtyDogVm {
             }
             world.push(Self::follow(p, &session.ground, seconds));
         }
+        if let Some((graph, table)) = session.npc_anim.as_mut() {
+            for npc in &mut session.npcs {
+                let Some(clips) = session.npc_clips.get(&npc.rig) else { continue };
+                let before = npc.animator.machine.state;
+                let sets = &session.anim_sets;
+                let chain = &npc.sets;
+                match npc.animator.present(graph, table, clips, &|c| sets.resolve(chain, c), npc_inputs(), before, seconds) {
+                    Ok((layers, _)) => {
+                        let layers: Vec<_> = layers.iter().map(|l| json!({"clip": l.clip, "time": l.time, "speed": 0.0, "weight": l.weight, "target_weight": l.weight, "looping": true, "additive": l.additive})).collect();
+                        world.push(json!({"op": "set_animation", "id": npc.entity, "animation": {"layers": layers}}));
+                    }
+                    Err(e) => session.stage.log(format!("npc animation: {e:#}")),
+                }
+            }
+        }
         if let (Some(game), Some(modules)) = (session.game.as_mut(), session.modules.as_ref()) {
             if session.script_error.is_none() {
                 let ticked = game.rt.tick(&mut session.stage).and_then(|_| game.load_requested(modules, &mut session.stage));
@@ -1477,30 +1552,45 @@ impl NaughtyDogVm {
                 None
             }));
             if let Some(Some((_, clips))) = &session.player_rig {
-                session.player_clips = clips
-                    .iter()
-                    .map(|c| (sid(&c.name), crate::player::ClipInfo { name: c.name.clone(), duration: if c.frames > 1 { c.frames as f32 / c.fps.max(1.) } else { 0. }, speed: c.root_speed, additive: c.name.ends_with("-add") }))
-                    .collect();
+                session.player_clips = clip_infos(clips);
                 session.stage.log(format!("player rig: {} of {} blend-tree clips", clips.len(), wanted.len()));
             }
         }
-        if let Some((Some(base), anims)) = &binding {
-            if !session.npc_rigs.contains_key(base) {
-                let rig = Self::npc_rig(&session.actors, base, anims).unwrap_or_else(|e| {
+        // An NPC's clips are its anim set's mapping of the NPC states'
+        // tree leaves (`*NAME-anim-set*` by art group, its dash prefixes, then
+        // character: `flynn-heist`, `flynn`).
+        let character = crate::characters::character_of(&session.characters, art).map(|c| c.name.clone());
+        let prefixes: Vec<&str> = art.match_indices('-').map(|(i, _)| &art[..i]).rev().collect();
+        let npc_sets = session.anim_sets.sets_for([art].into_iter().chain(prefixes).chain(character.as_deref()));
+        let npc_key = binding.as_ref().and_then(|b| b.0.as_ref()).map(|base| format!("{base}:{:08x?}", npc_sets));
+        if let (Some((Some(base), anims)), Some(key)) = (&binding, &npc_key) {
+            if !session.npc_rigs.contains_key(key) {
+                let mut wanted = HashSet::new();
+                if let Some((graph, table)) = &session.npc_anim {
+                    for state in NPC_STATES {
+                        if let Some(s) = table.get(sid(state)) {
+                            wanted.extend(graph.clips(s.tree).into_iter().map(|c| session.anim_sets.resolve(&npc_sets, c)));
+                        }
+                    }
+                }
+                let rig = Self::npc_rig(&session.actors, base, anims, &wanted).unwrap_or_else(|e| {
                     session.stage.log(format!("rig {base}: {e:#}"));
                     None
                 });
-                session.npc_rigs.insert(base.clone(), rig);
+                if let Some((_, clips)) = &rig {
+                    session.npc_clips.insert(key.clone(), clip_infos(clips));
+                }
+                session.npc_rigs.insert(key.clone(), rig);
             }
         }
         let rig = match (&binding, &session.player_rig) {
             (Some((None, _)), Some(Some((skeleton, clips)))) => Some(scene::Rig { skeleton, clips }),
-            (Some((Some(base), _)), _) => session.npc_rigs.get(base).and_then(|r| r.as_ref()).map(|(skeleton, clips)| scene::Rig { skeleton, clips }),
+            (Some((Some(_), _)), _) => npc_key.as_ref().and_then(|k| session.npc_rigs.get(k)).and_then(|r| r.as_ref()).map(|(skeleton, clips)| scene::Rig { skeleton, clips }),
             _ => None,
         };
         let idle = rig.as_ref().and_then(|r| r.clips.iter().find(|c| c.name == "idle")).map(|c| c.name.clone());
         if skinned && own.is_none() {
-            session.stage.log(format!("art {art}: rig {:?}, {} clips", binding.as_ref().map(|b| b.0.clone().unwrap_or_else(|| "proto".into())), rig.as_ref().map_or(0, |r| r.clips.len())));
+            session.stage.log(format!("art {art}: rig {:?}, {} clips, anim set {:?}", binding.as_ref().map(|b| b.0.clone().unwrap_or_else(|| "proto".into())), rig.as_ref().map_or(0, |r| r.clips.len()), npc_sets.iter().map(|s| format!("{s:08x}")).collect::<Vec<_>>()));
         }
         let glb = scene::document_lit(art, &meshes, package.as_ref(), &directory, MAX_TEXTURE, None, rig.as_ref())?.to_glb()?;
         session.next_model += 1;
@@ -1518,7 +1608,11 @@ impl NaughtyDogVm {
                 session.ground.add_placed(&meshes, Some(m.to_cols_array()));
             }
             world.push(json!({"op": "spawn", "entity": {"id": id, "name": format!("{art}:{}", s.name), "visible": visible, "transform": {"translation": s.position, "rotation_degrees": [x.to_degrees(), y.to_degrees(), z.to_degrees()], "scale": [1.0, 1.0, 1.0]}, "geometry": {"kind": "scene", "asset": asset.relative()}}}));
-            if let Some(clip) = &idle {
+            let driven = npc_key.as_ref().filter(|k| session.npc_clips.get(*k).is_some_and(|c| !c.is_empty()) && session.npc_anim.is_some());
+            if let Some(key) = driven {
+                let machine = crate::anim_state::Machine { state: sid(NPC_STATES[0]), time: 0., previous: None, fade: 0. };
+                session.npcs.push(Npc { entity: id, animator: crate::player::Animator::new(machine), sets: npc_sets.clone(), rig: key.clone() });
+            } else if let Some(clip) = &idle {
                 world.push(json!({"op": "set_animation", "id": id, "animation": {"layers": [{"clip": clip, "looping": true}]}}));
             }
             session.entities.push((id, asset.clone()));
@@ -1647,4 +1741,26 @@ impl crysirror_runtime::runtime::VmFactory for Factory {
         ensure!(spec.program.is_empty(), "the Naughty Dog player executes no data actions");
         Ok(Box::new(NaughtyDogVm::new(client, serde_json::from_value(spec.config.clone())?)?))
     }
+}
+
+/// What the animation controllers need of decoded clips, by name `StringId`.
+fn clip_infos(clips: &[crate::anim::Clip]) -> HashMap<u32, crate::player::ClipInfo> {
+    clips
+        .iter()
+        .map(|c| (sid(&c.name), crate::player::ClipInfo { name: c.name.clone(), duration: if c.frames > 1 { c.frames as f32 / c.fps.max(1.) } else { 0. }, speed: c.root_speed, additive: is_additive(&c.name) }))
+        .collect()
+}
+
+/// Additive clips carry an `add` name segment (`idle-base-big-add`,
+/// `look-add--up-down`, `ef-walk-add-look--up-down`); their channels are
+/// local deltas.
+fn is_additive(name: &str) -> bool {
+    name.split('-').any(|p| p == "add")
+}
+
+/// NPC tree inputs without AI: the look (info +140 left–right, +144
+/// up–down) and aim (+92, +96) sweeps the phase lambdas read sit at their
+/// centre phase.
+fn npc_inputs() -> crate::anim_tree::Inputs {
+    crate::anim_tree::Inputs { info: vec![(92, 0.5), (96, 0.5), (140, 0.5), (144, 0.5)], ..Default::default() }
 }
