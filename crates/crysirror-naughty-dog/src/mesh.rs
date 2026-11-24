@@ -139,6 +139,19 @@ pub struct Material {
 }
 
 impl Material {
+    /// Base-colour texture: sampler 1. Foreground (art-group) materials
+    /// bind a shared placeholder texture there (and at sampler 0 and the
+    /// last sampler) and their albedo at sampler 2; `tiny` reports such
+    /// placeholders (single-colour textures), and the next sampler that is
+    /// not one is used instead.
+    pub fn base_color_with(&self, tiny: impl Fn(u32) -> bool) -> Option<u32> {
+        let first = *self.samplers.get(1)?;
+        if !tiny(first) {
+            return Some(first);
+        }
+        self.samplers.iter().skip(2).copied().find(|id| !tiny(*id))
+    }
+
     pub fn base_color(&self) -> Option<u32> {
         self.samplers.get(1).copied()
     }

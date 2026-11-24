@@ -82,6 +82,9 @@ impl World for Stub {
     fn player_controls(&mut self, enabled: bool) {
         println!("  [controls] {enabled}");
     }
+    fn sticks(&self, _: u32) -> [f32; 4] {
+        [0.; 4]
+    }
 }
 
 fn main() -> Result<()> {

@@ -286,10 +286,30 @@ pub fn document(name: &str, meshes: &[Mesh], source: &dyn AssetReader, directory
         textures.insert(desc.id, desc);
     }
     let mut images: HashMap<u32, usize> = HashMap::new();
+    // Placeholder textures hold one colour in every texel.
+    let mut uniform: HashMap<u32, bool> = HashMap::new();
+    for mesh in meshes {
+        for group in &mesh.groups {
+            for id in &group.material.samplers {
+                if uniform.contains_key(id) {
+                    continue;
+                }
+                let flat = match textures.get(id) {
+                    None => true,
+                    Some(d) => {
+                        let s = d.decode(source, directory.texture_base)?;
+                        s.rgba.chunks_exact(4).all(|t| t == &s.rgba[..4])
+                    }
+                };
+                uniform.insert(*id, flat);
+            }
+        }
+    }
     for (index, mesh) in meshes.iter().enumerate() {
         let mut primitives = Vec::new();
         for group in &mesh.groups {
-            let image = match group.material.base_color().and_then(|id| textures.get(&id)) {
+            let tiny = |id: u32| uniform.get(&id).copied().unwrap_or(true);
+            let image = match group.material.base_color_with(tiny).and_then(|id| textures.get(&id)) {
                 None => None,
                 Some(desc) => match images.get(&desc.id) {
                     Some(&i) => Some(i),

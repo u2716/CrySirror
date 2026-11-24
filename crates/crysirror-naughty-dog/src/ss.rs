@@ -56,6 +56,8 @@ pub trait World {
     fn fade(&mut self, color: [f32; 3], alpha: f32, seconds: f32);
     fn camera(&mut self, name: u32, seconds: f32);
     fn player_controls(&mut self, enabled: bool);
+    /// Left and right stick (x, y in −1…1) of a controller.
+    fn sticks(&self, pad: u32) -> [f32; 4];
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -112,6 +114,10 @@ pub struct Inner {
     pub task_change: Option<(usize, usize)>,
     /// Module names requested by `add-load-module`/`add-import-module`.
     pub module_requests: Vec<u32>,
+    /// `pad-get-info` records by pad (one 28-byte heap record each).
+    pads: HashMap<u32, u32>,
+    /// Player movement types from `set-walk-type`/`set-run-type`.
+    pub movement: [u32; 2],
     pub prints: Vec<String>,
 }
 
@@ -183,6 +189,8 @@ impl Runtime {
                 task_change: None,
                 module_requests: Vec::new(),
                 prints: Vec::new(),
+                pads: HashMap::new(),
+                movement: [0; 2],
             },
         }
     }
@@ -579,6 +587,30 @@ impl Natives for Ctx<'_> {
             }
             "get-script-state" => ok(self.target(a, argc, 0).and_then(|p| self.inner.procs[p].state).map(|s| dc.mem.u32(s)).transpose()?.unwrap_or(0)),
             "get-current-time" => ok((now as f32).to_bits()),
+            // (pad-get-info pad) → `{held, pressed, released, left x, y,
+            // right x, y}` (`sub_1459E8`). Button words go through
+            // `sub_137B28`, whose bit mapping is not recovered: they are 0.
+            "pad-get-info" => {
+                let pad = if n > 0 { a[0] } else { 0 };
+                let at = match self.inner.pads.get(&pad) {
+                    Some(at) => *at,
+                    None => {
+                        let at = dc.mem.alloc(28)?;
+                        self.inner.pads.insert(pad, at);
+                        at
+                    }
+                };
+                for (k, v) in self.world.sticks(pad).iter().enumerate() {
+                    dc.mem.write_u32(at + 12 + 4 * k as u32, v.to_bits())?;
+                }
+                ok(at)
+            }
+            // The movement-type table entry (`sub_678348`) is recorded; the
+            // player movement does not use it yet.
+            "set-walk-type" | "set-run-type" => {
+                self.inner.movement[usize::from(name == "set-run-type")] = a[0];
+                ok(0)
+            }
             "print-string" => {
                 let text = if a[0] == 0 { String::new() } else { dc.mem.cstr(a[0]).unwrap_or_default() };
                 self.world.print(&text);

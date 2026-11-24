@@ -183,6 +183,8 @@ struct Stage {
     fade_rate: f32,
     controls: Option<bool>,
     camera: Option<u32>,
+    /// Left stick from the movement keys.
+    stick: [f32; 2],
 }
 
 impl Stage {
@@ -242,6 +244,9 @@ impl World for Stage {
     }
     fn player_controls(&mut self, enabled: bool) {
         self.controls = Some(enabled);
+    }
+    fn sticks(&self, pad: u32) -> [f32; 4] {
+        if pad == 0 { [self.stick[0], self.stick[1], 0., 0.] } else { [0.; 4] }
     }
 }
 
@@ -733,6 +738,8 @@ impl NaughtyDogVm {
         let mut world = Vec::new();
         let mut layers = Vec::new();
         session.stage.now = (host.now_ms().saturating_sub(session.start_ms)) as f64 / 1000.;
+        let key = |m: u64| f32::from(u8::from(input.buttons_down & m != 0));
+        session.stage.stick = [key(b::KEY_D) - key(b::KEY_A), key(b::KEY_W) - key(b::KEY_S)];
         if let Some(c) = session.stage.controls.take() {
             if let Some(p) = &mut session.player {
                 p.controls = c;
