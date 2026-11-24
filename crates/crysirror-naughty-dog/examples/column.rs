@@ -17,7 +17,7 @@ fn main() -> Result<()> {
                 // `IDENTITY=1` keeps identity matrices at the origin.
                 let t = if std::env::var_os("IDENTITY").is_some() { m.instances[i] } else { scene::placement(m, i) };
                 let w = |p: [f32; 3]| -> [f32; 3] {
-                    let p = p.map(|c| c * m.unit);
+                    let p = p.map(|c| c);
                     std::array::from_fn(|c| p[0] * t[c] + p[1] * t[4 + c] + p[2] * t[8 + c] + t[12 + c])
                 };
                 for g in &m.groups {

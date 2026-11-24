@@ -1260,7 +1260,7 @@ impl NaughtyDogVm {
         if meshes.iter().all(|m| m.fragments.iter().all(|f| f.triangles.is_empty())) {
             return Ok(());
         }
-        scene::place_art_group(&mut meshes, scene::vis_sphere(&loaded, &directory));
+        scene::place_art_group(&mut meshes);
         let glb = scene::document(art, &meshes, package.as_ref(), &directory, MAX_TEXTURE)?.to_glb()?;
         session.next_model += 1;
         let asset = host.upload_model(self.client, 0x4e44_0000 + session.next_model, &glb)?;

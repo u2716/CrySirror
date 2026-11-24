@@ -13,12 +13,10 @@ fn main() -> Result<()> {
         let directory = Directory::read(&source)?;
         for (i, m) in scene::package_meshes(&source, &directory, 1 << 30)?.iter().enumerate() {
             let Some((lo, hi)) = scene::bounds(std::slice::from_ref(m)) else { continue };
-            let c: Vec<f32> = (0..3).map(|k| (lo[k] + hi[k]) * 0.5 * m.unit).collect();
-            let h: Vec<f32> = (0..3).map(|k| (hi[k] - lo[k]) * 0.5 * m.unit).collect();
+            let c: Vec<f32> = (0..3).map(|k| (lo[k] + hi[k]) * 0.5).collect();
+            let h: Vec<f32> = (0..3).map(|k| (hi[k] - lo[k]) * 0.5).collect();
             println!(
-                "{i:3} grid {} unit {:.4} inst {:3} t {:?} sphere {:?} centre {:?} half {:?} {}",
-                m.grid_bits,
-                m.unit,
+                "{i:3} inst {:3} t {:?} sphere {:?} centre {:?} half {:?} {}",
                 m.instances.len(),
                 m.instances.first().map(|t| r1(&t[12..15])),
                 m.spheres.first().map(|s| r1(s)),

@@ -222,37 +222,14 @@ pub fn package_meshes(source: &dyn AssetReader, directory: &Directory, limit: u6
 }
 
 /// Art-group (actor) meshes carry no instance records: each is placed once
-/// in the spawner's frame. Give such meshes one identity instance without
-/// a culling sphere. Their decoded positions are centred like level
-/// meshes' ([`crate::mesh`] origin fit); with the art group's `vis_sphere`
-/// tag (centre and radius in the model frame) the meshes are moved so
-/// their combined bounds centre lies on the sphere centre: the crate's is
-/// (0, 0.5, 0), matching its 1 m collision box standing on the origin, and
-/// `wrk-box-car-02`'s (0, 3.57, 0). Spheres of animated objects cover their
-/// motion, so that centre is approximate for them.
-pub fn place_art_group(meshes: &mut [Mesh], vis_sphere: Option<[f32; 4]>) {
+/// in the spawner's frame with an identity instance and no culling sphere.
+/// Their decoded positions are already in the model frame (the crate
+/// stands on the floor, the hero's feet are at y = 0).
+pub fn place_art_group(meshes: &mut [Mesh]) {
     const IDENTITY: [f32; 16] = [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.];
-    let metres = |m: &Mesh| bounds(std::slice::from_ref(m)).map(|(lo, hi)| (lo.map(|v| v * m.unit), hi.map(|v| v * m.unit)));
-    let union = meshes.iter().filter_map(metres).reduce(|(a, b), (c, d)| (std::array::from_fn(|k| a[k].min(c[k])), std::array::from_fn(|k| b[k].max(d[k]))));
-    let shift: Option<[f32; 3]> = match (vis_sphere, union) {
-        (Some(s), Some((lo, hi))) if s.iter().all(|v| v.is_finite()) => Some(std::array::from_fn(|k| s[k] - (lo[k] + hi[k]) * 0.5)),
-        _ => None,
-    };
-    for m in meshes {
-        if m.instances.is_empty() {
-            m.instances.push(IDENTITY);
-            m.spheres.clear();
-        }
-        if let Some(d) = shift {
-            let d = d.map(|v| v / m.unit);
-            for f in &mut m.fragments {
-                for p in &mut f.positions {
-                    for k in 0..3 {
-                        p[k] += d[k];
-                    }
-                }
-            }
-        }
+    for m in meshes.iter_mut().filter(|m| m.instances.is_empty()) {
+        m.instances.push(IDENTITY);
+        m.spheres.clear();
     }
 }
 
@@ -264,7 +241,7 @@ pub fn vis_sphere(loaded: &mesh::Loaded, directory: &Directory) -> Option<[f32; 
     v.iter().all(|x| x.is_finite()).then_some(v)
 }
 
-/// Axis-aligned bounds of all positions, in native units.
+/// Axis-aligned bounds of all positions, in metres in the mesh frame.
 pub fn bounds(meshes: &[Mesh]) -> Option<([f32; 3], [f32; 3])> {
     let mut points = meshes.iter().flat_map(|m| &m.fragments).flat_map(|f| &f.positions);
     let first = *points.next()?;
@@ -285,7 +262,7 @@ pub fn placed_bounds(meshes: &[Mesh]) -> Option<([f32; 3], [f32; 3])> {
         for i in 0..mesh.instances.len() {
             let m = placement(mesh, i);
             for corner in 0..8 {
-                let p: [f32; 3] = std::array::from_fn(|k| (if corner >> k & 1 == 0 { lo[k] } else { hi[k] }) * mesh.unit);
+                let p: [f32; 3] = std::array::from_fn(|k| if corner >> k & 1 == 0 { lo[k] } else { hi[k] });
                 let w: [f32; 3] = std::array::from_fn(|c| p[0] * m[c] + p[1] * m[4 + c] + p[2] * m[8 + c] + m[12 + c]);
                 out = Some(match out {
                     None => (w, w),
@@ -391,7 +368,7 @@ pub fn document_lit(name: &str, meshes: &[Mesh], source: &dyn AssetReader, direc
                 }
                 let normals = if f.normals.len() == f.positions.len() { f.normals.clone() } else { Vec::new() };
                 let aux = match bake {
-                    Some(field) => crate::probes::bake(field, &placement(mesh, 0), mesh.unit, &f.positions, &normals, &f.triangles),
+                    Some(field) => crate::probes::bake(field, &placement(mesh, 0), &f.positions, &normals, &f.triangles),
                     None => Vec::new(),
                 };
                 primitives.push(Primitive {
@@ -413,7 +390,6 @@ pub fn document_lit(name: &str, meshes: &[Mesh], source: &dyn AssetReader, direc
         for i in 0..mesh.instances.len() {
             let (translation, rotation, scale) = trs(&placement(mesh, i));
             let mut geometry = Node::named(format!("{name}/{index}/{i}/geometry"));
-            geometry.scale = [mesh.unit; 3];
             geometry.mesh = Some(mesh_index);
             doc.nodes.push(geometry);
             let mut placed = Node::named(format!("{name}/{index}/{i}"));

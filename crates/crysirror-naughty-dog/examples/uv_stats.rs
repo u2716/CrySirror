@@ -17,7 +17,7 @@ fn main() -> Result<()> {
                 }
                 let lo = [0, 1].map(|k| uvs.iter().map(|v| v[k]).fold(f32::MAX, f32::min));
                 let hi = [0, 1].map(|k| uvs.iter().map(|v| v[k]).fold(f32::MIN, f32::max));
-                println!("pos grid {:2} uv lo {:7.2?} hi {:7.2?} {}", m.grid_bits, lo, hi, g.material.name);
+                println!("uv lo {:7.2?} hi {:7.2?} {}", lo, hi, g.material.name);
             }
         }
     }

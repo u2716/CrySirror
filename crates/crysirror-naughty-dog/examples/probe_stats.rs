@@ -17,7 +17,7 @@ fn main() -> Result<()> {
         let mut lum = Vec::new();
         for m in scene::meshes_of(&loaded, &directory)?.iter().filter(|m| m.instances.len() == 1) {
             for f in &m.fragments {
-                for e in probes::bake(&field, &scene::placement(m, 0), m.unit, &f.positions, &f.normals, &f.triangles) {
+                for e in probes::bake(&field, &scene::placement(m, 0), &f.positions, &f.normals, &f.triangles) {
                     lum.push(0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2]);
                 }
             }

@@ -76,7 +76,6 @@ fn write_glb(
         }
         doc.meshes.push((format!("prototype-{m}"), primitives));
         let mut node = Node::named(format!("prototype-{m}"));
-        node.scale = [mesh.unit; 3];
         node.mesh = Some(m);
         doc.roots.push(doc.nodes.len());
         doc.nodes.push(node);

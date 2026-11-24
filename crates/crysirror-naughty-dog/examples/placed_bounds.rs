@@ -24,7 +24,7 @@ fn main() -> Result<()> {
                     let t = scene::placement(m, i);
                     for f in &m.fragments {
                         for p in &f.positions {
-                            let p = p.map(|c| c * m.unit);
+                            let p = p.map(|c| c);
                             let w: [f32; 3] = std::array::from_fn(|c| p[0] * t[c] + p[1] * t[4 + c] + p[2] * t[8 + c] + t[12 + c]);
                             let d = (0..3).map(|k| (w[k] - q[k]).powi(2)).sum::<f32>().sqrt();
                             if d < best.0 {
