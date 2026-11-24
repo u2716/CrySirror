@@ -15,6 +15,22 @@ const MAX_TRIANGLES: usize = 6 << 20;
 pub struct Ground {
     tris: Vec<[[f32; 3]; 3]>,
     cells: HashMap<(i32, i32), Vec<u32>>,
+    /// Every placed triangle, for camera rays, and its bounding-volume
+    /// hierarchy (built by [`Ground::prepare`]).
+    solid: Vec<[[f32; 3]; 3]>,
+    nodes: Vec<Node>,
+}
+
+const MAX_SOLID: usize = 8 << 20;
+const LEAF: usize = 8;
+
+/// A BVH node: bounds and either children (`count == 0`, left child at
+/// `start`, right at `start + 1`) or `count` triangles from `start`.
+struct Node {
+    lo: [f32; 3],
+    hi: [f32; 3],
+    start: u32,
+    count: u32,
 }
 
 fn cell(v: f32) -> i32 {
@@ -56,6 +72,7 @@ impl Ground {
                             let p = f.positions[v as usize].map(|c| c * scene::METRES_PER_UNIT);
                             std::array::from_fn(|c| p[0] * t[c] + p[1] * t[4 + c] + p[2] * t[8 + c] + t[12 + c])
                         });
+                        self.add_solid(p);
                         let (u, w) = (sub(p[1], p[0]), sub(p[2], p[0]));
                         let n = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
                         let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
@@ -78,6 +95,94 @@ impl Ground {
                 }
             }
         }
+    }
+
+    fn add_solid(&mut self, p: [[f32; 3]; 3]) {
+        if self.solid.len() < MAX_SOLID {
+            self.solid.push(p);
+            self.nodes.clear();
+        }
+    }
+
+    /// Build the ray hierarchy over the triangles added so far.
+    pub fn prepare(&mut self) {
+        if !self.nodes.is_empty() || self.solid.is_empty() {
+            return;
+        }
+        let bounds = |t: &[[f32; 3]; 3]| -> ([f32; 3], [f32; 3]) {
+            (std::array::from_fn(|k| t[0][k].min(t[1][k]).min(t[2][k])), std::array::from_fn(|k| t[0][k].max(t[1][k]).max(t[2][k])))
+        };
+        // Build over centroids, then reorder the triangles to match.
+        let mut items: Vec<(u32, [f32; 3])> = self.solid.iter().enumerate().map(|(i, t)| (i as u32, std::array::from_fn(|k| (t[0][k] + t[1][k] + t[2][k]) / 3.))).collect();
+        let mut nodes = vec![Node { lo: [0.; 3], hi: [0.; 3], start: 0, count: 0 }];
+        let mut stack = vec![(0usize, 0usize, items.len())];
+        while let Some((node, start, end)) = stack.pop() {
+            let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+            for (i, _) in &items[start..end] {
+                let (a, b) = bounds(&self.solid[*i as usize]);
+                for k in 0..3 {
+                    lo[k] = lo[k].min(a[k]);
+                    hi[k] = hi[k].max(b[k]);
+                }
+            }
+            nodes[node].lo = lo;
+            nodes[node].hi = hi;
+            if end - start <= LEAF {
+                nodes[node].start = start as u32;
+                nodes[node].count = (end - start) as u32;
+                continue;
+            }
+            let axis = (0..3).max_by(|a, b| (hi[*a] - lo[*a]).total_cmp(&(hi[*b] - lo[*b]))).unwrap_or(0);
+            let mid = (start + end) / 2;
+            items[start..end].select_nth_unstable_by(mid - start, |a, b| a.1[axis].total_cmp(&b.1[axis]));
+            let left = nodes.len();
+            nodes.push(Node { lo: [0.; 3], hi: [0.; 3], start: 0, count: 0 });
+            nodes.push(Node { lo: [0.; 3], hi: [0.; 3], start: 0, count: 0 });
+            nodes[node].start = left as u32;
+            stack.push((left, start, mid));
+            stack.push((left + 1, mid, end));
+        }
+        self.solid = items.iter().map(|(i, _)| self.solid[*i as usize]).collect();
+        self.nodes = nodes;
+    }
+
+    /// Fraction along `from → to` of the first triangle hit, if any
+    /// (requires [`Ground::prepare`]).
+    pub fn raycast(&self, from: [f32; 3], to: [f32; 3]) -> Option<f32> {
+        if self.nodes.is_empty() {
+            return None;
+        }
+        let d = sub(to, from);
+        let inv: [f32; 3] = std::array::from_fn(|k| 1. / d[k]);
+        let mut best = 1f32;
+        let mut hit = false;
+        let mut stack = vec![0u32];
+        while let Some(n) = stack.pop() {
+            let node = &self.nodes[n as usize];
+            let (mut t0, mut t1) = (0f32, best);
+            for k in 0..3 {
+                let (a, b) = ((node.lo[k] - from[k]) * inv[k], (node.hi[k] - from[k]) * inv[k]);
+                t0 = t0.max(a.min(b));
+                t1 = t1.min(a.max(b));
+            }
+            if t0 > t1 {
+                continue;
+            }
+            if node.count == 0 {
+                stack.push(node.start);
+                stack.push(node.start + 1);
+                continue;
+            }
+            for t in &self.solid[node.start as usize..(node.start + node.count) as usize] {
+                if let Some(h) = ray_triangle(from, d, *t) {
+                    if h <= best {
+                        best = h;
+                        hit = true;
+                    }
+                }
+            }
+        }
+        hit.then_some(best)
     }
 
     /// The highest walkable surface at `(x, z)` not above `top`.
@@ -106,4 +211,28 @@ impl Ground {
 
 fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+/// Möller–Trumbore: the ray parameter of the hit, both faces.
+fn ray_triangle(o: [f32; 3], d: [f32; 3], [a, b, c]: [[f32; 3]; 3]) -> Option<f32> {
+    let cross = |u: [f32; 3], v: [f32; 3]| [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+    let dot = |u: [f32; 3], v: [f32; 3]| u[0] * v[0] + u[1] * v[1] + u[2] * v[2];
+    let (e1, e2) = (sub(b, a), sub(c, a));
+    let p = cross(d, e2);
+    let det = dot(e1, p);
+    if det.abs() < 1e-9 {
+        return None;
+    }
+    let s = sub(o, a);
+    let u = dot(s, p) / det;
+    if !(0. ..=1.).contains(&u) {
+        return None;
+    }
+    let q = cross(s, e1);
+    let v = dot(d, q) / det;
+    if v < 0. || u + v > 1. {
+        return None;
+    }
+    let t = dot(e2, q) / det;
+    (t > 0.).then_some(t)
 }

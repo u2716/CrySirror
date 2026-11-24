@@ -547,12 +547,14 @@ impl NaughtyDogVm {
             }
         };
         if let Some(path) = (!package_name.is_empty()).then(|| package_path(&session.mount, &package_name)).flatten() {
-            let package = session.mount.open(&path)?;
+            // Read and relocate the package once; every item below parses
+            // the same copy.
+            let package: Arc<dyn AssetReader> = Arc::new(crysirror_core::service::MemoryAssetReader(read_all(session.mount.open(&path)?.as_ref(), PACKAGE_LIMIT)?.into()));
             let directory = Directory::read(package.as_ref())?;
-            let meshes = scene::package_meshes(package.as_ref(), &directory, PACKAGE_LIMIT)?;
+            let loaded = crate::mesh::Loaded::read(package.as_ref(), PACKAGE_LIMIT)?;
+            let meshes = scene::meshes_of(&loaded, &directory)?;
             if !session.lit {
                 if let Some(item) = directory.items.iter().find(|i| i.kind == "LIGHT_TABLE_1") {
-                    let loaded = crate::mesh::Loaded::read(package.as_ref(), PACKAGE_LIMIT)?;
                     if let Some(light) = scene::level_light(&loaded, item.payload_offset as usize)? {
                         world.push(environment(Some(&light)));
                         session.lit = true;
@@ -562,7 +564,6 @@ impl NaughtyDogVm {
             // Spawned art groups follow the level packages.
             let mut groups: std::collections::BTreeMap<String, Vec<SpawnerRecord>> = Default::default();
             for item in directory.items.iter().filter(|i| i.kind == "SPAWNER_GROUP") {
-                let loaded = crate::mesh::Loaded::read(package.as_ref(), PACKAGE_LIMIT)?;
                 for s in scene::spawner_records(&loaded, item.payload_offset as usize)? {
                     session.stage.spawners.insert(sid(&s.name), s.clone());
                     if let Some(art) = s.art_group.clone() {
@@ -576,7 +577,6 @@ impl NaughtyDogVm {
             }
             if session.start.is_none() {
                 if let Some(item) = directory.items.iter().find(|i| i.kind == "CAMERA_TABLE_1") {
-                    let loaded = crate::mesh::Loaded::read(package.as_ref(), PACKAGE_LIMIT)?;
                     if let Some(c) = scene::start_camera(&loaded, item.payload_offset as usize)? {
                         // The level's start camera (`CAMERA_TABLE_1`, metres).
                         session.camera = Camera { eye: c.position, yaw: c.forward[0].atan2(-c.forward[2]), pitch: c.forward[1].clamp(-1., 1.).asin(), speed: 5. };
@@ -590,7 +590,6 @@ impl NaughtyDogVm {
             if session.game.is_some() {
                 session.ground.add(&meshes);
                 if let Some(item) = directory.items.iter().find(|i| i.kind == "REGION_TREE") {
-                    let loaded = crate::mesh::Loaded::read(package.as_ref(), PACKAGE_LIMIT)?;
                     let regions = crate::region::load_regions(&loaded, item.payload_offset as usize)?;
                     if !regions.is_empty() {
                         self.apply_load_regions(session, &package_name, &loaded, &regions)?;
@@ -652,6 +651,7 @@ impl NaughtyDogVm {
 
     /// Place the player and start the level's state-script processes.
     fn start_task(&self, session: &mut Session, world: &mut Vec<serde_json::Value>) -> Result<()> {
+        session.ground.prepare();
         let plan = session.plan.as_ref().context("task plan")?;
         let spawner = plan.continue_player.as_deref().and_then(|n| session.stage.spawners.get(&sid(n))).cloned();
         let (position, yaw) = match &spawner {
@@ -674,7 +674,7 @@ impl NaughtyDogVm {
             Err(e) => session.script_error = Some(format!("{e:#}")),
         }
         world.append(&mut session.stage.ops);
-        world.push(Self::follow(session.player.as_ref().expect("player")));
+        world.push(Self::follow(session.player.as_ref().expect("player"), &session.ground));
         session.started = true;
         Ok(())
     }
@@ -756,11 +756,16 @@ impl NaughtyDogVm {
         Ok(())
     }
 
-    /// Third-person camera behind and above the player.
-    fn follow(p: &Player) -> serde_json::Value {
+    /// Third-person camera behind and above the player, pulled in front of
+    /// the first surface between the player's head and the camera.
+    fn follow(p: &Player, ground: &Ground) -> serde_json::Value {
         let target = [p.position[0], p.position[1] + 1.5, p.position[2]];
-        let (d, cy) = (3.6, p.view_pitch.cos());
-        let eye = [target[0] - p.view_yaw.sin() * cy * d, target[1] - p.view_pitch.sin() * d, target[2] + p.view_yaw.cos() * cy * d];
+        let cy = p.view_pitch.cos();
+        let dir = [-p.view_yaw.sin() * cy, -p.view_pitch.sin(), p.view_yaw.cos() * cy];
+        let far = 4.;
+        let want: [f32; 3] = std::array::from_fn(|k| target[k] + dir[k] * far);
+        let d = ground.raycast(target, want).map_or(far, |t| (t * far - 0.25).max(0.3));
+        let eye: [f32; 3] = std::array::from_fn(|k| target[k] + dir[k] * d);
         json!({"op": "set_camera", "camera": {"eye": eye, "target": target, "up": [0.0, 1.0, 0.0], "fov_y_degrees": 60.0, "near": 0.05, "far": 5000.0}})
     }
 
@@ -829,7 +834,7 @@ impl NaughtyDogVm {
             if let Some(id) = p.entity {
                 world.push(json!({"op": "set_transform", "id": id, "transform": {"translation": p.position, "rotation_degrees": [0.0, p.yaw.to_degrees(), 0.0], "scale": [1.0, 1.0, 1.0]}}));
             }
-            world.push(Self::follow(p));
+            world.push(Self::follow(p, &session.ground));
         }
         if let (Some(game), Some(modules)) = (session.game.as_mut(), session.modules.as_ref()) {
             if session.script_error.is_none() {
@@ -884,7 +889,7 @@ impl NaughtyDogVm {
         if !session.actors.exists(&path) {
             return Ok(());
         }
-        let package = session.actors.open(&path)?;
+        let package: Arc<dyn AssetReader> = Arc::new(crysirror_core::service::MemoryAssetReader(read_all(session.actors.open(&path)?.as_ref(), PACKAGE_LIMIT)?.into()));
         let directory = Directory::read(package.as_ref())?;
         let mut meshes = scene::package_meshes(package.as_ref(), &directory, PACKAGE_LIMIT)?;
         if meshes.iter().all(|m| m.fragments.iter().all(|f| f.triangles.is_empty())) {

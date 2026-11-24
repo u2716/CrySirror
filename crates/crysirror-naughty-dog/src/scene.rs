@@ -201,6 +201,15 @@ pub fn start_camera(p: &mesh::Loaded, payload: usize) -> Result<Option<StartCame
 pub const METRES_PER_UNIT: f32 = 0.01;
 
 /// Every render mesh of a package (collision collections excluded).
+/// The prototype meshes of an already relocated package.
+pub fn meshes_of(loaded: &mesh::Loaded, directory: &Directory) -> Result<Vec<Mesh>> {
+    let mut meshes = Vec::new();
+    for item in directory.items.iter().filter(|i| i.kind == "PM_COLLECTION_2") {
+        meshes.extend(mesh::prototype_meshes(loaded, item.payload_offset as usize)?);
+    }
+    Ok(meshes)
+}
+
 pub fn package_meshes(source: &dyn AssetReader, directory: &Directory, limit: u64) -> Result<Vec<Mesh>> {
     let collections: Vec<_> = directory.items.iter().filter(|i| i.kind == "PM_COLLECTION_2").collect();
     if collections.is_empty() {
@@ -286,29 +295,27 @@ pub fn document(name: &str, meshes: &[Mesh], source: &dyn AssetReader, directory
         textures.insert(desc.id, desc);
     }
     let mut images: HashMap<u32, usize> = HashMap::new();
-    // Placeholder textures hold one colour in every texel.
-    let mut uniform: HashMap<u32, bool> = HashMap::new();
-    for mesh in meshes {
-        for group in &mesh.groups {
-            for id in &group.material.samplers {
-                if uniform.contains_key(id) {
-                    continue;
-                }
-                let flat = match textures.get(id) {
-                    None => true,
-                    Some(d) => {
-                        let s = d.decode(source, directory.texture_base)?;
-                        s.rgba.chunks_exact(4).all(|t| t == &s.rgba[..4])
-                    }
-                };
-                uniform.insert(*id, flat);
-            }
-        }
-    }
+    // Placeholder textures hold one colour in every texel; textures are
+    // decoded for this test only when they are base-colour candidates.
+    let uniform: std::cell::RefCell<HashMap<u32, bool>> = Default::default();
     for (index, mesh) in meshes.iter().enumerate() {
         let mut primitives = Vec::new();
         for group in &mesh.groups {
-            let tiny = |id: u32| uniform.get(&id).copied().unwrap_or(true);
+            let tiny = |id: u32| {
+                if let Some(v) = uniform.borrow().get(&id) {
+                    return *v;
+                }
+                let flat = match textures.get(&id) {
+                    None => true,
+                    // Baked lighting (`indirect.rgbmax`, `…rgbmaxdelta`).
+                    Some(d) if d.name.contains("indirect") => true,
+                    // Small textures are checked; larger ones are content.
+                    Some(d) if d.width * d.height > 64 * 64 => false,
+                    Some(d) => d.decode(source, directory.texture_base).map_or(true, |s| s.rgba.chunks_exact(4).all(|t| t == &s.rgba[..4])),
+                };
+                uniform.borrow_mut().insert(id, flat);
+                flat
+            };
             let image = match group.material.base_color_with(tiny).and_then(|id| textures.get(&id)) {
                 None => None,
                 Some(desc) => match images.get(&desc.id) {
