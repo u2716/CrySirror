@@ -128,3 +128,8 @@ NPC animation (2026-11-25):
 - **Museum binding:** in `museum-steam-vault` the log shows `ally continue-flynn-steam-vault-1`, and `flynn-heist` binds to `flynn-base` with the sets `*flynn-heist-anim-set*` and `*flynn-anim-set*`. Flynn's layers are `idle` plus the additive `look-add--left-right` and `look-add--up-down` at their centre phase.
 - **Capture:** the frame-940 capture shows Flynn standing on the lower walkway with his arms at his sides, and the player in `ambient-casual` after ten seconds at rest, framed from the continue camera's direction.
 
+Helper groups (2026-11-25):
+
+- **Offline measure:** `examples/skin_stretch hero-heist.pak proto.pak proto.pak walk` counts the triangles stretched more than 4× in the frame-0 pose. Before the helper groups followed their limbs it reported 33 of 28,055, with the elbow, shoulder-twist and knee helpers at the top. Afterwards it reports 20, made up of crotch triangles between the thighs and small lip triangles.
+- **Capture:** the frame-1180 museum capture shows no spikes at the arms or hips.
+
