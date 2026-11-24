@@ -65,7 +65,7 @@ fn main() -> Result<()> {
         let tris: usize = meshes.iter().flat_map(|m| &m.fragments).map(|f| f.triangles.len()).sum();
         let empty = meshes.iter().flat_map(|m| &m.fragments).filter(|f| f.triangles.is_empty()).count();
         let no_uv = meshes.iter().flat_map(|m| &m.fragments).filter(|f| !f.triangles.is_empty() && f.uvs.is_empty()).count();
-        scene::place_art_group(&mut meshes);
+        scene::place_art_group(&mut meshes, scene::vis_sphere(&loaded, &directory));
         let bounds = scene::placed_bounds(&meshes);
         let mut spawners = Vec::new();
         for item in directory.items.iter().filter(|i| i.kind == "SPAWNER_GROUP") {

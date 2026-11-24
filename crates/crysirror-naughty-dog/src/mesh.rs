@@ -191,20 +191,81 @@ pub struct Mesh {
 }
 
 /// Metres per decoded position unit of a mesh with an N-bit position grid:
-/// millimetres × 2^(N − 12), for level and art-group meshes alike.
-/// Art groups: checked against their `vis_sphere` tags (player models
-/// 1.01, crate 1.10, oil drum 0.94, chained lift 0.94; `ice-t-gear-8m`
-/// with an 18-bit and `ice-t-gear-8m-bevel` with a 12-bit grid both give
-/// 6.3 m) and the crate's collision box (1 m). Level meshes (18-bit grids,
-/// 6.4 cm): the background box car roof of `train-wreck-b` has the raw size
-/// of the `wrk-box-car-02` art group (half-diagonal 199 and 190 units) and
-/// its placed vertices lie closer to the package's Havok collision
-/// vertices at 6.4 cm (median 0.86 m) than at 1 cm (1.40 m); the
-/// `train-wreck-b` cliff chunks, placed at their culling-sphere centres,
-/// then join into one cliff face. The native rule's source in the SPU
-/// mesh jobs is not located (SATD-nd-retail-runtime).
+/// 2^(N − 22), for level and art-group meshes alike, the same grid rule as
+/// texture coordinates ([`uv_unit`]). Checks: the `train-wreck-wide`
+/// meshes' half-extents match their culling-sphere radii (bridge, 15-bit
+/// grid: 61.1 against 62.5 m; river 772 against 770; mountains 7,686
+/// against 7,734); scaling the unit until the vertices of the tightly
+/// bounded `train-wreck-b` meshes fit inside their per-fragment world
+/// spheres gives 0.977–0.995 × millimetres·2^(N − 12) (2^(N − 22) is
+/// 0.977×); the 1 × 1 × 1 m crate decodes 1.025 m wide; art-group
+/// `vis_sphere` tags (player models, oil drum, chained lift, both
+/// `ice-t-gear-8m` encodings) agree within 10 %; the background box car
+/// roof of `train-wreck-b` has the raw size of the `wrk-box-car-02` art
+/// group. The native rule's source in the SPU mesh jobs is not located
+/// (SATD-nd-retail-runtime).
 pub fn unit_of_grid(grid_bits: u32) -> f32 {
-    0.001 * 2f32.powi(grid_bits as i32 - 12)
+    2f32.powi(grid_bits as i32 - 22)
+}
+
+/// The local origin missing from decoded positions, in decoded units.
+///
+/// Decoded positions are centred on their quantization ranges, not on the
+/// prototype's pivot: placed with the instance matrix alone, a tree sits
+/// 4 m too low and background chunks (identity matrices) all overlap at
+/// the origin. Instance +0x14 points to one world-space bounding sphere per
+/// fragment. The offset is the translation that puts every sampled vertex
+/// of `instance` inside its fragment's sphere (alternating projections onto
+/// the spheres, starting from the mean of sphere centre minus fragment
+/// centre), mapped back through the instance's linear part. Spheres of
+/// large terrain chunks are not tight, so their fit leaves residuals of a
+/// few metres.
+fn fitted_origin(fragments: &[Fragment], unit: f32, m: &[f32; 16], spheres: &[[f32; 4]]) -> Option<[f32; 3]> {
+    let world = |v: [f32; 3]| -> [f32; 3] {
+        let q = v.map(|c| c * unit);
+        std::array::from_fn(|j| q[0] * m[j] + q[1] * m[4 + j] + q[2] * m[8 + j] + m[12 + j])
+    };
+    let total: usize = fragments.iter().map(|f| f.positions.len()).sum();
+    let step = total.div_ceil(2048).max(1);
+    let (mut targets, mut start, mut n) = (Vec::new(), [0f32; 3], 0f32);
+    for (f, s) in fragments.iter().zip(spheres) {
+        if f.positions.is_empty() || !(s[3] > 0. && s.iter().all(|v| v.is_finite())) {
+            continue;
+        }
+        let lo: [f32; 3] = std::array::from_fn(|k| f.positions.iter().map(|v| v[k]).fold(f32::MAX, f32::min));
+        let hi: [f32; 3] = std::array::from_fn(|k| f.positions.iter().map(|v| v[k]).fold(f32::MIN, f32::max));
+        let c = world(std::array::from_fn(|k| (lo[k] + hi[k]) * 0.5));
+        for k in 0..3 {
+            start[k] += s[k] - c[k];
+        }
+        n += 1.;
+        for v in f.positions.iter().step_by(step) {
+            let w = world(*v);
+            targets.push(([s[0] - w[0], s[1] - w[1], s[2] - w[2]], s[3]));
+        }
+    }
+    if n == 0. {
+        return None;
+    }
+    let mut d = start.map(|v| v / n);
+    for _ in 0..32 {
+        let mut moved = false;
+        for (c, r) in &targets {
+            let e = [d[0] - c[0], d[1] - c[1], d[2] - c[2]];
+            let len = (e[0] * e[0] + e[1] * e[1] + e[2] * e[2]).sqrt();
+            if len > *r {
+                let k = r / len;
+                d = std::array::from_fn(|i| c[i] + e[i] * k);
+                moved = true;
+            }
+        }
+        if !moved {
+            break;
+        }
+    }
+    // World offset → decoded units through the inverse linear part.
+    let linear = glam::Mat3::from_cols_array(&[m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10]]);
+    (linear.determinant().abs() > 1e-9).then(|| (linear.inverse() * glam::Vec3::from_array(d) / unit).to_array())
 }
 
 /// One quantized attribute before its mesh grid is known.
@@ -365,6 +426,8 @@ pub fn prototype_meshes(p: &Loaded, payload: usize) -> Result<Vec<Mesh>> {
         let placed = p.u32(record + 8)? as usize;
         ensure!(placed <= 65536, "ND instance count");
         let (mut instances, mut spheres) = (Vec::with_capacity(placed), Vec::with_capacity(placed));
+        // Per-fragment world spheres (instance +0x14) of the first instance.
+        let mut fragment_spheres: Option<usize> = None;
         if placed > 0 {
             let list = p.ptr(record + 4)?;
             for i in 0..placed {
@@ -374,6 +437,9 @@ pub fn prototype_meshes(p: &Loaded, payload: usize) -> Result<Vec<Mesh>> {
                 ensure!(m.iter().chain(&s).all(|v| v.is_finite()) && (m[15] - 1.).abs() < 1e-3, "ND instance matrix");
                 instances.push(m);
                 spheres.push(s);
+                if fragment_spheres.is_none() {
+                    fragment_spheres = p.ptr(at + 0x14).ok();
+                }
             }
         }
         let (group_count, fragments) = (usize::from(p.u16(header + 4)?), usize::from(p.u16(header + 6)?));
@@ -418,7 +484,21 @@ pub fn prototype_meshes(p: &Loaded, payload: usize) -> Result<Vec<Mesh>> {
             ensure!(first + n <= fragments.len(), "ND mesh group range");
             groups.push(Group { material: material(p, p.ptr(p.ptr(row)?)?)?, fragments: first..first + n });
         }
-        meshes.push(Mesh { fragments, groups, instances, spheres, grid_bits: pos_grid, unit: unit_of_grid(pos_grid) });
+        let unit = unit_of_grid(pos_grid);
+        let mut fragments = fragments;
+        if let (Some(at), Some(m)) = (fragment_spheres, instances.first()) {
+            let list: Vec<[f32; 4]> = (0..fragments.len()).map(|i| std::array::from_fn(|k| p.f32(at + 16 * i + 4 * k).unwrap_or(f32::NAN))).collect();
+            if let Some(o) = fitted_origin(&fragments, unit, m, &list) {
+                for f in &mut fragments {
+                    for v in &mut f.positions {
+                        for k in 0..3 {
+                            v[k] += o[k];
+                        }
+                    }
+                }
+            }
+        }
+        meshes.push(Mesh { fragments, groups, instances, spheres, grid_bits: pos_grid, unit });
     }
     Ok(meshes)
 }

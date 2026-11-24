@@ -19,9 +19,8 @@ fn main() -> Result<()> {
         let r = (0..3).map(|k| ((hi[k] - lo[k]) / 2.).powi(2)).sum::<f32>().sqrt();
         let name = path.rsplit('/').next().unwrap_or(&path);
         let n = meshes.iter().map(|m| m.grid_bits).max().unwrap_or(0);
-        // Hypothesis: millimetres × 2^(N − 12); decoded positions are native
-        // units, bounds above are in those units.
-        let predicted = r * 2f32.powi(n as i32 - 12) * 0.001;
+        // Decoded positions in native units, scaled by the grid unit.
+        let predicted = r * crysirror_naughty_dog::mesh::unit_of_grid(n);
         print!("N={n:2} predicted r={predicted:.2} ratio {:.2}  ", v[3] / predicted);
         println!("{name:40} sphere c=({:.2},{:.2},{:.2}) r={:.2}  native c=({:.1},{:.1},{:.1}) r={:.1}  r/r_native={:.5}", v[0], v[1], v[2], v[3], c[0], c[1], c[2], r, v[3] / r);
     }

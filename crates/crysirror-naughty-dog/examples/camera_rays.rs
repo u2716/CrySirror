@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Read-only placement check: cast a ray grid from the first package's
 //! start camera through the placed triangles of all given packages and
-//! report hit fraction and median distance. `--sphere` places
-//! identity-matrix instances at their sphere centre.
+//! report hit fraction and median distance.
 use anyhow::{Context, Result};
 use crysirror_core::service::MemoryAssetReader;
 use crysirror_naughty_dog::{mesh, package::Directory, scene};
 
 fn main() -> Result<()> {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
-    let sphere = args.iter().position(|a| a == "--sphere").map(|i| args.remove(i)).is_some();
     let mut camera = None;
     let mut tris: Vec<[[f32; 3]; 3]> = Vec::new();
     for path in &args {
@@ -23,7 +21,7 @@ fn main() -> Result<()> {
         }
         for m in scene::package_meshes(&source, &directory, 256 << 20)? {
             for (i, inst) in m.instances.iter().enumerate() {
-                let t = if sphere { scene::placement(&m, i) } else { *inst };
+                let t = scene::placement(&m, i);
                 for f in &m.fragments {
                     for tri in &f.triangles {
                         tris.push(tri.map(|v| {

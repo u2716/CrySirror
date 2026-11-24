@@ -223,15 +223,45 @@ pub fn package_meshes(source: &dyn AssetReader, directory: &Directory, limit: u6
 
 /// Art-group (actor) meshes carry no instance records: each is placed once
 /// in the spawner's frame. Give such meshes one identity instance without
-/// a culling sphere, so [`placement`] keeps the model origin.
-pub fn place_art_group(meshes: &mut [Mesh]) {
+/// a culling sphere. Their decoded positions are centred like level
+/// meshes' ([`crate::mesh`] origin fit); with the art group's `vis_sphere`
+/// tag (centre and radius in the model frame) the meshes are moved so
+/// their combined bounds centre lies on the sphere centre: the crate's is
+/// (0, 0.5, 0), matching its 1 m collision box standing on the origin, and
+/// `wrk-box-car-02`'s (0, 3.57, 0). Spheres of animated objects cover their
+/// motion, so that centre is approximate for them.
+pub fn place_art_group(meshes: &mut [Mesh], vis_sphere: Option<[f32; 4]>) {
     const IDENTITY: [f32; 16] = [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.];
+    let metres = |m: &Mesh| bounds(std::slice::from_ref(m)).map(|(lo, hi)| (lo.map(|v| v * m.unit), hi.map(|v| v * m.unit)));
+    let union = meshes.iter().filter_map(metres).reduce(|(a, b), (c, d)| (std::array::from_fn(|k| a[k].min(c[k])), std::array::from_fn(|k| b[k].max(d[k]))));
+    let shift: Option<[f32; 3]> = match (vis_sphere, union) {
+        (Some(s), Some((lo, hi))) if s.iter().all(|v| v.is_finite()) => Some(std::array::from_fn(|k| s[k] - (lo[k] + hi[k]) * 0.5)),
+        _ => None,
+    };
     for m in meshes {
         if m.instances.is_empty() {
             m.instances.push(IDENTITY);
             m.spheres.clear();
         }
+        if let Some(d) = shift {
+            let d = d.map(|v| v / m.unit);
+            for f in &mut m.fragments {
+                for p in &mut f.positions {
+                    for k in 0..3 {
+                        p[k] += d[k];
+                    }
+                }
+            }
+        }
     }
+}
+
+/// The `vis_sphere` tag (`TAG_VEC4`) of an art-group package.
+pub fn vis_sphere(loaded: &mesh::Loaded, directory: &Directory) -> Option<[f32; 4]> {
+    let item = directory.items.iter().find(|i| i.kind == "TAG_VEC4" && i.name == "vis_sphere")?;
+    let at = item.payload_offset as usize;
+    let v: [f32; 4] = std::array::from_fn(|k| loaded.f32(at + 4 * k).unwrap_or(f32::NAN));
+    v.iter().all(|x| x.is_finite()).then_some(v)
 }
 
 /// Axis-aligned bounds of all positions, in native units.
@@ -241,19 +271,10 @@ pub fn bounds(meshes: &[Mesh]) -> Option<([f32; 3], [f32; 3])> {
     Some(points.fold((first, first), |(lo, hi), p| (std::array::from_fn(|k| lo[k].min(p[k])), std::array::from_fn(|k| hi[k].max(p[k])))))
 }
 
-/// An instance's world matrix. Identity-matrix instances (the large
-/// background chunks) are placed at their culling sphere's centre: with
-/// that rule every ray of the `menu-temple` start camera hits nearby
-/// geometry (576 of 576, median 15.2 m), and with the identity none does.
-/// Inferred from data (SATD-nd-retail-runtime).
+/// An instance's world matrix (row-major, metres). Decoded positions
+/// already carry the prototype's fitted local origin.
 pub fn placement(mesh: &Mesh, instance: usize) -> [f32; 16] {
-    let mut m = mesh.instances[instance];
-    if m[12] == 0. && m[13] == 0. && m[14] == 0. {
-        if let Some(s) = mesh.spheres.get(instance) {
-            m[12..15].copy_from_slice(&s[..3]);
-        }
-    }
-    m
+    mesh.instances[instance]
 }
 
 /// World-space bounds in metres of every placed instance's mesh bounds.

@@ -104,7 +104,7 @@ impl Camera {
     fn op(&self) -> serde_json::Value {
         let f = self.forward();
         let target: [f32; 3] = std::array::from_fn(|k| self.eye[k] + f[k]);
-        json!({"op": "set_camera", "camera": {"eye": self.eye, "target": target, "up": [0.0, 1.0, 0.0], "fov_y_degrees": 60.0, "near": 0.05, "far": 5000.0}})
+        json!({"op": "set_camera", "camera": {"eye": self.eye, "target": target, "up": [0.0, 1.0, 0.0], "fov_y_degrees": 60.0, "near": 0.1, "far": 20000.0}})
     }
     fn step(&mut self, input: &InputFrame, seconds: f32) -> bool {
         let down = |m| input.buttons_down & m != 0;
@@ -934,7 +934,7 @@ impl NaughtyDogVm {
         let want: [f32; 3] = std::array::from_fn(|k| target[k] + dir[k] * far);
         let d = ground.raycast(target, want).map_or(far, |t| (t * far - 0.25).max(0.3));
         let eye: [f32; 3] = std::array::from_fn(|k| target[k] + dir[k] * d);
-        json!({"op": "set_camera", "camera": {"eye": eye, "target": target, "up": [0.0, 1.0, 0.0], "fov_y_degrees": 60.0, "near": 0.05, "far": 5000.0}})
+        json!({"op": "set_camera", "camera": {"eye": eye, "target": target, "up": [0.0, 1.0, 0.0], "fov_y_degrees": 60.0, "near": 0.1, "far": 20000.0}})
     }
 
     /// Player movement on the walkable surfaces, the script tick and the
@@ -1100,11 +1100,12 @@ impl NaughtyDogVm {
         }
         let package: Arc<dyn AssetReader> = Arc::new(crysirror_core::service::MemoryAssetReader(read_all(session.actors.open(&path)?.as_ref(), PACKAGE_LIMIT)?.into()));
         let directory = Directory::read(package.as_ref())?;
-        let mut meshes = scene::package_meshes(package.as_ref(), &directory, PACKAGE_LIMIT)?;
+        let loaded = crate::mesh::Loaded::read(package.as_ref(), PACKAGE_LIMIT)?;
+        let mut meshes = scene::meshes_of(&loaded, &directory)?;
         if meshes.iter().all(|m| m.fragments.iter().all(|f| f.triangles.is_empty())) {
             return Ok(());
         }
-        scene::place_art_group(&mut meshes);
+        scene::place_art_group(&mut meshes, scene::vis_sphere(&loaded, &directory));
         let glb = scene::document(art, &meshes, package.as_ref(), &directory, MAX_TEXTURE)?.to_glb()?;
         session.next_model += 1;
         let asset = host.upload_model(self.client, 0x4e44_0000 + session.next_model, &glb)?;
