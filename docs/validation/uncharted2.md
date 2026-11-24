@@ -140,3 +140,9 @@ Script animation (2026-11-25):
 - **Offline decode:** `clip_pose train-wreck-car-b.pak anim-train-wreck-climb.pak idle-00-car-b` decodes 151 frames on 3 joints, and the `pistol-base` `idle` decodes on 9 joints.
 - **Capture:** the prologue capture shows the car, the undercarriage and the ladder posed on the cliff face.
 
+Root motion and rig libraries (2026-11-25):
+
+- **Offline decode:** `clip_pose` reports `walk` 1.90 m/s, `move` 4.00 m/s, `move^turn-180^move` ending at quaternion (0, 1, 0, 0) and `jump-long` ending at (−0.005, −3.25, 6.98).
+- **Prologue capture:** after the change the hanging car stands over the cliff with the player inside it.
+- **Bench-climb track:** boot, then two Page Down presses (`train-wreck-climb` → `load-tw-a-high` → `train-wreck-treadmill`). Before the shared libraries this aborted with "asset cache exceeds 256 MiB" (255 MiB generated). Afterwards the run completes and logs `rig library Player: 138 clips, 15631 KiB` once, plus the treadmill animations `idle-04-car-a`/`-car-b`, `shift-03-door`, `drake-tight-motor` and `drake-tight-beam`. The museum run still shows the player states and Flynn's idle.
+

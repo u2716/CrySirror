@@ -191,6 +191,13 @@ fn range_record(r: u128) -> ([f32; 3], [f32; 3]) {
     ([s0, small_float(r, 21, 21), small_float(r, 42, 22)], [small_float(r, 64, 22), small_float(r, 86, 21), small_float(r, 107, 21)])
 }
 
+/// The `JOINT_HIERARCHY` hash an `ANIM` payload's clip animates.
+pub fn hierarchy(p: &Loaded, payload: usize) -> Result<u32> {
+    let cd = p.ptr(payload + 8)?;
+    ensure!(p.u32(cd)? == MAGIC, "ND clip magic");
+    p.u32(cd + 4)
+}
+
 /// Decode the clip of an `ANIM` payload for a skeleton with `animated`
 /// animated joints.
 pub fn decode(p: &Loaded, payload: usize, name: &str, animated: usize) -> Result<Clip> {

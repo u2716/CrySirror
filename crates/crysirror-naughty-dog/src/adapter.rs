@@ -424,6 +424,12 @@ struct Session {
     own_rigs: HashMap<String, crate::skeleton::Skeleton>,
     /// Animation packages read for script animations.
     anim_packages: HashMap<String, Arc<crate::mesh::Loaded>>,
+    /// Skeletons by `JOINT_HIERARCHY` hash, for clips authored on another
+    /// rig than the entity's (`None`: package without one).
+    skeletons: HashMap<String, Option<crate::skeleton::Skeleton>>,
+    /// Each rig's controller clips as one animation library, uploaded once
+    /// per session (models carry only joints and skins), by `RigRef` key.
+    rig_libraries: HashMap<String, String>,
     /// Uploaded single-clip libraries by (rig, clip).
     libraries: HashMap<(String, u32), Option<LibraryClip>>,
 }
@@ -659,6 +665,8 @@ impl NaughtyDogVm {
             entity_rigs: HashMap::new(),
             own_rigs: HashMap::new(),
             anim_packages: HashMap::new(),
+            skeletons: HashMap::new(),
+            rig_libraries: HashMap::new(),
             libraries: HashMap::new(),
         };
         if self.config.viewer() {
@@ -1344,6 +1352,36 @@ impl NaughtyDogVm {
         }
     }
 
+    /// The skeleton with JH hash `hash` among the human base rigs and the
+    /// loaded characters' skeleton packages.
+    fn skeleton_for(session: &mut Session, hash: u32) -> Result<Option<crate::skeleton::Skeleton>> {
+        let mut candidates: Vec<String> = vec!["npc-normal-base.pak".into(), "proto.pak".into()];
+        for packages in session.npc_packages.values() {
+            if let Some(base) = packages.first() {
+                if !candidates.contains(base) {
+                    candidates.push(base.clone());
+                }
+            }
+        }
+        for package in candidates {
+            if !session.skeletons.contains_key(&package) {
+                let skeleton = if session.actors.exists(&package) {
+                    let reader = crysirror_core::service::MemoryAssetReader(read_all(session.actors.open(&package)?.as_ref(), PACKAGE_LIMIT)?.into());
+                    crate::skeleton::of_package(&crate::mesh::Loaded::read(&reader, PACKAGE_LIMIT)?)?
+                } else {
+                    None
+                };
+                session.skeletons.insert(package.clone(), skeleton);
+            }
+            if let Some(Some(s)) = session.skeletons.get(&package) {
+                if s.hash == hash {
+                    return Ok(Some(s.clone()));
+                }
+            }
+        }
+        Ok(None)
+    }
+
     /// The entities an animated object stands for: the player's, or its
     /// spawner's.
     fn animation_entities(session: &Session, object: u32) -> Vec<u32> {
@@ -1395,10 +1433,20 @@ impl NaughtyDogVm {
                 RigRef::Own(art) => session.own_rigs.get(art),
             }
             .context("rig skeleton not loaded")?;
-            let decoded = crate::anim::decode(&loaded, at, name, skeleton.animated)?;
-            if decoded.hierarchy != skeleton.hash {
-                continue;
+            let mut skeleton = skeleton.clone();
+            // A clip authored on another rig (the story's player clips name
+            // the `npc-normal-base` hierarchy, the player models the
+            // `proto.pak` rig) plays with that rig's joints; the entity binds
+            // them by joint name.
+            let hierarchy = crate::anim::hierarchy(&loaded, at)?;
+            if hierarchy != skeleton.hash {
+                match Self::skeleton_for(session, hierarchy)? {
+                    Some(other) => skeleton = other,
+                    None => continue,
+                }
             }
+            let skeleton = &skeleton;
+            let decoded = crate::anim::decode(&loaded, at, name, skeleton.animated)?;
             let channels = decoded.joints.iter().take(skeleton.names.len()).filter(|j| j.rotation.is_some() || j.translation.is_some() || j.scale.is_some()).count();
             anyhow::ensure!(channels > 0, "clip {name} animates none of the {} joints (unsupported {:?})", skeleton.names.len(), decoded.unsupported);
             let seconds = if decoded.frames > 1 { decoded.frames as f32 / decoded.fps.max(1.) } else { 0. };
@@ -1622,7 +1670,8 @@ impl NaughtyDogVm {
                         }
                         ground_speed = Some(step.speed);
                         p.yaw = anim.yaw;
-                        let layers: Vec<_> = step.layers.iter().map(|l| json!({"clip": l.clip, "time": l.time, "speed": 0.0, "weight": l.weight, "target_weight": l.weight, "looping": true, "additive": l.additive})).collect();
+                        let source = session.rig_libraries.get(&format!("{:?}", RigRef::Player));
+                        let layers: Vec<_> = step.layers.iter().map(|l| json!({"clip": l.clip, "source": source, "time": l.time, "speed": 0.0, "weight": l.weight, "target_weight": l.weight, "looping": true, "additive": l.additive})).collect();
                         world.push(json!({"op": "set_animation", "id": id, "animation": {"layers": layers}}));
                     }
                     Err(e) => session.stage.log(format!("player animation: {e:#}")),
@@ -1702,7 +1751,8 @@ impl NaughtyDogVm {
                 let chain = &npc.sets;
                 match npc.animator.present(graph, table, clips, &|c| sets.resolve(chain, c), npc_inputs(), before, seconds) {
                     Ok((layers, _)) => {
-                        let layers: Vec<_> = layers.iter().map(|l| json!({"clip": l.clip, "time": l.time, "speed": 0.0, "weight": l.weight, "target_weight": l.weight, "looping": true, "additive": l.additive})).collect();
+                        let source = session.rig_libraries.get(&format!("{:?}", RigRef::Npc(npc.rig.clone())));
+                        let layers: Vec<_> = layers.iter().map(|l| json!({"clip": l.clip, "source": source, "time": l.time, "speed": 0.0, "weight": l.weight, "target_weight": l.weight, "looping": true, "additive": l.additive})).collect();
                         world.push(json!({"op": "set_animation", "id": npc.entity, "animation": {"layers": layers}}));
                     }
                     Err(e) => session.stage.log(format!("npc animation: {e:#}")),
@@ -1894,6 +1944,23 @@ impl NaughtyDogVm {
             _ => own.as_ref().filter(|_| skinned).map(|skeleton| scene::Rig { skeleton, clips: &[] }),
         };
         let idle = rig.as_ref().and_then(|r| r.clips.iter().find(|c| c.name == "idle")).map(|c| c.name.clone());
+        // The rig's clips go to a shared library once; the model gets the
+        // joints and skin only.
+        let library = match (&rig, &rig_ref) {
+            (Some(r), Some(rr)) if !r.clips.is_empty() => {
+                let key = format!("{rr:?}");
+                if !session.rig_libraries.contains_key(&key) {
+                    let glb = scene::animation_library(r).to_glb()?;
+                    session.next_model += 1;
+                    let asset = host.upload_model(self.client, 0x4e44_0000 + session.next_model, &glb)?;
+                    session.stage.log(format!("rig library {key}: {} clips, {} KiB", r.clips.len(), glb.len() / 1024));
+                    session.rig_libraries.insert(key.clone(), asset.relative().to_string());
+                }
+                session.rig_libraries.get(&key).cloned()
+            }
+            _ => None,
+        };
+        let rig = rig.map(|r| scene::Rig { skeleton: r.skeleton, clips: &[] });
         if skinned && own.is_none() {
             session.stage.log(format!("art {art}: rig {:?}, {} clips, anim set {:?}", binding.as_ref().map(|b| b.0.clone().unwrap_or_else(|| "proto".into())), rig.as_ref().map_or(0, |r| r.clips.len()), npc_sets.iter().map(|s| format!("{s:08x}")).collect::<Vec<_>>()));
         }
@@ -1917,8 +1984,8 @@ impl NaughtyDogVm {
             if let Some(key) = driven {
                 let machine = crate::anim_state::Machine { state: sid(NPC_STATES[0]), time: 0., previous: None, fade: 0. };
                 session.npcs.push(Npc { entity: id, animator: crate::player::Animator::new(machine), sets: npc_sets.clone(), rig: key.clone() });
-            } else if let Some(clip) = &idle {
-                world.push(json!({"op": "set_animation", "id": id, "animation": {"layers": [{"clip": clip, "looping": true}]}}));
+            } else if let (Some(clip), Some(source)) = (&idle, &library) {
+                world.push(json!({"op": "set_animation", "id": id, "animation": {"layers": [{"clip": clip, "source": source, "looping": true}]}}));
             }
             session.entities.push((id, asset.clone()));
             if let Some(r) = &rig_ref {
