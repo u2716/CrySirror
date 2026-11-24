@@ -80,6 +80,10 @@ Other opcodes report "Unknown opcode". After a native call the interpreter reads
 
 `sub_BF890` (`game/level-mgr.cpp`, "[Load Regions] region '%s', task '%s'") reads `REGION_TREE` regions: name at +0, entry count (`i16`) at +0x1c, tag count at +0x1e, tags at +0x20, entries `{key, type, value}` at +0x24. Tag 0xf131b5e1 holds a script lambda stored in the package; its result selects scheme N (default 1). Keys `level`/`level-N` load and display, `level-no-display[-N]` fill the second list, 0x4f807b48 applies to every scheme. Each name was confirmed by its `StringId`.
 
+## Trigger regions (in progress)
+
+`player-in-region?` (0x674a04) and `object-in-region?` (0x140b58) ask `sub_F7D94` whether an object is in a region; that calls `sub_115EE0(region manager, region, position)`, which tests each region of that name with `sub_114D60`. A region record holds its name (+0), `StringId` (+4), a parent spawner (+0x10, so the volume moves with that spawner, for example `train-wreck-car-b-1`), a shape list (+0x18), entry and tag counts (+0x1c/+0x1e), tags (+0x20, including script lambdas that send events) and entries (+0x24). `sub_114D60` walks the runtime region's shape list (`next` at +0, a `u16` type at +0xc with types 0, 1 and 3, a `u16` count at +0xe, and for type 1 112-byte face records from +0x50) and runs AltiVec plane tests. Those runtime objects are built at login from the package record, whose +0x18 block does not have this layout, so the login conversion still has to be decoded.
+
 ## Spawners
 
 Spawner (+0x40) points to a parent spawner; locators of children are in the parent's frame. Flag 0x40000000 is set on continue points, companion placements and cameras and is treated as no-auto-birth; the flag test in the ELF has not been located.
