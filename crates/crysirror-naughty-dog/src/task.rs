@@ -8,13 +8,28 @@
 //! subnode edges. A `game-task-subnode` holds name, title, level part
 //! (`pak22.txt` level), a combined name, checkpoint data and at +0x28 a
 //! `continue` record whose first string names the player's continue
-//! spawner and +0x38 the companion's. Completion is derived from the
+//! spawner and +0x38 the companion's. The subnode's +0x38 is a start
+//! lambda and +0x40 its task-manager record ([`Manager`]). Completion is derived from the
 //! edges: everything ordered before the current subnode (and every node
 //! before the current node) is complete. The PPU tracks completion as
 //! progress state; starting from a checkpoint equals this ordering.
 use crate::dc::{Dc, sid};
 use anyhow::{Context, Result, ensure};
 use std::collections::{HashMap, HashSet, VecDeque};
+
+/// What a subnode presents (+0x40 record `{?, type, flag, params, name
+/// string, name}`).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Manager {
+    None,
+    /// `TaskManagerPlayMovie`: `movie1/NAME.m2v`.
+    PlayMovie(String),
+    /// `TaskManagerMessageDialog`: a text catalog key.
+    MessageDialog(String),
+    /// `TaskManagerMainMenu`.
+    MainMenu,
+    Other(u32),
+}
 
 #[derive(Clone, Debug)]
 pub struct Subnode {
@@ -24,6 +39,9 @@ pub struct Subnode {
     pub level: String,
     pub continue_player: Option<String>,
     pub continue_buddy: Option<String>,
+    pub manager: Manager,
+    /// Script lambda run when the subnode starts (+0x38).
+    pub on_start: Option<u32>,
     pub address: u32,
 }
 
@@ -94,7 +112,21 @@ impl Graph {
             for (sid_, s) in map(dc, dc.mem.u32(n + 0x18)?)? {
                 let cont = dc.mem.u32(s + 0x28)?;
                 let opt = |at: u32| -> Result<Option<String>> { Ok(if cont == 0 { None } else { Some(string(dc, cont + at)?).filter(|s| !s.is_empty()) }) };
-                subnodes.push(Subnode { name: string(dc, s)?, id: sid_, level: string(dc, s + 0x10)?, continue_player: opt(0)?, continue_buddy: opt(0x38)?, address: s });
+                let manager = match dc.mem.u32(s + 0x40)? {
+                    0 => Manager::None,
+                    r => match dc.mem.u32(r + 4)? {
+                        t if t == sid("none") => Manager::None,
+                        t if t == sid("TaskManagerPlayMovie") => Manager::PlayMovie(string(dc, r + 0x10)?),
+                        t if t == sid("TaskManagerMessageDialog") => Manager::MessageDialog(string(dc, r + 0x10)?),
+                        t if t == sid("TaskManagerMainMenu") => Manager::MainMenu,
+                        t => Manager::Other(t),
+                    },
+                };
+                let on_start = match dc.mem.u32(s + 0x38)? {
+                    0 => None,
+                    l => (dc.mem.type_of(l)? == crate::dc::TYPE_SCRIPT_LAMBDA).then_some(l),
+                };
+                subnodes.push(Subnode { name: string(dc, s)?, id: sid_, level: string(dc, s + 0x10)?, continue_player: opt(0)?, continue_buddy: opt(0x38)?, manager, on_start, address: s });
             }
             let edges = map(dc, dc.mem.u32(n + 0x1c)?)?;
             nodes.push(Node { name: string(dc, n)?, id, world: string(dc, n + 8)?, ss_module: string(dc, n + 0x10)?, subnodes, order: order(&edges), edges, address: n });

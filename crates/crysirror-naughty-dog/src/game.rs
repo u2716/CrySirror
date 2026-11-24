@@ -84,9 +84,17 @@ impl Game {
         Ok(at)
     }
 
+    /// The first subnode of the boot sequence: the first node in task order
+    /// (`pre-game`), followed by `main-menu`.
+    pub fn default_task(&self) -> Option<String> {
+        let g = &self.rt.inner.tasks;
+        let node = g.order.iter().find_map(|id| g.nodes.iter().position(|n| n.id == *id && !n.subnodes.is_empty()))?;
+        Some(g.nodes[node].subnodes[g.first(node)?].name.clone())
+    }
+
     /// The first subnode of the story: the node that follows the menu
     /// nodes (`pre-game`, `main-menu`, `online`) in task order.
-    pub fn default_task(&self) -> Option<String> {
+    pub fn story_task(&self) -> Option<String> {
         let g = &self.rt.inner.tasks;
         let online = g.order.iter().position(|id| *id == sid("online"))?;
         let next = *g.order.get(online + 1)?;

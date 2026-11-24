@@ -74,7 +74,7 @@ Other opcodes report "Unknown opcode". After a native call the interpreter reads
 
 ## Tasks
 
-`tasks.bin` `*task-graph*` is `{node map, node edges}` with `%start`/`%end` edges. A node is `{name, world, ss-module, subnode map, subnode edges}`; a subnode holds name, title, level, a combined name, a record at +0x1c whose word 0 is 3 when complete (`task-subnode-complete?` in `task-defines.bin`), and a `continue` record naming the player and companion continue spawners. Movie subnodes are named `movie-NAME` and the disc holds `movie1/NAME.m2v`.
+`tasks.bin` `*task-graph*` is `{node map, node edges}` with `%start`/`%end` edges. A node is `{name, world, ss-module, subnode map, subnode edges}`; a subnode holds name, title, level, a combined name, a record at +0x1c whose word 0 is 3 when complete (`task-subnode-complete?` in `task-defines.bin`), and a `continue` record naming the player and companion continue spawners. A subnode's +0x38 is a start lambda and +0x40 a task-manager record `{?, type, flag, params, name string, name}` with types `TaskManagerPlayMovie` (movie name), `TaskManagerMessageDialog` (text key), `TaskManagerMainMenu` and `none`. Text catalog IDs in `text1.psarc` are the `StringId` of the key.
 
 ## Load regions
 

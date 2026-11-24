@@ -24,6 +24,7 @@ use crate::{
     package::Directory,
     scene::{self, SpawnerRecord},
     ss::{Property, World},
+    task::Manager,
 };
 use anyhow::{Context, Result, ensure};
 use crysirror_core::{
@@ -50,6 +51,8 @@ const SCREEN: [u32; 2] = [1280, 720];
 const FADE_LAYER: u32 = 0x4e44_0001;
 const NO_AUTO_BIRTH: u32 = 0x4000_0000;
 const MOVIE_LAYER: u32 = 0x4e44_0002;
+/// Message dialog and main-menu text layers.
+const UI_LAYER: u32 = 0x4e44_0010;
 /// The world assigns the first video the first video surface slot.
 const MOVIE_SURFACE: &str = "__surface/1000";
 /// World videos are read whole (`crysirror_runtime::vfs::MAX_FILE`).
@@ -62,9 +65,12 @@ pub struct Config {
     /// `level-name` of `pak22.txt` for the level viewer.
     #[serde(default)]
     pub level: Option<String>,
-    /// Task subnode to start (default: the first story task).
+    /// Task subnode to start (default: the first task of the boot sequence).
     #[serde(default)]
     pub task: Option<String>,
+    /// `text1.psarc` catalog number (`N.common`); 2 is English.
+    #[serde(default)]
+    pub language: Option<u32>,
 }
 
 fn valid_name(n: &str) -> bool {
@@ -310,6 +316,9 @@ struct Session {
     /// world video and its layer present it.
     movie: Option<f64>,
     movie_video: bool,
+    ui: Option<Ui>,
+    /// The `text1.psarc` common catalog of the configured language.
+    catalog: Option<Vec<u8>>,
 }
 
 /// The world environment: the level's directional light and ambient term
@@ -358,6 +367,26 @@ fn movie_seconds(reader: &dyn AssetReader) -> Result<f64> {
         at += if at + (n as u64) < len { n as u64 - 3 } else { n as u64 };
     }
     Ok(pictures as f64 / fps)
+}
+
+/// Boot-sequence screens drawn by the player.
+enum Ui {
+    /// `TaskManagerMessageDialog`: dismissed with Enter.
+    Message(String),
+    /// `TaskManagerMainMenu`: New Game, Continue.
+    Menu { items: Vec<String>, selected: usize },
+}
+
+/// The task after `at` in the session's task graph.
+fn game_next(session: &Session, at: (usize, usize)) -> Option<(usize, usize)> {
+    session.game.as_ref()?.rt.inner.tasks.next(at)
+}
+
+impl Session {
+    /// A text catalog entry by key (its `StringId`), or the key itself.
+    fn text(&self, key: &str) -> String {
+        self.catalog.as_deref().and_then(|b| crate::Strings::parse(b).ok()).and_then(|s| s.get(sid(key)).map(str::to_owned)).unwrap_or_else(|| key.to_owned())
+    }
 }
 
 pub struct NaughtyDogVm {
@@ -437,11 +466,17 @@ impl NaughtyDogVm {
             script_error: None,
             movie: None,
             movie_video: false,
+            ui: None,
+            catalog: None,
         };
         if self.config.viewer() {
             let level = self.config.level.as_deref().unwrap_or("menu-temple");
             session.current = session.levels.iter().position(|(n, _)| n == level).with_context(|| format!("unknown Naughty Dog level {level}"))?;
         } else {
+            let (_, text) = registry.open(open("text1.psarc")?, Some("sony/psarc"), &context)?;
+            let text = ArchiveMount::new(text, context.clone())?;
+            let catalog = format!("{}.common", self.config.language.unwrap_or(2));
+            session.catalog = text.open(&catalog).ok().map(|r| read_all(r.as_ref(), 16 << 20)).transpose()?;
             let (_, dc) = registry.open(open("dc1.psarc")?, Some("sony/psarc"), &context)?;
             let modules = ArchiveMount::new(dc, context)?;
             let game = Game::boot(&modules, &mut session.stage)?;
@@ -500,6 +535,7 @@ impl NaughtyDogVm {
         session.script_error = None;
         session.movie = None;
         session.movie_video = false;
+        session.ui = None;
         session.stage.spawners.clear();
         session.stage.entities.clear();
         session.stage.visible.clear();
@@ -621,10 +657,8 @@ impl NaughtyDogVm {
             session.camera.speed = (size * 0.05).clamp(2., 50.);
             if session.game.is_some() {
                 self.start_task(session, &mut world)?;
-                if let Some((video, layer)) = self.start_movie(host, session)? {
-                    world.push(video);
-                    host.submit_engine(self.client, 1, &serde_json::to_vec(&json!({"layers": [layer], "world": []}))?)?;
-                }
+                host.submit_engine(self.client, 1, &serde_json::to_vec(&json!({"layers": [], "world": std::mem::take(&mut world)}))?)?;
+                self.enter_task(host, session)?;
             } else if session.start.is_none() {
                 // South of the placed bounds, slightly above, facing them.
                 session.camera = Camera { eye: [center[0], center[1] + size * 0.15, center[2] + size * 0.6], yaw: 0., pitch: -0.15, speed: session.camera.speed };
@@ -689,11 +723,9 @@ impl NaughtyDogVm {
         Ok(())
     }
 
-    /// A movie task subnode plays `movie1/NAME.m2v` (the subnode name
-    /// without `movie-`) full screen; it completes when the stream ends or
-    /// Enter/Escape skips it.
-    fn start_movie(&self, host: &mut dyn HostServices, session: &mut Session) -> Result<Option<(serde_json::Value, serde_json::Value)>> {
-        let Some(name) = session.plan.as_ref().and_then(|p| p.name.strip_prefix("movie-")) else { return Ok(None) };
+    /// A `TaskManagerPlayMovie` subnode plays `movie1/NAME.m2v` full
+    /// screen; it completes when the stream ends or Enter/Escape skips it.
+    fn start_movie(&self, host: &mut dyn HostServices, session: &mut Session, name: &str) -> Result<Option<(serde_json::Value, serde_json::Value)>> {
         let path = format!("{MAIN}/movie1/{name}.m2v");
         let storage = host.storage(self.client)?;
         let Ok(reader) = storage.open_asset(&VfsPath::new(Mount::Asset, &path)?) else { return Ok(None) };
@@ -713,6 +745,75 @@ impl NaughtyDogVm {
         Ok(Some((video, layer)))
     }
 
+    /// Begin the current subnode's own behaviour: its start lambda (for
+    /// example the retail skip of the kiosk trailer, which plays another
+    /// task), then what its task-manager record presents. A subnode that
+    /// presents nothing and has no level completes at once.
+    fn enter_task(&self, host: &mut dyn HostServices, session: &mut Session) -> Result<()> {
+        let Some(game) = session.game.as_mut() else { return Ok(()) };
+        let Some(at) = game.rt.inner.task else { return Ok(()) };
+        let sub = game.rt.inner.tasks.nodes[at.0].subnodes[at.1].clone();
+        if let Some(l) = sub.on_start {
+            if let Err(e) = game.rt.run_lambda(&mut session.stage, l, &[]) {
+                session.stage.log(format!("start lambda of {}: {e:#}", sub.name));
+            }
+            if game.rt.inner.task_change.is_some() {
+                return Ok(());
+            }
+        }
+        let mut layers = Vec::new();
+        let mut world = Vec::new();
+        match &sub.manager {
+            Manager::PlayMovie(name) => match self.start_movie(host, session, name)? {
+                Some((video, layer)) => {
+                    world.push(video);
+                    layers.push(layer);
+                }
+                None if session.movie.is_none() => session.movie = Some(session.stage.now),
+                None => {}
+            },
+            Manager::MessageDialog(key) => {
+                let text = session.text(key);
+                session.ui = Some(Ui::Message(text));
+            }
+            Manager::MainMenu => {
+                let items = ["MENU_NEWGAME", "MENU_CONTINUE"].map(|k| session.text(k)).to_vec();
+                session.ui = Some(Ui::Menu { items, selected: 0 });
+            }
+            Manager::None | Manager::Other(_) => {
+                if sub.level.is_empty() {
+                    let next = game_next(session, at);
+                    if let Some(game) = session.game.as_mut() {
+                        game.rt.inner.task_change = next;
+                    }
+                }
+            }
+        }
+        layers.extend(Self::ui_layers(session.ui.as_ref()));
+        host.submit_engine(self.client, 1, &serde_json::to_vec(&json!({"layers": layers, "world": world}))?)?;
+        Ok(())
+    }
+
+    /// Message dialog or main-menu layers (text from the disc catalog).
+    fn ui_layers(ui: Option<&Ui>) -> Vec<serde_json::Value> {
+        let text = |id: u32, y: i32, line: &str, color: [u8; 4], size: u16| {
+            json!({"op": "put", "layer": {"id": id, "rect": [160, y, SCREEN[0] - 320, 200], "paint": {"kind": "text", "text": line, "font": "default", "size": size, "color": color, "layout": crysirror_core::service::SIMPLE_TEXT_LAYOUT}}})
+        };
+        // The three layers always exist; unused ones are transparent.
+        let mut out: Vec<serde_json::Value> = (0..3).map(|i| json!({"op": "put", "layer": {"id": UI_LAYER + i, "rect": [0, 0, 1, 1], "paint": {"kind": "solid", "color": [0, 0, 0, 0]}}})).collect();
+        match ui {
+            None => {}
+            Some(Ui::Message(t)) => out[0] = text(UI_LAYER, 260, t, [255, 255, 255, 255], 28),
+            Some(Ui::Menu { items, selected }) => {
+                for (i, item) in items.iter().enumerate().take(2) {
+                    let on = i == *selected;
+                    out[1 + i] = text(UI_LAYER + 1 + i as u32, 440 + 56 * i as i32, &format!("{}{item}", if on { "> " } else { "  " }), if on { [255, 230, 160, 255] } else { [200, 200, 200, 255] }, 34);
+                }
+            }
+        }
+        out
+    }
+
     /// Apply a task change: a subnode with the same levels keeps the
     /// running scripts; otherwise its levels load.
     fn change_task(&self, host: &mut dyn HostServices, session: &mut Session, at: (usize, usize)) -> Result<()> {
@@ -724,10 +825,8 @@ impl NaughtyDogVm {
         let plan = Self::plan(session)?;
         if session.plan.as_ref().is_some_and(|p| p.levels == plan.levels) {
             session.plan = Some(plan);
-            if let Some((video, layer)) = self.start_movie(host, session)? {
-                host.submit_engine(self.client, 1, &serde_json::to_vec(&json!({"layers": [layer], "world": [video]}))?)?;
-            }
-            return Ok(());
+            session.ui = None;
+            return self.enter_task(host, session);
         }
         self.begin(host, session)
     }
@@ -857,6 +956,37 @@ impl NaughtyDogVm {
         world.append(&mut session.stage.ops);
         let skip = input.buttons_pressed & (b::ENTER | b::ESCAPE) != 0;
         let mut change = session.game.as_mut().and_then(|g| g.rt.inner.task_change.take());
+        // Boot screens: Enter dismisses a message; the menu moves with
+        // Up/Down and New Game starts the story.
+        let pressed = |m: u64| input.buttons_pressed & m != 0;
+        let mut ui_changed = false;
+        match &mut session.ui {
+            Some(Ui::Message(_)) if pressed(b::ENTER) => {
+                session.ui = None;
+                ui_changed = true;
+                let at = session.game.as_ref().and_then(|g| g.rt.inner.task);
+                change = change.or_else(|| at.and_then(|at| game_next(session, at)));
+            }
+            Some(Ui::Menu { selected, items }) => {
+                if pressed(b::UP) || pressed(b::DOWN) {
+                    *selected = (*selected + 1) % items.len().max(1);
+                    ui_changed = true;
+                }
+                // Continue needs a native save (not implemented): both
+                // entries start the story.
+                if pressed(b::ENTER) {
+                    session.ui = None;
+                    ui_changed = true;
+                    if let Some(game) = session.game.as_ref() {
+                        change = game.story_task().and_then(|t| game.rt.inner.tasks.find(sid(&t)));
+                    }
+                }
+            }
+            _ => {}
+        }
+        if ui_changed {
+            layers.extend(Self::ui_layers(session.ui.as_ref()));
+        }
         if let Some(end) = session.movie {
             if skip || session.stage.now >= end {
                 session.movie = None;
@@ -969,6 +1099,18 @@ impl VmAdapter for NaughtyDogVm {
         let now = host.now_ms();
         let seconds = (now.saturating_sub(session.last_ms)).min(100) as f32 / 1000.;
         session.last_ms = now;
+        // A subnode without levels starts as soon as its (empty) load is
+        // done.
+        if !session.started && session.game.is_some() {
+            let mut world = Vec::new();
+            let started = self.start_task(&mut session, &mut world).and_then(|_| {
+                host.submit_engine(self.client, 1, &serde_json::to_vec(&json!({"layers": [], "world": world}))?)?;
+                self.enter_task(host, &mut session)
+            });
+            self.state = Some(session);
+            started.map_err(fail)?;
+            return Ok(VmYield::WaitUntil(now + FRAME_MS));
+        }
         if session.started {
             let played = self.play(host, &mut session, &input, seconds);
             self.state = Some(session);
