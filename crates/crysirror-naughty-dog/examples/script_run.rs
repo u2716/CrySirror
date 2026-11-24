@@ -4,7 +4,7 @@
 //! tick the processes. Reports module loads, processes and their states,
 //! script prints, errors and unimplemented natives.
 //!
-//! `script_run GAME_DIR [TASK] [FRAMES]`
+//! `script_run GAME_DIR [TASK|--all] [FRAMES]`
 use anyhow::{Context, Result};
 use crysirror_capfs::{ambient_authority, fs::Dir};
 use crysirror_core::{service::AssetReader, state::ClientId, vfs::VfsProvider};
@@ -87,6 +87,86 @@ impl World for Stub {
     }
 }
 
+/// Spawner records of a task subnode's levels (subnode level, caches,
+/// world): only the `-ingame` packages hold spawners.
+fn task_spawners(paks: &ArchiveMount, all: &std::collections::BTreeMap<String, crysirror_naughty_dog::Level>, level: &str, world: &str) -> Result<(usize, Vec<scene::SpawnerRecord>)> {
+    let mut packages = Vec::new();
+    for l in std::iter::once(level).chain(all.get(level).map(|l| l.caches.iter().map(String::as_str).collect::<Vec<_>>()).unwrap_or_default()).chain(std::iter::once(world)) {
+        for p in all.get(l).map(|l| l.packages.as_slice()).unwrap_or_default() {
+            if p.ends_with("-ingame") && !packages.contains(p) {
+                packages.push(p.clone());
+            }
+        }
+    }
+    let mut records = Vec::new();
+    for p in &packages {
+        let exact = format!("{p}.pak");
+        let path = if paks.exists(&exact) { Some(exact) } else { (0..100).map(|i| format!("{p}{i}.pak")).find(|x| paks.exists(x)) };
+        let Some(path) = path else { continue };
+        let package = paks.open(&path)?;
+        let directory = Directory::read(package.as_ref())?;
+        let items: Vec<_> = directory.items.iter().filter(|i| i.kind == "SPAWNER_GROUP").collect();
+        if items.is_empty() {
+            continue;
+        }
+        let loaded = mesh::Loaded::read(package.as_ref(), 256 << 20)?;
+        for item in items {
+            records.extend(scene::spawner_records(&loaded, item.payload_offset as usize)?);
+        }
+    }
+    Ok((packages.len(), records))
+}
+
+/// `--all`: every task subnode in task order for `FRAMES` frames each;
+/// prints per-task process counts and errors and the game-wide missing
+/// natives.
+fn all_tasks(modules: &Modules, paks: &ArchiveMount, all: &std::collections::BTreeMap<String, crysirror_naughty_dog::Level>, frames: u32) -> Result<()> {
+    let mut world = Stub::default();
+    let names: Vec<String> = {
+        let g = Game::boot(modules, &mut world)?;
+        let t = &g.rt.inner.tasks;
+        t.order.iter().filter_map(|id| t.node(*id)).flat_map(|n| n.order.iter().filter_map(|s| n.subnodes.iter().find(|x| x.id == *s)).map(|s| s.name.clone())).collect()
+    };
+    let mut missing: HashMap<&'static str, u32> = HashMap::new();
+    let (mut faults, mut total_procs) = (0, 0);
+    for task in &names {
+        let mut world = Stub::default();
+        let mut game = Game::boot(modules, &mut world)?;
+        let (node, sub) = game.select(task)?;
+        let (level, wl) = { let n = &game.rt.inner.tasks.nodes[node]; (n.subnodes[sub].level.clone(), n.world.clone()) };
+        let (packages, records) = task_spawners(paks, all, &level, &wl)?;
+        for r in &records {
+            world.spawners.insert(sid(&r.name), r.clone());
+            if r.flags & 0x4000_0000 == 0 {
+                world.spawned.insert(sid(&r.name));
+            }
+        }
+        let started = game.start(modules, &mut world, &records)?;
+        let mut fault = None;
+        for f in 0..frames {
+            world.time = f64::from(f) / 30.;
+            if let Err(e) = game.rt.tick(&mut world).and_then(|_| game.load_requested(modules, &mut world)) {
+                fault = Some(format!("{e:#}"));
+                break;
+            }
+        }
+        let vm_errors = game.rt.inner.errors.iter().filter(|e| e.contains("not mapped") || e.contains("opcode") || e.contains("depth") || e.contains("instructions")).count();
+        faults += usize::from(fault.is_some()) + vm_errors;
+        total_procs += started;
+        for (n, c) in game.rt.missing() {
+            *missing.entry(n).or_default() += c;
+        }
+        println!("{task:48} level {level:28} ingame {packages:2} procs {started:4} errors {:4} vm {vm_errors:3}{}", game.rt.inner.errors.len(), fault.map(|f| format!(" FAULT {f}")).unwrap_or_default());
+    }
+    let mut missing: Vec<_> = missing.into_iter().collect();
+    missing.sort_by(|a, b| b.1.cmp(&a.1));
+    println!("{} tasks, {total_procs} processes, {faults} VM faults/errors; {} unimplemented natives called:", names.len(), missing.len());
+    for (n, c) in missing.iter().take(80) {
+        println!("  {c:8} {n}");
+    }
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let root = args.first().context("GAME_DIR")?;
@@ -102,6 +182,11 @@ fn main() -> Result<()> {
         Ok(ArchiveMount::new(a, context.clone())?)
     };
     let modules = Modules(open("dc1.psarc")?);
+    if args.get(1).is_some_and(|a| a == "--all") {
+        let manifest = read_all(file(&disc, &format!("{main}/pak22.txt"))?.as_ref(), 4 << 20)?;
+        let all = levels(std::str::from_utf8(&manifest)?)?;
+        return all_tasks(&modules, &open("pak22.psarc")?, &all, frames);
+    }
     let mut world = Stub::default();
     let mut game = Game::boot(&modules, &mut world)?;
     println!("boot: {} modules: {}", game.loaded.len(), game.loaded.join(" "));

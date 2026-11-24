@@ -30,6 +30,8 @@ pub const KIND_UPDATE: u32 = 3;
 /// `wait-frames` converts frames at 1/30 s (`*(toc-0x7cb4)` = 0.0333).
 const FRAME_SECONDS: f32 = 1. / 30.;
 const MAX_ERRORS: usize = 256;
+/// State changes applied per process and frame.
+const MAX_TRANSITIONS: usize = 8;
 
 /// A spawner schema property value.
 #[derive(Clone, Debug, PartialEq)]
@@ -257,12 +259,11 @@ impl Runtime {
                 }
             }
         }
-        let mut transitions = 0;
-        loop {
+        // A state change runs the new state's blocks in the same frame;
+        // states that keep changing continue on the next frame.
+        for _ in 0..MAX_TRANSITIONS {
             self.run_groups(world, i)?;
-            let Some(next) = self.inner.procs[i].pending_go.take() else { break };
-            transitions += 1;
-            ensure!(transitions < 16, "state-script go loop");
+            let Some(next) = self.inner.procs[i].pending_go.take() else { return Ok(()) };
             self.transition(world, i, next)?;
         }
         Ok(())
@@ -317,7 +318,18 @@ impl Runtime {
                     guard += 1;
                     ensure!(guard <= 4096, "track lambda loop");
                     let lambda = self.dc.mem.u32(t.lambdas + 8 * t.next + 4)?;
-                    Thread::new(&self.dc, lambda, &[])?
+                    match Thread::new(&self.dc, lambda, &[]) {
+                        Ok(th) => th,
+                        Err(e) => {
+                            // A track entry without a lambda (label only)
+                            // has nothing to run.
+                            if lambda != 0 {
+                                self.inner.error(format!("process {:#010x}: {e:#}", self.inner.procs[i].name));
+                            }
+                            self.inner.procs[i].groups[gi].tracks[ti].next += 1;
+                            continue;
+                        }
+                    }
                 }
             };
             let mut ctx = Ctx { inner: &mut self.inner, world, proc: Some(i), wait: Wait::None };
