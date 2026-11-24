@@ -43,4 +43,4 @@ Native PPU behaviour is analyzed from an owner-supplied decrypted `EBOOT.elf` be
 
 Controls: WASD move the player on walkable level and prop surfaces (Shift runs), arrows orbit the camera, Page Down/Page Up step through task subnodes. `{"level": NAME}` without a task opens the free-camera level viewer (WASD/QE, arrows, Page Down/Up through `pak22.txt`).
 
-Native animation, collision, AI, audio banks, HUD, saves and most of the 833 natives are not executed. Desktop, browser and console gameplay are unverified. See [validated samples](../../docs/validation/uncharted2.md) and [SATD-nd-retail-runtime](SATD.md).
+Rendering uses each material's colour map (by texture source name) and the levels' baked light probes, evaluated per vertex. Native animation, collision, AI, audio banks, HUD, saves and most of the 833 natives are not executed. Desktop, browser and console gameplay are unverified. See [validated samples](../../docs/validation/uncharted2.md) and [SATD-nd-retail-runtime](SATD.md).
