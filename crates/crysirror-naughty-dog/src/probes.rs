@@ -70,6 +70,13 @@ impl ProbeField {
         self.probes.len()
     }
 
+    /// Mean irradiance over the six axis directions.
+    pub fn mean_irradiance(&self) -> [f32; 3] {
+        let dirs = [[1., 0., 0.], [-1., 0., 0.], [0., 1., 0.], [0., -1., 0.], [0., 0., 1.], [0., 0., -1.]];
+        let e: Vec<[f32; 3]> = dirs.iter().map(|d| evaluate(&self.mean, *d)).collect();
+        std::array::from_fn(|c| e.iter().map(|v| v[c]).sum::<f32>() / 6.)
+    }
+
     pub fn add(&mut self, probes: impl IntoIterator<Item = Probe>) {
         for p in probes {
             self.cells.entry(cell(p.position)).or_default().push(self.probes.len() as u32);

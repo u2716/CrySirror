@@ -311,6 +311,8 @@ struct Session {
     started: bool,
     /// Baked light probes of the loaded levels.
     probes: crate::probes::ProbeField,
+    /// The level light table's directional light.
+    light: Option<scene::LevelLight>,
     script_error: Option<String>,
     /// End time (stage seconds) of the playing task movie, and whether a
     /// world video and its layer present it.
@@ -463,6 +465,7 @@ impl NaughtyDogVm {
             player: None,
             started: false,
             probes: Default::default(),
+            light: None,
             script_error: None,
             movie: None,
             movie_video: false,
@@ -532,6 +535,7 @@ impl NaughtyDogVm {
         session.player = None;
         session.started = false;
         session.probes = Default::default();
+        session.light = None;
         session.script_error = None;
         session.movie = None;
         session.movie_video = false;
@@ -602,6 +606,7 @@ impl NaughtyDogVm {
                 if let Some(item) = directory.items.iter().find(|i| i.kind == "LIGHT_TABLE_1") {
                     if let Some(light) = scene::level_light(&loaded, item.payload_offset as usize)? {
                         world.push(environment(Some(&light)));
+                        session.light = Some(light);
                         session.lit = true;
                     }
                 }
@@ -693,9 +698,31 @@ impl NaughtyDogVm {
         Ok(())
     }
 
+    /// The environment of a loaded level: the light table's sun, ambient
+    /// from the baked probes' mean irradiance, image-based light scaled to
+    /// that brightness (the procedural daylight sky would otherwise light
+    /// night and cave levels) and the level's own sky mesh instead of the
+    /// procedural sky when a `sky-…` level is loaded.
+    fn level_environment(session: &Session) -> Option<serde_json::Value> {
+        if session.probes.is_empty() {
+            return None;
+        }
+        let e = session.probes.mean_irradiance();
+        let lum = 0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2];
+        let own_sky = session.plan.as_ref().is_some_and(|p| p.levels.iter().any(|l| l.starts_with("sky-")));
+        let sun = session.light.as_ref().map_or(json!(null), |l| json!({"direction": l.direction, "color": l.color.map(|c| c.clamp(0., 4.)), "intensity": l.intensity.clamp(0.2, 4.0), "shadow_strength": 0.6}));
+        Some(json!({"op": "set_environment", "environment": {"show_sky": !own_sky, "intensity": (lum * 4.).clamp(0.02, 1.), "ambient": e.map(|v| v.clamp(0., 2.)), "sun": sun,
+            // The camera adapts to the scene like the original's tone mapping
+            // (exact native curve not recovered).
+            "auto_exposure": {"min_log2": -6.0, "max_log2": 2.0, "speed_up": 3.0, "speed_down": 1.0, "compensation": -1.5}}}))
+    }
+
     /// Place the player and start the level's state-script processes.
     fn start_task(&self, session: &mut Session, world: &mut Vec<serde_json::Value>) -> Result<()> {
         session.ground.prepare();
+        if let Some(env) = Self::level_environment(session) {
+            world.push(env);
+        }
         let plan = session.plan.as_ref().context("task plan")?;
         let spawner = plan.continue_player.as_deref().and_then(|n| session.stage.spawners.get(&sid(n))).cloned();
         let (position, yaw) = match &spawner {
