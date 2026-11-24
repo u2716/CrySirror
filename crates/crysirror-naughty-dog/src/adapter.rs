@@ -321,20 +321,28 @@ struct Session {
     ui: Option<Ui>,
     /// The `text1.psarc` common catalog of the configured language.
     catalog: Option<Vec<u8>>,
+    /// Developer free camera in task mode (F1), detached from the player.
+    free: bool,
+    /// The level's sky (`sky-…` package) as an uploaded environment image.
+    sky: Option<VfsPath>,
 }
 
 /// The world environment: the level's directional light and ambient term
 /// when known. Native intensities (0.9–19 on the installed levels) are
 /// clamped to the renderer's sun range; the mapping is not calibrated
 /// against the original renderer (SATD-nd-retail-runtime).
-fn environment(light: Option<&scene::LevelLight>) -> serde_json::Value {
-    match light {
+fn environment(light: Option<&scene::LevelLight>, sky: Option<&VfsPath>) -> serde_json::Value {
+    let mut env = match light {
         None => json!({"op": "set_environment", "environment": {"show_sky": true, "intensity": 1.0, "ambient": [0.55, 0.55, 0.55], "sun": {"direction": [0.3, -0.8, -0.4], "color": [1.0, 0.97, 0.9], "intensity": 0.6, "shadow_strength": 0.0}}}),
         Some(l) => {
             let ambient = l.ambient.map_or([0.45; 3], |a| a.map(|v| (v * 1.6).clamp(0.05, 1.5)));
             json!({"op": "set_environment", "environment": {"show_sky": true, "intensity": 1.0, "ambient": ambient, "sun": {"direction": l.direction, "color": l.color.map(|c| c.clamp(0., 4.)), "intensity": l.intensity.clamp(0.2, 4.0), "shadow_strength": 0.6}}})
         }
+    };
+    if let Some(sky) = sky {
+        env["environment"]["hdr"] = json!(sky.relative());
     }
+    env
 }
 
 fn yaw_of(q: [f32; 4]) -> f32 {
@@ -471,6 +479,8 @@ impl NaughtyDogVm {
             movie_video: false,
             ui: None,
             catalog: None,
+            free: false,
+            sky: None,
         };
         if self.config.viewer() {
             let level = self.config.level.as_deref().unwrap_or("menu-temple");
@@ -520,7 +530,7 @@ impl NaughtyDogVm {
     /// Unload the presented level and queue the packages of the current
     /// level (viewer) or task subnode.
     fn begin(&self, host: &mut dyn HostServices, session: &mut Session) -> Result<()> {
-        let mut world = vec![environment(None)];
+        let mut world = vec![environment(None, None)];
         for (id, asset) in session.entities.drain(..) {
             world.push(json!({"op": "despawn", "id": id}));
             host.release_model(self.client, &asset)?;
@@ -536,6 +546,9 @@ impl NaughtyDogVm {
         session.started = false;
         session.probes = Default::default();
         session.light = None;
+        if let Some(sky) = session.sky.take() {
+            host.release_model(self.client, &sky)?;
+        }
         session.script_error = None;
         session.movie = None;
         session.movie_video = false;
@@ -605,7 +618,7 @@ impl NaughtyDogVm {
             if !session.lit {
                 if let Some(item) = directory.items.iter().find(|i| i.kind == "LIGHT_TABLE_1") {
                     if let Some(light) = scene::level_light(&loaded, item.payload_offset as usize)? {
-                        world.push(environment(Some(&light)));
+                        world.push(environment(Some(&light), session.sky.as_ref()));
                         session.light = Some(light);
                         session.lit = true;
                     }
@@ -646,7 +659,20 @@ impl NaughtyDogVm {
                     }
                 }
             }
-            if let Some((l, h)) = scene::placed_bounds(&meshes) {
+            let sky = if package_name.starts_with("sky-") { scene::sky_texture(&meshes, package.as_ref(), &directory)? } else { None };
+            if let Some(image) = sky {
+                // The sky is drawn behind everything at infinity, as the
+                // environment image, not as a 50 m mesh around the origin.
+                let rendered = crysirror_asset::sky::ImageSky { width: image.width, height: image.height, rgba: &image.rgba, u_offset: 0., zenith_span: std::f32::consts::FRAC_PI_2, scale: 1. }.render(2048, 1024)?;
+                session.next_model += 1;
+                let path = host.upload_hdr(self.client, 0x4e44_0000 + session.next_model, rendered.width, rendered.height, &rendered.rgb)?;
+                if let Some(old) = session.sky.replace(path) {
+                    host.release_model(self.client, &old)?;
+                }
+                if session.lit && session.game.is_none() {
+                    world.push(environment(session.light.as_ref(), session.sky.as_ref()));
+                }
+            } else if let Some((l, h)) = scene::placed_bounds(&meshes) {
                 session.bounds = Some(match session.bounds {
                     None => (l, h),
                     Some((a, b)) => (std::array::from_fn(|k| a[k].min(l[k])), std::array::from_fn(|k| b[k].max(h[k]))),
@@ -699,22 +725,26 @@ impl NaughtyDogVm {
     }
 
     /// The environment of a loaded level: the light table's sun, ambient
-    /// from the baked probes' mean irradiance, image-based light scaled to
-    /// that brightness (the procedural daylight sky would otherwise light
-    /// night and cave levels) and the level's own sky mesh instead of the
-    /// procedural sky when a `sky-…` level is loaded.
+    /// from the baked probes' mean irradiance and the level's sky image
+    /// (`sky-…` package) as background and image-based light. Without a
+    /// sky image the environment is black and its light scaled to the
+    /// probes' brightness (the procedural daylight sky would otherwise
+    /// light night and cave levels).
     fn level_environment(session: &Session) -> Option<serde_json::Value> {
         if session.probes.is_empty() {
             return None;
         }
         let e = session.probes.mean_irradiance();
         let lum = 0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2];
-        let own_sky = session.plan.as_ref().is_some_and(|p| p.levels.iter().any(|l| l.starts_with("sky-")));
         let sun = session.light.as_ref().map_or(json!(null), |l| json!({"direction": l.direction, "color": l.color.map(|c| c.clamp(0., 4.)), "intensity": l.intensity.clamp(0.2, 4.0), "shadow_strength": 0.6}));
-        Some(json!({"op": "set_environment", "environment": {"show_sky": !own_sky, "intensity": (lum * 4.).clamp(0.02, 1.), "ambient": e.map(|v| v.clamp(0., 2.)), "sun": sun,
+        let mut env = json!({"op": "set_environment", "environment": {"show_sky": session.sky.is_some(), "intensity": if session.sky.is_some() { 1. } else { (lum * 4.).clamp(0.02, 1.) }, "ambient": e.map(|v| v.clamp(0., 2.)), "sun": sun,
             // The camera adapts to the scene like the original's tone mapping
             // (exact native curve not recovered).
-            "auto_exposure": {"min_log2": -6.0, "max_log2": 2.0, "speed_up": 3.0, "speed_down": 1.0, "compensation": -1.5}}}))
+            "auto_exposure": {"min_log2": -6.0, "max_log2": 2.0, "speed_up": 3.0, "speed_down": 1.0, "compensation": -1.5}}});
+        if let Some(sky) = &session.sky {
+            env["environment"]["hdr"] = json!(sky.relative());
+        }
+        Some(env)
     }
 
     /// Place the player and start the level's state-script processes.
@@ -918,7 +948,17 @@ impl NaughtyDogVm {
                 p.controls = c;
             }
         }
-        if let Some(p) = &mut session.player {
+        if input.buttons_pressed & b::F1 != 0 && session.player.is_some() {
+            session.free = !session.free;
+            if session.free {
+                let p = session.player.as_ref().expect("player");
+                session.camera = Camera { eye: [p.position[0], p.position[1] + 2., p.position[2]], yaw: p.view_yaw, pitch: p.view_pitch, speed: 5. };
+            }
+        }
+        if session.free {
+            session.camera.step(input, seconds);
+            world.push(session.camera.op());
+        } else if let Some(p) = &mut session.player {
             let down = |m| input.buttons_down & m != 0;
             let turn = 1.8 * seconds;
             if down(b::LEFT) {

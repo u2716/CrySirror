@@ -6,7 +6,7 @@ Generated from the class registry, the command table, serde defaults and Rust do
 `CRYSIRROR_BLESS=1 cargo test --release -p crysirror-engine --test api_docs`.
 Policy and change log: [README](README.md), [CHANGES](CHANGES.md).
 
-API fingerprint: `c95d822ee88e0793`
+API fingerprint: `01a2119f5ee7031e`
 
 The same classes are exposed to Rust (`EngineContext` calls), to JavaScript/TypeScript (bindings generated from the registry, [crysirror.d.ts](crysirror.d.ts)) and to inspection tools.
 
@@ -6261,6 +6261,8 @@ Variants are tagged by `"kind"`.
 | `block_noise` | `scale: f32, rate: f32, color_a: [f32; 3], color_b: [f32; 3], white: f32` | Unlit screen-space block noise (a censor plane): the fragment's pixel position (y up) × 0.01 (+10 on x) × `scale`, shifted by `floor(time · rate) · 3` and floored to blocks, picks `mix(color_a, color_b, simplex(block) · 0.5 + 0.5)`, then `mix(·, 0.789, white)` (linear colours). |
 | `normal_shell` | `width: f32, distance_scale: f32, depth_limit: f32, dither: f32, cutoff: f32` | Back-face shell over a dedicated mesh. Base texture alpha is the extrusion/coverage mask. The ILLGAMES shell's depth-limited displacement is applied in object space after skinning. The base colour tints the shell. |
 | `directional_lightmap` | `scale: [f32; 2], offset: [f32; 2]` | Directional baked diffuse radiance. The occlusion and metallic-roughness slots carry linear RGB radiance and encoded direction/normalization respectively. UV0 is mapped into the atlas independently of base UV. |
+| `vertex_layer_blend` | — | Two-layer blend by the primitive's `_AUX` vertex stream: the base texture weighted by `aux.x`, the emissive-slot texture by `1 − aux.x`; the emissive slot then contributes no emission. Primitives without `_AUX` show the base layer. |
+| `baked_vertex_irradiance` | `intensity: f32` | Baked diffuse irradiance from the primitive's `_AUX` vertex stream (linear RGB, scaled by `intensity`) replaces the environment and GI-volume irradiance; direct lights still apply. Primitives without `_AUX` receive white irradiance × `intensity`. |
 | `custom` | `asset: String, parameters: [[f32; 4]; 4]` | — |
 
 ### RasterQueue

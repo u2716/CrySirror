@@ -1,5 +1,9 @@
 # API change log
 
+## `01a2119f5ee7031e` (2026-11-24) — vertex layer blend and baked vertex irradiance effects
+
+Regeneration adds the `vertex_layer_blend` and `baked_vertex_irradiance` `ShaderEffect` variants to the reference. Both read the primitive's `_AUX` vertex stream; materials without them are unchanged. Rust callers with exhaustive `ShaderEffect` matches need the new arms. The previous fingerprint was `c95d822ee88e0793`.
+
 ## `c95d822ee88e0793` (2026-11-23) — authored material raster queues
 
 Optional `Material.raster_queue` specifies the draw order, Forward depth-write setting and front-face culling. Geometry and late transparent queues can both use straight-alpha colour and raster shadow casting. Existing materials retain their alpha mode's scheduling when the field is omitted. The previous fingerprint was `7f97588e7266cc17`.

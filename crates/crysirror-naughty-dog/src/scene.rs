@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 //! A package's prototype meshes as one glTF document for the shared world
 //! renderer: one glTF mesh per prototype (a primitive per fragment with its
-//! group's base-colour texture), placed once per native instance. Native
-//! mesh units are centimetres; instance matrices are in metres.
+//! group's base-colour texture), placed once per native instance. Mesh
+//! units follow [`mesh::unit_of_grid`]; instance matrices are in metres.
 use crate::{
     mesh::{self, Mesh},
     package::Directory,
@@ -198,8 +198,6 @@ pub fn start_camera(p: &mesh::Loaded, payload: usize) -> Result<Option<StartCame
     Ok(Some(c))
 }
 
-pub const METRES_PER_UNIT: f32 = 0.01;
-
 /// Every render mesh of a package (collision collections excluded).
 /// The prototype meshes of an already relocated package.
 pub fn meshes_of(loaded: &mesh::Loaded, directory: &Directory) -> Result<Vec<Mesh>> {
@@ -225,17 +223,10 @@ pub fn package_meshes(source: &dyn AssetReader, directory: &Directory, limit: u6
 
 /// Art-group (actor) meshes carry no instance records: each is placed once
 /// in the spawner's frame. Give such meshes one identity instance without
-/// a culling sphere, so [`placement`] keeps the model origin, and their
-/// unit: millimetres × 2^(N − 12) for an N-bit position grid. Checked
-/// against the art groups' `vis_sphere` tags (player models 1.01, crate
-/// 1.10, oil drum 0.94, chained lift 0.94; `ice-t-gear-8m` with an 18-bit
-/// and `ice-t-gear-8m-bevel` with a 12-bit grid both give 6.3 m) and the
-/// crate's collision box (1 m). Level meshes keep centimetres although
-/// they also use 18-bit grids.
+/// a culling sphere, so [`placement`] keeps the model origin.
 pub fn place_art_group(meshes: &mut [Mesh]) {
     const IDENTITY: [f32; 16] = [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.];
     for m in meshes {
-        m.unit = 2f32.powi(m.grid_bits as i32 - 12) * 0.001;
         if m.instances.is_empty() {
             m.instances.push(IDENTITY);
             m.spheres.clear();
@@ -414,6 +405,25 @@ pub fn document_lit(name: &str, meshes: &[Mesh], source: &dyn AssetReader, direc
         }
     }
     Ok(doc)
+}
+
+/// The sky image of a `sky-…` level package: sampler 0 of its mesh's
+/// first material, when it is a 2:1 image. The sky's main-pass fragment
+/// program (`sky-train-wreck` shader 0) samples that unit by view direction
+/// with `u = atan2(z, x) / 2π` (an atan polynomial and quadrant fix-ups) and
+/// `v = acos(y) · 2/π`, a hemispherical latitude–longitude map with the
+/// horizon on the bottom row; it then blends two scrolling cloud layers
+/// (units 1–4, not reproduced). `None` when the package holds no such
+/// image (the mesh is then drawn as geometry).
+pub fn sky_texture(meshes: &[Mesh], source: &dyn AssetReader, directory: &Directory) -> Result<Option<crysirror_image::ImageSurface>> {
+    let Some(id) = meshes.first().and_then(|m| m.groups.first()).and_then(|g| g.material.samplers.first().copied()) else { return Ok(None) };
+    for item in directory.items.iter().filter(|i| i.kind == "VRAM_DESC") {
+        let desc = VramDesc::read(source, item.payload_offset)?;
+        if desc.id == id {
+            return Ok((desc.width == 2 * desc.height).then(|| desc.decode(source, directory.texture_base)).transpose()?);
+        }
+    }
+    Ok(None)
 }
 
 fn halve(s: &crysirror_image::ImageSurface) -> crysirror_image::ImageSurface {

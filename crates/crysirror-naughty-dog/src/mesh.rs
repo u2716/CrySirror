@@ -11,7 +11,7 @@
 //!   the mesh header, a pointer to its instance-pointer list and the
 //!   instance count (twice). An instance carries a culling sphere at +0x30
 //!   and a row-major 4×4 world matrix in metres at +0x40 (translation in
-//!   the last row); the mesh's native units are centimetres;
+//!   the last row); positions are in [`unit_of_grid`] units;
 //! - mesh header: `u16` group and fragment counts at +4/+6, fragment
 //!   pointer array at +0x14;
 //! - fragment: vertex count block at +0x24, stream descriptor at +0x28,
@@ -170,11 +170,27 @@ pub struct Mesh {
     /// Bits of the mesh's position grid (the deepest kind-4 depth or the
     /// inferred kind-6 grid).
     pub grid_bits: u32,
-    /// Metres per decoded position unit: centimetres for level meshes;
-    /// art-group meshes set theirs in [`crate::scene::place_art_group`].
+    /// Metres per decoded position unit, [`unit_of_grid`] of `grid_bits`.
     pub unit: f32,
     /// Each instance's culling sphere (centre in metres, radius).
     pub spheres: Vec<[f32; 4]>,
+}
+
+/// Metres per decoded position unit of a mesh with an N-bit position grid:
+/// millimetres × 2^(N − 12), for level and art-group meshes alike.
+/// Art groups: checked against their `vis_sphere` tags (player models
+/// 1.01, crate 1.10, oil drum 0.94, chained lift 0.94; `ice-t-gear-8m`
+/// with an 18-bit and `ice-t-gear-8m-bevel` with a 12-bit grid both give
+/// 6.3 m) and the crate's collision box (1 m). Level meshes (18-bit grids,
+/// 6.4 cm): the background box car roof of `train-wreck-b` has the raw size
+/// of the `wrk-box-car-02` art group (half-diagonal 199 and 190 units) and
+/// its placed vertices lie closer to the package's Havok collision
+/// vertices at 6.4 cm (median 0.86 m) than at 1 cm (1.40 m); the
+/// `train-wreck-b` cliff chunks, placed at their culling-sphere centres,
+/// then join into one cliff face. The native rule's source in the SPU
+/// mesh jobs is not located (SATD-nd-retail-runtime).
+pub fn unit_of_grid(grid_bits: u32) -> f32 {
+    0.001 * 2f32.powi(grid_bits as i32 - 12)
 }
 
 /// One quantized attribute before its mesh grid is known.
@@ -388,7 +404,7 @@ pub fn prototype_meshes(p: &Loaded, payload: usize) -> Result<Vec<Mesh>> {
             ensure!(first + n <= fragments.len(), "ND mesh group range");
             groups.push(Group { material: material(p, p.ptr(p.ptr(row)?)?)?, fragments: first..first + n });
         }
-        meshes.push(Mesh { fragments, groups, instances, spheres, grid_bits: pos_grid, unit: crate::scene::METRES_PER_UNIT });
+        meshes.push(Mesh { fragments, groups, instances, spheres, grid_bits: pos_grid, unit: unit_of_grid(pos_grid) });
     }
     Ok(meshes)
 }

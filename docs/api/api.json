@@ -23117,6 +23117,18 @@
         },
         {
           "default": null,
+          "doc": "Two-layer blend by the primitive's `_AUX` vertex stream: the base texture weighted by `aux.x`, the emissive-slot texture by `1 − aux.x`; the emissive slot then contributes no emission. Primitives without `_AUX` show the base layer.",
+          "name": "vertex_layer_blend",
+          "rust_type": ""
+        },
+        {
+          "default": null,
+          "doc": "Baked diffuse irradiance from the primitive's `_AUX` vertex stream (linear RGB, scaled by `intensity`) replaces the environment and GI-volume irradiance; direct lights still apply. Primitives without `_AUX` receive white irradiance × `intensity`.",
+          "name": "baked_vertex_irradiance",
+          "rust_type": "intensity: f32"
+        },
+        {
+          "default": null,
           "doc": "",
           "name": "custom",
           "rust_type": "asset: String, parameters: [[f32; 4]; 4]"
@@ -30484,7 +30496,7 @@
       "used_by": "UiEvent.widget client/local identity"
     }
   ],
-  "fingerprint": "c95d822ee88e0793",
+  "fingerprint": "01a2119f5ee7031e",
   "generated_by": "crysirror-engine api_doc (tests/api_docs.rs)",
   "globals": [
     {
