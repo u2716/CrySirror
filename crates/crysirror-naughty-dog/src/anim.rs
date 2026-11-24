@@ -8,7 +8,7 @@
 //! 16-byte validity mask comes a command program whose opcodes are the
 //! EBOOT's animation command table (`sub_2D7058` names them): each command
 //! is `u8 argument count, u8 opcode, u16 arguments…`, and data offsets are
-//! relative to clip + 0x60. Commands write a joint-parameter buffer of 48
+//! relative to the program (block + 0x10). Commands write a joint-parameter buffer of 48
 //! bytes per animated joint (scale +0, quaternion +0x10, translation
 //! +0x20); outputs past the animated joints go to a scratch slot.
 //!
@@ -54,8 +54,6 @@ use anyhow::{Context, Result, ensure};
 use glam::{Quat, Vec3};
 
 pub const MAGIC: u32 = 0x4344_0107;
-/// Offsets in the clip program are relative to clip + 0x60.
-const DATA_BASE: usize = 0x60;
 const SLOT: usize = 32;
 
 /// One joint's local channels per frame; `None` where the clip leaves the
@@ -202,7 +200,9 @@ pub fn decode(p: &Loaded, payload: usize, name: &str, animated: usize) -> Result
     let fps = f32::from_bits(u32_at(0x1c)?);
     let program_block = u32_at(0x30)? as usize;
     let first_frame = u32_at(0x38)? as usize;
-    let base = DATA_BASE;
+    // Data offsets are relative to the program (the block + 0x10): 0x60
+    // in the player rig's clips, 0x50 in `anim-train-wreck-climb` props.
+    let base = program_block + 0x10;
     // Per frame, per joint-parameter offset: the value written.
     let mut constants: Vec<(usize, Value)> = Vec::new();
     let mut keys: Vec<Vec<Option<Value>>> = Vec::new();
@@ -225,7 +225,13 @@ pub fn decode(p: &Loaded, payload: usize, name: &str, animated: usize) -> Result
             21..=24 => {
                 let outs = list(args[2], count)?;
                 let values = base + args[2] + (2 * count).div_ceil(16) * 16;
+                // Lists are padded to a multiple of 8 with a repeated
+                // output whose values may lie past the clip: stop there.
                 for (i, o) in outs.into_iter().enumerate() {
+                    let width = [12, 6, 16, 6][usize::from(op - 21)];
+                    if values + width * (i + 1) > size {
+                        break;
+                    }
                     let v = match op {
                         21 => Value::Vec(Vec3::new(f32::from_bits(u32_at(values + 12 * i)?), f32::from_bits(u32_at(values + 12 * i + 4)?), f32::from_bits(u32_at(values + 12 * i + 8)?))),
                         22 => Value::Vec(Vec3::new(half(u16_at(values + 6 * i)?), half(u16_at(values + 6 * i + 2)?), half(u16_at(values + 6 * i + 4)?))),

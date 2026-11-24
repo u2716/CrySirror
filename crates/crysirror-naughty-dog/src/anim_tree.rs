@@ -27,7 +27,7 @@
 //! (SATD-nd-retail-runtime).
 use crate::dc::{Dc, sid};
 use crate::script::{MAX_ARGS, Natives, Outcome, Status, Thread};
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Result, bail, ensure};
 
 pub const TYPE_BLEND: u32 = 0xb249_ac72;
 pub const TYPE_SELECT: u32 = 0x1c3f_471c;

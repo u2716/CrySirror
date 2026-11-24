@@ -133,3 +133,10 @@ Helper groups (2026-11-25):
 - **Offline measure:** `examples/skin_stretch hero-heist.pak proto.pak proto.pak walk` counts the triangles stretched more than 4× in the frame-0 pose. Before the helper groups followed their limbs it reported 33 of 28,055, with the elbow, shoulder-twist and knee helpers at the top. Afterwards it reports 20, made up of crotch triangles between the thighs and small lip triangles.
 - **Capture:** the frame-1180 museum capture shows no spikes at the arms or hips.
 
+Script animation (2026-11-25):
+
+- **Stub run:** `examples/script_run GAME_DIR --all 300` with the stub `World` reporting `animate` lists 7,776 calls. The first is in `train-wreck-weather`, which animates `train-wreck-car-a-1`, `train-wreck-car-b-1`, `train-wreck-car-b-undercarriage-1` and `shift-01-ladder-1`.
+- **Prologue run:** booting through the intro into `train-wreck-climb` logs `animate` for `idle-00-car-a`/`-car-b`/`-undercarriage`/`-ladder` (10.07 s), `drake-platform-drop-door` (1.20 s) and `broken` (0 s). Before the data-base fix, three of these failed with "ND clip read" and two decoded to no channels.
+- **Offline decode:** `clip_pose train-wreck-car-b.pak anim-train-wreck-climb.pak idle-00-car-b` decodes 151 frames on 3 joints, and the `pistol-base` `idle` decodes on 9 joints.
+- **Capture:** the prologue capture shows the car, the undercarriage and the ladder posed on the cliff face.
+

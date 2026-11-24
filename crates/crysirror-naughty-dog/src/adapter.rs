@@ -206,7 +206,32 @@ struct Stage {
     camera: Option<u32>,
     /// Left stick from the movement keys.
     stick: [f32; 2],
+    /// Script animations by object (spawner name or `player`).
+    animations: HashMap<u32, ScriptAnimation>,
+    /// Where the player stands, for `player` locators.
+    player_locator: Option<([f32; 3], [f32; 4])>,
+    /// Props without an animation controller hold the last frame of their
+    /// finished script animation: asset, clip and time.
+    held: HashMap<u32, (String, String, f32)>,
 }
+
+/// A clip a script plays on an object (`animate`). The clip is found and
+/// decoded by the adapter after the script tick; until then it reports
+/// phase 0.
+struct ScriptAnimation {
+    clip: u32,
+    options: crate::ss::Animate,
+    start: f64,
+    /// Seconds, once the clip is loaded.
+    duration: Option<f32>,
+    /// Library asset and clip name, once loaded.
+    source: Option<(String, String)>,
+    /// The clip could not be found or decoded: the animation ends at once.
+    failed: bool,
+}
+
+/// Default blend time of script animations without a blend option.
+const SCRIPT_BLEND: f32 = 0.2;
 
 impl Stage {
     fn set_visible(&mut self, name: u32, visible: bool) -> bool {
@@ -245,6 +270,9 @@ impl World for Stage {
         self.set_visible(name, false)
     }
     fn locator(&self, name: u32) -> Option<([f32; 3], [f32; 4])> {
+        if name == sid("player") {
+            return self.player_locator;
+        }
         self.spawners.get(&name).map(|s| (s.position, s.rotation))
     }
     fn property(&self, spawner: u32, prop: u32) -> Option<Property> {
@@ -268,6 +296,27 @@ impl World for Stage {
     }
     fn sticks(&self, pad: u32) -> [f32; 4] {
         if pad == 0 { [self.stick[0], self.stick[1], 0., 0.] } else { [0.; 4] }
+    }
+    fn animate(&mut self, object: u32, clip: u32, options: &crate::ss::Animate) -> bool {
+        if object != sid("player") && !self.entities.contains_key(&object) {
+            return false;
+        }
+        self.held.remove(&object);
+        self.animations.insert(object, ScriptAnimation { clip, options: options.clone(), start: self.now, duration: None, source: None, failed: false });
+        true
+    }
+    fn animation_phase(&self, object: u32) -> Option<f32> {
+        let a = self.animations.get(&object)?;
+        if a.failed {
+            return None;
+        }
+        match a.duration {
+            None => Some(0.),
+            Some(d) => {
+                let t = (self.now - a.start) as f32;
+                (t < d).then(|| if d > 0. { t / d } else { 1. })
+            }
+        }
     }
 }
 
@@ -364,6 +413,26 @@ struct Session {
     anim_sets: crate::anim_sets::AnimSets,
     npcs: Vec<Npc>,
     npc_clips: HashMap<String, HashMap<u32, crate::player::ClipInfo>>,
+    /// Each NPC rig's packages (skeleton base, animation packages).
+    npc_packages: HashMap<String, Vec<String>>,
+    /// The rig each spawned entity is skinned to.
+    entity_rigs: HashMap<u32, RigRef>,
+    /// Skeletons of skinned art groups that carry their own.
+    own_rigs: HashMap<String, crate::skeleton::Skeleton>,
+    /// Animation packages read for script animations.
+    anim_packages: HashMap<String, Arc<crate::mesh::Loaded>>,
+    /// Uploaded single-clip libraries by (rig, clip): asset, name, seconds.
+    libraries: HashMap<(String, u32), Option<(String, String, f32)>>,
+}
+
+/// The skeleton an entity is skinned to.
+#[derive(Clone, Debug, PartialEq)]
+enum RigRef {
+    Player,
+    /// An NPC rig key (`flynn-base:[…]`).
+    Npc(String),
+    /// An art group's own `JOINT_HIERARCHY`.
+    Own(String),
 }
 
 /// An NPC entity presented by the `anim-npc` state machine.
@@ -572,6 +641,11 @@ impl NaughtyDogVm {
             anim_sets: Default::default(),
             npcs: Vec::new(),
             npc_clips: HashMap::new(),
+            npc_packages: HashMap::new(),
+            entity_rigs: HashMap::new(),
+            own_rigs: HashMap::new(),
+            anim_packages: HashMap::new(),
+            libraries: HashMap::new(),
         };
         if self.config.viewer() {
             let level = self.config.level.as_deref().unwrap_or("menu-temple");
@@ -693,6 +767,9 @@ impl NaughtyDogVm {
         session.stage.spawners.clear();
         session.stage.entities.clear();
         session.npcs.clear();
+        session.stage.animations.clear();
+        session.stage.held.clear();
+        session.entity_rigs.clear();
         session.stage.visible.clear();
         session.stage.ops.clear();
         session.stage.fade = 0.;
@@ -1121,6 +1198,173 @@ impl NaughtyDogVm {
         Ok(Some((skeleton, clips)))
     }
 
+    /// Load the clips scripts started this frame and blend every running
+    /// script animation over its entities' controller layers (weight ramps
+    /// over the blend-in and blend-out times); an animation with a
+    /// locator places its entities there when it starts. Animations whose
+    /// clip cannot be found end at once (logged).
+    fn script_animations(&self, host: &mut dyn HostServices, session: &mut Session, world: &mut Vec<serde_json::Value>) {
+        let objects: Vec<u32> = session.stage.animations.iter().filter(|(_, a)| a.source.is_none() && !a.failed).map(|(o, _)| *o).collect();
+        for object in objects {
+            let clip = session.stage.animations[&object].clip;
+            let entities = Self::animation_entities(session, object);
+            let rig = entities.iter().find_map(|e| session.entity_rigs.get(e).cloned());
+            let loaded = match rig {
+                Some(rig) => self.animation_library(host, session, &rig, clip),
+                None => Err(anyhow::anyhow!("object has no skinned entity")),
+            };
+            let a = session.stage.animations.get_mut(&object).expect("animation");
+            match loaded {
+                Ok((asset, name, seconds)) => {
+                    a.duration = Some(seconds);
+                    a.source = Some((asset, name.clone()));
+                    a.start = session.stage.now;
+                    let locator = a.options.locator;
+                    session.stage.log(format!("animate {object:08x} {name} {seconds:.2}s"));
+                    if let Some((pos, rot)) = locator {
+                        let yaw = yaw_of(rot);
+                        if let Some(p) = session.player.as_mut().filter(|p| entities.contains(&p.entity.unwrap_or(0))) {
+                            p.position = pos;
+                            p.yaw = yaw;
+                            if let Some(c) = p.anim.as_mut() {
+                                c.yaw = yaw;
+                            }
+                        }
+                        for e in &entities {
+                            world.push(json!({"op": "set_transform", "id": e, "transform": {"translation": pos, "rotation_degrees": [0.0, yaw.to_degrees(), 0.0], "scale": [1.0, 1.0, 1.0]}}));
+                        }
+                    }
+                }
+                Err(e) => {
+                    a.failed = true;
+                    session.stage.log(format!("animate {object:08x} clip {clip:08x}: {e:#}"));
+                }
+            }
+        }
+        let now = session.stage.now;
+        let mut finished = Vec::new();
+        let mut held = Vec::new();
+        for (object, a) in &session.stage.animations {
+            let (Some((asset, name)), Some(d)) = (&a.source, a.duration) else {
+                if a.failed {
+                    finished.push(*object);
+                }
+                continue;
+            };
+            let t = (now - a.start) as f32;
+            if t >= d {
+                finished.push(*object);
+                let entities = Self::animation_entities(session, *object);
+                let controlled = entities.iter().any(|e| session.player.as_ref().is_some_and(|p| p.entity == Some(*e)) || session.npcs.iter().any(|n| n.entity == *e));
+                if !controlled {
+                    held.push((*object, (asset.clone(), name.clone(), d)));
+                }
+                continue;
+            }
+            let (bin, bout) = (a.options.blend_in.unwrap_or(SCRIPT_BLEND), a.options.blend_out.unwrap_or(SCRIPT_BLEND));
+            let w_in = if bin > 0. { t / bin } else { 1. };
+            let w_out = if bout > 0. { (d - t) / bout } else { 1. };
+            let w = w_in.min(w_out).clamp(0., 1.);
+            let layer = json!({"clip": name, "source": asset, "time": t, "speed": 0.0, "weight": w.max(1e-3), "target_weight": w.max(1e-3), "looping": false});
+            for e in Self::animation_entities(session, *object) {
+                let found = world.iter_mut().rev().find(|op| op["op"] == "set_animation" && op["id"] == e);
+                match found {
+                    Some(op) => {
+                        if let Some(layers) = op["animation"]["layers"].as_array_mut() {
+                            for l in layers.iter_mut() {
+                                for k in ["weight", "target_weight"] {
+                                    if let Some(v) = l[k].as_f64() {
+                                        l[k] = json!(v * f64::from(1. - w));
+                                    }
+                                }
+                            }
+                            layers.push(layer.clone());
+                        }
+                    }
+                    None => world.push(json!({"op": "set_animation", "id": e, "animation": {"layers": [layer.clone()]}})),
+                }
+            }
+        }
+        for o in finished {
+            session.stage.animations.remove(&o);
+        }
+        // A held pose is set once; the entity keeps it until replaced.
+        for (object, (asset, name, t)) in held {
+            for e in Self::animation_entities(session, object) {
+                world.push(json!({"op": "set_animation", "id": e, "animation": {"layers": [{"clip": name, "source": asset, "time": t, "speed": 0.0, "weight": 1.0, "target_weight": 1.0, "looping": false}]}}));
+            }
+            session.stage.held.insert(object, (asset, name, t));
+        }
+    }
+
+    /// The entities an animated object stands for: the player's, or its
+    /// spawner's.
+    fn animation_entities(session: &Session, object: u32) -> Vec<u32> {
+        if object == sid("player") {
+            return session.player.as_ref().and_then(|p| p.entity).into_iter().collect();
+        }
+        session.stage.entities.get(&object).cloned().unwrap_or_default()
+    }
+
+    /// Upload (once per rig and clip) a library with `clip` decoded for
+    /// `rig`'s skeleton, searched in the rig's packages and then the current
+    /// task's level animation packages. Returns the asset, clip name and
+    /// length.
+    fn animation_library(&self, host: &mut dyn HostServices, session: &mut Session, rig: &RigRef, clip: u32) -> Result<(String, String, f32)> {
+        let key = (format!("{rig:?}"), clip);
+        if let Some(found) = session.libraries.get(&key) {
+            return found.clone().context("clip not found earlier");
+        }
+        let mut packages: Vec<String> = match rig {
+            RigRef::Player => PLAYER_CLIP_PACKAGES.iter().map(|p| p.to_string()).collect(),
+            RigRef::Npc(k) => session.npc_packages.get(k).cloned().unwrap_or_default(),
+            RigRef::Own(art) => vec![format!("{art}.pak")],
+        };
+        if let Some(plan) = &session.plan {
+            for level in &plan.levels {
+                // `pak22.txt` `actor` lines: the level's animation packages.
+                for actor in session.all_levels.get(level).map(|l| l.actors.as_slice()).unwrap_or_default() {
+                    let p = format!("{actor}.pak");
+                    if !packages.contains(&p) {
+                        packages.push(p);
+                    }
+                }
+            }
+        }
+        let mut result = None;
+        for package in &packages {
+            if !session.actors.exists(package) {
+                continue;
+            }
+            if !session.anim_packages.contains_key(package) {
+                let reader = crysirror_core::service::MemoryAssetReader(read_all(session.actors.open(package)?.as_ref(), PACKAGE_LIMIT)?.into());
+                session.anim_packages.insert(package.clone(), Arc::new(crate::mesh::Loaded::read(&reader, PACKAGE_LIMIT)?));
+            }
+            let loaded = session.anim_packages[package].clone();
+            let Some((name, at)) = crate::anim::items(&loaded).find(|(n, _)| sid(n) == clip) else { continue };
+            let skeleton = match rig {
+                RigRef::Player => session.player_rig.as_ref().and_then(|r| r.as_ref()).map(|(s, _)| s),
+                RigRef::Npc(k) => session.npc_rigs.get(k).and_then(|r| r.as_ref()).map(|(s, _)| s),
+                RigRef::Own(art) => session.own_rigs.get(art),
+            }
+            .context("rig skeleton not loaded")?;
+            let decoded = crate::anim::decode(&loaded, at, name, skeleton.animated)?;
+            if decoded.hierarchy != skeleton.hash {
+                continue;
+            }
+            let channels = decoded.joints.iter().take(skeleton.names.len()).filter(|j| j.rotation.is_some() || j.translation.is_some() || j.scale.is_some()).count();
+            anyhow::ensure!(channels > 0, "clip {name} animates none of the {} joints (unsupported {:?})", skeleton.names.len(), decoded.unsupported);
+            let seconds = if decoded.frames > 1 { decoded.frames as f32 / decoded.fps.max(1.) } else { 0. };
+            let glb = scene::animation_library(&scene::Rig { skeleton, clips: std::slice::from_ref(&decoded) }).to_glb()?;
+            session.next_model += 1;
+            let asset = host.upload_model(self.client, 0x4e44_0000 + session.next_model, &glb)?;
+            result = Some((asset.relative().to_string(), decoded.name.clone(), seconds));
+            break;
+        }
+        session.libraries.insert(key, result.clone());
+        result.with_context(|| format!("clip not in {}", packages.join(", ")))
+    }
+
     /// The player skeleton from `actor27.psarc/proto.pak` and the clips
     /// named `wanted` (the controller states' blend-tree clips).
     fn player_rig(actors: &ArchiveMount, wanted: &HashSet<u32>) -> Result<Option<(crate::skeleton::Skeleton, Vec<crate::anim::Clip>)>> {
@@ -1402,6 +1646,7 @@ impl NaughtyDogVm {
             }
             world.push(Self::follow(p, &session.ground, seconds));
         }
+        session.stage.player_locator = session.player.as_ref().map(|p| (p.position, glam::Quat::from_rotation_y(p.yaw).to_array()));
         if let Some((graph, table)) = session.npc_anim.as_mut() {
             for npc in &mut session.npcs {
                 let Some(clips) = session.npc_clips.get(&npc.rig) else { continue };
@@ -1425,6 +1670,7 @@ impl NaughtyDogVm {
                 }
             }
         }
+        self.script_animations(host, session, &mut world);
         world.append(&mut session.stage.ops);
         let skip = input.buttons_pressed & (b::ENTER | b::ESCAPE) != 0;
         let mut change = session.game.as_mut().and_then(|g| g.rt.inner.task_change.take());
@@ -1580,13 +1826,25 @@ impl NaughtyDogVm {
                 if let Some((_, clips)) = &rig {
                     session.npc_clips.insert(key.clone(), clip_infos(clips));
                 }
+                session.npc_packages.insert(key.clone(), std::iter::once(format!("{base}.pak")).chain(anims.iter().map(|a| format!("{a}.pak"))).collect());
                 session.npc_rigs.insert(key.clone(), rig);
             }
         }
+        if let (Some(skeleton), true) = (&own, skinned) {
+            session.own_rigs.insert(art.to_owned(), skeleton.clone());
+        }
+        let rig_ref = match (&binding, &own) {
+            (Some((None, _)), _) => Some(RigRef::Player),
+            (Some((Some(_), _)), _) => npc_key.clone().map(RigRef::Npc),
+            (None, Some(_)) if skinned => Some(RigRef::Own(art.to_owned())),
+            _ => None,
+        };
         let rig = match (&binding, &session.player_rig) {
             (Some((None, _)), Some(Some((skeleton, clips)))) => Some(scene::Rig { skeleton, clips }),
             (Some((Some(_), _)), _) => npc_key.as_ref().and_then(|k| session.npc_rigs.get(k)).and_then(|r| r.as_ref()).map(|(skeleton, clips)| scene::Rig { skeleton, clips }),
-            _ => None,
+            // Skinned art groups with their own skeleton (doors, props)
+            // get its joints for script animations.
+            _ => own.as_ref().filter(|_| skinned).map(|skeleton| scene::Rig { skeleton, clips: &[] }),
         };
         let idle = rig.as_ref().and_then(|r| r.clips.iter().find(|c| c.name == "idle")).map(|c| c.name.clone());
         if skinned && own.is_none() {
@@ -1616,6 +1874,9 @@ impl NaughtyDogVm {
                 world.push(json!({"op": "set_animation", "id": id, "animation": {"layers": [{"clip": clip, "looping": true}]}}));
             }
             session.entities.push((id, asset.clone()));
+            if let Some(r) = &rig_ref {
+                session.entity_rigs.insert(id, r.clone());
+            }
             let name = sid(&s.name);
             session.stage.entities.entry(name).or_default().push(id);
             if visible {

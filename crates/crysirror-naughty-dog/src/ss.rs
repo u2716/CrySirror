@@ -60,6 +60,28 @@ pub trait World {
     fn player_controls(&mut self, enabled: bool);
     /// Left and right stick (x, y in −1…1) of a controller.
     fn sticks(&self, pad: u32) -> [f32; 4];
+    /// Play clip `clip` once on `object` (a spawner name or `player`).
+    /// False when the object is unknown.
+    fn animate(&mut self, _object: u32, _clip: u32, _options: &Animate) -> bool {
+        false
+    }
+    /// Phase (0–1) of the script animation `object` is playing; `None`
+    /// once it has ended (or none plays).
+    fn animation_phase(&self, _object: u32) -> Option<f32> {
+        None
+    }
+}
+
+/// Options of `(animate object clip key value …)`. The keys seen in the
+/// level scripts are 2 (blend-in seconds), 4 (blend-out seconds) and 7 (an
+/// action-pack reference locator, `get-ap-ref-locator` /
+/// `get-spawner-locator`); others are ignored.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Animate {
+    pub blend_in: Option<f32>,
+    pub blend_out: Option<f32>,
+    /// Position and rotation quaternion (x, y, z, w) to play at.
+    pub locator: Option<([f32; 3], [f32; 4])>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -70,6 +92,8 @@ enum Wait {
     Signal(u32),
     /// Until process variable `var` of `process` equals `value`.
     Var { process: usize, var: u32, value: u32 },
+    /// Until the script animation of an object ends.
+    Animation(u32),
 }
 
 struct Track {
@@ -298,6 +322,8 @@ impl Runtime {
             Wait::Frame(f) => self.inner.frame >= *f,
             Wait::Signal(s) => self.inner.signals.contains(s),
             Wait::Var { process, var, value } => self.inner.procs.get(*process).is_none_or(|p| p.vars.get(var).copied().unwrap_or(0) == *value),
+            // Resolved against the world in `run_track`.
+            Wait::Animation(_) => false,
         }
     }
 
@@ -305,7 +331,11 @@ impl Runtime {
         let mut guard = 0;
         loop {
             let t = &self.inner.procs[i].groups[gi].tracks[ti];
-            if !self.wait_done(&t.wait, now) {
+            let done = match t.wait {
+                Wait::Animation(object) => world.animation_phase(object).is_none(),
+                ref w => self.wait_done(w, now),
+            };
+            if !done {
                 return Ok(());
             }
             let mut thread = match self.inner.procs[i].groups[gi].tracks[ti].thread.take() {
@@ -638,6 +668,49 @@ impl Natives for Ctx<'_> {
                     self.inner.procs[p].dead = true;
                 }
                 b(killed)
+            }
+            // (animate object clip key value …) / (wait-animate …): the
+            // object is a process (its spawner) or a spawner name.
+            "animate" | "wait-animate" => {
+                if n < 2 {
+                    return ok(0);
+                }
+                let object = self.inner.process(a[0]).and_then(|p| self.inner.procs[p].spawner).unwrap_or(a[0]);
+                let mut options = Animate::default();
+                for k in (2..n.saturating_sub(1)).step_by(2) {
+                    match a[k] {
+                        2 => options.blend_in = Some(Self::arg_f(a, k + 1)),
+                        4 => options.blend_out = Some(Self::arg_f(a, k + 1)),
+                        7 if a[k + 1] != 0 => {
+                            let f = |i: u32| dc.mem.f32(a[k + 1] + 4 * i).unwrap_or(f32::NAN);
+                            let (pos, rot) = ([f(0), f(1), f(2)], [f(4), f(5), f(6), f(7)]);
+                            if pos.iter().chain(&rot).all(|v| v.is_finite()) {
+                                options.locator = Some((pos, rot));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                let started = self.world.animate(object, a[1], &options);
+                if name == "wait-animate" && started { Ok(self.suspend(Wait::Animation(object))) } else { b(started) }
+            }
+            // (get-animation-phase object): 0–1, 0 when nothing plays.
+            "get-animation-phase" => {
+                let object = self.inner.process(a[0]).and_then(|p| self.inner.procs[p].spawner).unwrap_or(a[0]);
+                ok(self.world.animation_phase(object).unwrap_or(0.).to_bits())
+            }
+            // (get-object-locator object) / (get-ap-ref-locator ? object):
+            // the object's locator; a process stands at its spawner and
+            // `player` where the player is.
+            "get-object-locator" | "get-ap-ref-locator" => {
+                let i = usize::from(name == "get-ap-ref-locator" && n > 1);
+                let object = self.inner.process(a[i]).and_then(|p| self.inner.procs[p].spawner).unwrap_or(a[i]);
+                let Some((pos, rot)) = self.world.locator(object) else { return ok(0) };
+                let at = dc.mem.alloc(32)?;
+                for (k, v) in pos.iter().chain(&[1.]).chain(&rot).enumerate() {
+                    dc.mem.write_u32(at + 4 * k as u32, v.to_bits())?;
+                }
+                ok(at)
             }
             "get-spawner-locator" | "get-spawner-position" => {
                 let Some((pos, rot)) = self.world.locator(a[0]) else {

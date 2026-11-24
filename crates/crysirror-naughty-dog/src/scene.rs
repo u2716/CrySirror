@@ -441,6 +441,14 @@ pub fn document_lit(name: &str, meshes: &[Mesh], source: &dyn AssetReader, direc
     Ok(doc)
 }
 
+/// An animation library: the rig's joint nodes and its clips, no meshes.
+/// Entities bind its clips by joint name (`AnimationLayer::source`).
+pub fn animation_library(rig: &Rig) -> Document {
+    let mut doc = Document::default();
+    add_rig(&mut doc, rig, &[]);
+    doc
+}
+
 /// Joint nodes in their rest pose, a skin for the skinned mesh nodes and
 /// one glTF animation per clip (keys at the clip's frame times; channels a
 /// clip leaves undefined keep the rest pose).
