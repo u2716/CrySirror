@@ -32,10 +32,15 @@
 //! - `KeyCacheUniformLerp`/`Slerp` output lists (one `u16` offset per
 //!   item, from the command's key-cache slot).
 //!
-//! Not decoded (SATD-nd-retail-runtime): `Dec3VecRange` (16-byte records),
-//! `PostDecompressQuatLog` and `PostDecompressQuatLogPca` (log-space
-//! rotations carried as range vectors), and the non-uniform key caches.
-//! Their joints keep the skeleton's rest pose.
+//! - `Dec3VecRange` items: per-component widths from a `[a, b, a + b, c]`
+//!   table after the 16-byte records, `minimum + q · step` (see
+//!   [`range_record`]).
+//!
+//! Not decoded (SATD-nd-retail-runtime): `PostDecompressQuatLog` (8 bytes
+//! of parameters per item, not a 48-bit quaternion) and
+//! `PostDecompressQuatLogPca` (16 bytes per item), which turn range
+//! vectors into rotations, and the non-uniform key caches. Those joints
+//! keep the skeleton's rest pose.
 use crate::mesh::Loaded;
 use anyhow::{Context, Result, ensure};
 use glam::{Quat, Vec3};
@@ -112,6 +117,28 @@ fn s3_key(v: u64, a: u32, b: u32, c: u32) -> Quat {
         q.swap(idx, 3);
     }
     Quat::from_array(q).normalize()
+}
+
+/// Bits `p..p + w` (MSB first) of a 128-bit record as a float with sign,
+/// eight exponent bits and `w − 9` mantissa bits.
+fn small_float(r: u128, p: u32, w: u32) -> f32 {
+    let v = ((r >> (128 - p - w)) & ((1u128 << w) - 1)) as u32;
+    let (sign, exp, man) = (v >> (w - 1), (v >> (w - 9)) & 0xff, v & ((1 << (w - 9)) - 1));
+    f32::from_bits(sign << 31 | exp << 23 | man << (23 - (w - 9)))
+}
+
+/// `Dec3VecRange` record: a 21-bit unsigned float (eight exponent bits,
+/// 13 mantissa bits) and two signed floats (21 and 22 bits) as the
+/// per-component steps, then three signed floats (22, 21, 21 bits) as the
+/// minimum. The field starts (bits 21, 42, 64, 86, 107) are where 98–99.5 %
+/// of 4,000 records have plausible exponents; the minimum lies within
+/// millimetres of the joints' rest translations; the per-component bit
+/// widths `[a, b, a + b, c]` follow the records (they sum to every item's
+/// size). Which field steps which component is inferred.
+fn range_record(r: u128) -> ([f32; 3], [f32; 3]) {
+    let header = ((r >> 107) & 0x1f_ffff) as u32;
+    let s0 = f32::from_bits((header >> 13) << 23 | (header & 0x1fff) << 10);
+    ([s0, small_float(r, 21, 21), small_float(r, 42, 22)], [small_float(r, 64, 22), small_float(r, 86, 21), small_float(r, 107, 21)])
 }
 
 /// Decode the clip of an `ANIM` payload for a skeleton with `animated`
@@ -219,7 +246,28 @@ pub fn decode(p: &Loaded, payload: usize, name: &str, animated: usize) -> Result
                     }
                 }
             }
-            27 => unsupported.push("Dec3VecRange"),
+            // Dec3VecRange(count, buffer, records, key slot).
+            27 => {
+                let first = args[3] / SLOT;
+                let records = base + args[2];
+                let widths = records + 16 * count;
+                for i in 0..count {
+                    let w = data.get(widths + 4 * i..widths + 4 * i + 4).context("ND range widths")?;
+                    let (wa, wb, wc) = (u32::from(w[0]), u32::from(w[1]), u32::from(w[3]));
+                    if wa + wb + wc != u32::from(sizes.get(first + i).copied().unwrap_or(0)) {
+                        continue;
+                    }
+                    let r = u128::from_be_bytes(data.get(records + 16 * i..records + 16 * i + 16).context("ND range record")?.try_into()?);
+                    let (step, min) = range_record(r);
+                    for (f, k) in keys.iter_mut().enumerate() {
+                        let v = item_bits[f].get(first + i).copied().unwrap_or(0);
+                        let q = [(v >> (wb + wc)) & ((1 << wa) - 1), (v >> wc) & ((1 << wb) - 1), v & ((1 << wc) - 1)];
+                        if let Some(slot) = k.get_mut(first + i) {
+                            *slot = Some(Value::Vec(Vec3::from_array(std::array::from_fn(|c| min[c] + q[c] as f32 * step[c]))));
+                        }
+                    }
+                }
+            }
             29 => unsupported.push("PostDecompressQuatLog"),
             30 => unsupported.push("PostDecompressQuatLogPca"),
             // KeyCacheUniformLerp / Slerp(count, buffer, outputs, key slot).
