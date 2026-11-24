@@ -2167,6 +2167,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "chrono",
  "crysirror-asset",
  "crysirror-audio",
  "crysirror-core",
@@ -2184,6 +2185,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
+ "unicode-segmentation",
 ]
 
 [[package]]
@@ -2708,6 +2710,7 @@ dependencies = [
  "crysirror-image",
  "crysirror-resource",
  "crysirror-runtime",
+ "crysirror-scene",
  "glam 0.27.0",
  "serde",
  "serde_json",

@@ -303,6 +303,8 @@ struct Session {
     ground: Ground,
     player: Option<Player>,
     started: bool,
+    /// Baked light probes of the loaded levels.
+    probes: crate::probes::ProbeField,
     script_error: Option<String>,
     /// End time (stage seconds) of the playing task movie, and whether a
     /// world video and its layer present it.
@@ -431,6 +433,7 @@ impl NaughtyDogVm {
             ground: Ground::default(),
             player: None,
             started: false,
+            probes: Default::default(),
             script_error: None,
             movie: None,
             movie_video: false,
@@ -493,6 +496,7 @@ impl NaughtyDogVm {
         session.ground = Ground::default();
         session.player = None;
         session.started = false;
+        session.probes = Default::default();
         session.script_error = None;
         session.movie = None;
         session.movie_video = false;
@@ -553,6 +557,11 @@ impl NaughtyDogVm {
             let directory = Directory::read(package.as_ref())?;
             let loaded = crate::mesh::Loaded::read(package.as_ref(), PACKAGE_LIMIT)?;
             let meshes = scene::meshes_of(&loaded, &directory)?;
+            if session.game.is_some() {
+                if let Some(item) = directory.items.iter().find(|i| i.kind == "LIGHT_TABLE_1") {
+                    session.probes.add(crate::probes::read(&loaded, item.payload_offset as usize)?);
+                }
+            }
             if !session.lit {
                 if let Some(item) = directory.items.iter().find(|i| i.kind == "LIGHT_TABLE_1") {
                     if let Some(light) = scene::level_light(&loaded, item.payload_offset as usize)? {
@@ -633,7 +642,8 @@ impl NaughtyDogVm {
     #[allow(clippy::too_many_arguments)]
     fn upload_meshes(&self, host: &mut dyn HostServices, session: &mut Session, name: &str, path: &str, mut meshes: Vec<crate::mesh::Mesh>, package: &dyn AssetReader, directory: &Directory, world: &mut Vec<serde_json::Value>) -> Result<()> {
         // `to_glb` refuses a model over the import limit; split on either.
-        let glb = scene::document(name, &meshes, package, directory, MAX_TEXTURE)?.to_glb().ok().filter(|g| g.len() <= MODEL_LIMIT);
+        let probes = (!session.probes.is_empty()).then_some(&session.probes);
+        let glb = scene::document_lit(name, &meshes, package, directory, MAX_TEXTURE, probes)?.to_glb().ok().filter(|g| g.len() <= MODEL_LIMIT);
         let Some(glb) = glb else {
             ensure!(meshes.len() > 1, "{name}: one mesh exceeds the model limit");
             let second = meshes.split_off(meshes.len() / 2);

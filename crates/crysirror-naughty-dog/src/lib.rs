@@ -15,6 +15,7 @@ pub mod task;
 pub mod geometry;
 pub mod mesh;
 pub mod package;
+pub mod probes;
 pub mod region;
 pub mod scene;
 pub mod texture;

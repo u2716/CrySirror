@@ -288,6 +288,28 @@ fn trs(m: &[f32; 16]) -> ([f32; 3], [f32; 4], [f32; 3]) {
 /// Build the document. Textures decode from the package's VRAM data;
 /// `max_texture` halves oversized base-colour images by box filtering.
 pub fn document(name: &str, meshes: &[Mesh], source: &dyn AssetReader, directory: &Directory, max_texture: u32) -> Result<Document> {
+    document_lit(name, meshes, source, directory, max_texture, None)
+}
+
+/// Texture role from the source file name stored in `VRAM_DESC`
+/// (`…/name-color.tga/….ndb`): 2 colour, 0 not a colour map (normal, mask,
+/// blend, specular, reflection, translucency, lightmap, missing texture),
+/// 1 unknown.
+fn texture_role(name: &str) -> u8 {
+    let file = name.rsplit('/').find(|p| p.contains('.')).unwrap_or(name).to_ascii_lowercase();
+    let stem = file.split('.').next().unwrap_or("");
+    if name.contains("missingtexture") || name.contains("indirect") || ["normal", "mask", "blend", "spec", "reflection", "trans", "lightmap", "gloss", "bump"].iter().any(|r| stem.contains(r)) {
+        0
+    } else if ["color", "diffuse", "albedo"].iter().any(|r| stem.contains(r)) {
+        2
+    } else {
+        1
+    }
+}
+
+/// [`document`] with the level's baked probes: meshes placed once get
+/// per-vertex irradiance in `_AUX` and the `baked_vertex_irradiance` effect.
+pub fn document_lit(name: &str, meshes: &[Mesh], source: &dyn AssetReader, directory: &Directory, max_texture: u32, probes: Option<&crate::probes::ProbeField>) -> Result<Document> {
     let mut doc = Document { generator: "CrySirror Naughty Dog background importer".into(), ..Default::default() };
     let mut textures = HashMap::new();
     for item in directory.items.iter().filter(|i| i.kind == "VRAM_DESC") {
@@ -316,7 +338,11 @@ pub fn document(name: &str, meshes: &[Mesh], source: &dyn AssetReader, directory
                 uniform.borrow_mut().insert(id, flat);
                 flat
             };
-            let image = match group.material.base_color_with(tiny).and_then(|id| textures.get(&id)) {
+            // A sampler named as a colour map wins; otherwise the first
+            // sampler that is neither a non-colour map nor a placeholder.
+            let role = |id: u32| textures.get(&id).map_or(0, |d: &VramDesc| texture_role(&d.name));
+            let chosen = group.material.samplers.iter().copied().find(|id| role(*id) == 2 && !tiny(*id)).or_else(|| group.material.base_color_with(|id| role(id) == 0 || tiny(id)));
+            let image = match chosen.and_then(|id| textures.get(&id)) {
                 None => None,
                 Some(desc) => match images.get(&desc.id) {
                     Some(&i) => Some(i),
@@ -331,18 +357,31 @@ pub fn document(name: &str, meshes: &[Mesh], source: &dyn AssetReader, directory
                     }
                 },
             };
-            doc.materials.push(Material { name: group.material.name.clone(), base_color_texture: image, ..Default::default() });
+            // Baked lighting applies to meshes placed once (per-vertex data
+            // cannot differ between instances of one glTF mesh).
+            let bake = probes.filter(|p| !p.is_empty() && mesh.instances.len() == 1);
+            let mut material = Material { name: group.material.name.clone(), base_color_texture: image, ..Default::default() };
+            if bake.is_some() {
+                material.engine = Some(crate::probes::baked_material(image));
+            }
+            doc.materials.push(material);
             let material = doc.materials.len() - 1;
             for f in &mesh.fragments[group.fragments.clone()] {
                 if f.positions.is_empty() || f.triangles.is_empty() {
                     continue;
                 }
+                let normals = if f.normals.len() == f.positions.len() { f.normals.clone() } else { Vec::new() };
+                let aux = match bake {
+                    Some(field) => crate::probes::bake(field, &placement(mesh, 0), &f.positions, &normals, &f.triangles),
+                    None => Vec::new(),
+                };
                 primitives.push(Primitive {
                     positions: f.positions.clone(),
-                    normals: if f.normals.len() == f.positions.len() { f.normals.clone() } else { Vec::new() },
+                    normals,
                     uvs: if f.uvs.len() == f.positions.len() { f.uvs.clone() } else { Vec::new() },
                     indices: f.triangles.iter().flatten().map(|&i| u32::from(i)).collect(),
                     material: Some(material),
+                    aux,
                     ..Default::default()
                 });
             }
