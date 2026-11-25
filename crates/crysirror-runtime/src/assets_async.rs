@@ -704,6 +704,20 @@ impl Assets {
             ),
         }
     }
+    /// Start the ordinary, evictable image decode without waiting or pinning
+    /// its result. The first visible draw uses the same client-scoped entry.
+    /// A saturated worker queue leaves the normal first-use path available.
+    pub fn prefetch_image(&mut self, client: ClientId, path: &str) -> Result<bool> {
+        if self.surface(client, path).is_some() {
+            return Ok(true);
+        }
+        match self.request_inner(client, path, AssetKind::Image, false) {
+            Ok(_) => Ok(true),
+            Err(error) if error.is::<crysirror_tasks::CapacityExceeded>() => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
     pub fn image_for(
         &mut self,
         client: ClientId,

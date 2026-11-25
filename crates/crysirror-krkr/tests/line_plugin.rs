@@ -93,7 +93,25 @@ fn var_media_references_live_octets_and_decodes_images_with_shared_engine_servic
         Scripts.execStorage('var://./files/script');
         if(global.mediaScript!=7)throw new Exception('media script');
         var window=new Window();var root=new Layer(window,null);var picture=new Layer(window,root);
-        picture.loadImages('var://./files/image');
+        Plugins.link('scriptsex.dll');
+        var count=0;
+        var stop=Scripts.foreach([0,1,2,3,4,5,6,7,8,9,10,11,12],function(i,v,extra) {
+            if(i!=count || v!=i || extra!=37) throw new Exception('foreach continuation');
+            picture.loadImages('var://./files/image');
+            ++count;
+            if(count==12) return 51;
+        },37);
+        if(count!=12 || stop!=51) throw new Exception('lost foreach callback or result');
+        Plugins.link('csvparser.dll');
+        var csvTarget=%[pic:picture,rows:0,doLine:function(fields,n) {
+            if(n!=this.rows+1) throw new Exception('CSV callback advanced before the previous row finished');
+            this.pic.loadImages('var://./files/image');
+            if(int(fields[0])!=n) throw new Exception('CSV row changed during wait');
+            ++this.rows;
+        }];
+        var csv=new CSVParser(csvTarget);
+        csv.parse("1\r\n2\r\n3");
+        if(csvTarget.rows!=3) throw new Exception('lost CSV row callback');
         if(picture.imageWidth!=2||picture.imageHeight!=1)throw new Exception('shared image decode');
         picture.visible=true;window.visible=true;
         Debug.message('var-media-complete');
@@ -116,6 +134,8 @@ fn var_media_references_live_octets_and_decodes_images_with_shared_engine_servic
         );
         std::thread::yield_now();
     }
+    let publications = &runtime.inspect()["published_images"];
+    assert_eq!(publications["resources"], 1, "replaced native images still held: {publications}");
     assert!(
         serde_json::to_string(&runtime.inspect())
             .unwrap()
@@ -961,8 +981,9 @@ fn native_addfont_registers_engine_resource_before_continuation_and_uses_shared_
         if log.contains("dynamic-native-font-complete:") {
             let lib=runtime.host.font_library(ClientId(1)).unwrap();
             let info=lib.resolve("runtime.ttf").unwrap().unwrap();
-            let metric=runtime.host.text_measurement(ClientId(1)).unwrap().measure_simple(&info.alias,20.,"ABC").unwrap();
-            assert!(log.contains(&format!("dynamic-native-font-complete:{}",metric.advance.ceil() as i64)),"{log}");
+            let scale=lib.line_height_for_em(&info.alias, 20.).unwrap();
+            let metric=runtime.host.text_measurement(ClientId(1)).unwrap().measure_simple(&info.alias,scale,"ABC").unwrap();
+            assert!(log.contains(&format!("dynamic-native-font-complete:{}",metric.advance.round() as i64)),"{log}");
             assert_eq!(runtime.assets.text.for_client(ClientId(1)).font_digest(&info.alias).unwrap(),info.digest);
             return;
         }
@@ -1473,6 +1494,47 @@ fn find_file(root: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
         }
     }
     None
+}
+
+#[test]
+fn bookmark_thumbnail_round_trip_preserves_picture_and_slot_data() {
+    let (dir, mut runtime) = fixture(r#"
+        var w = new Window(), root = new Layer(w, null);
+        var layer = new Layer(w, root);
+        layer.setImageSize(16, 8);
+        layer.fillRect(0, 0, 16, 8, 0xffff0000);
+        layer.fillRect(8, 0, 8, 8, 0xff00ff00);
+        if (Scripts.makeDataPackThumb(layer, "kdt", 90, 3) !== void) throw "kdt";
+        var body = %["slot" => 17];
+        for (var i = 0; i < 2; i++) {
+            var ext = i == 0 ? "jpg" : "png";
+            var name = "savedata/bookmark." + ext;
+            var thumb = Scripts.makeDataPackThumb(layer, ext, 92, 3);
+            Scripts.saveDataPack(name, body, void, thumb);
+            if (Scripts.loadDataPack(name).slot != 17) throw "slot data";
+            var preview = new Layer(w, root);
+            preview.loadImages(name);
+            if (preview.imageWidth != 16 || preview.imageHeight != 8) throw "preview size";
+        }
+        Debug.message("bookmark-preview-complete");
+    "#);
+    runtime.set_canvas_image_presenter(true);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        runtime.tick(1, InputFrame::default()).unwrap();
+        let native = &runtime.inspect()["sessions"][0]["native"];
+        if native["log_tail"].to_string().contains("bookmark-preview-complete") { break; }
+        assert!(std::time::Instant::now() < deadline, "{native}");
+        std::thread::yield_now();
+    }
+    for ext in ["png", "jpg"] {
+        let path = find_file(&dir.path().join("state"), &format!("bookmark.{ext}")).unwrap();
+        let image = image::load_from_memory(&std::fs::read(path).unwrap()).unwrap().to_rgb8();
+        assert_eq!(image.dimensions(), (16, 8));
+        let red = image.get_pixel(2, 4);
+        let green = image.get_pixel(13, 4);
+        assert!(red[0] > 220 && red[1] < 30 && green[0] < 30 && green[1] > 220);
+    }
 }
 
 #[test]

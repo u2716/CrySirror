@@ -181,6 +181,8 @@ fn renderer_image_and_model_import_use_background_common_cache() {
     a.decoders
         .register("fake", Arc::new(Decoder(count.clone())))
         .unwrap();
+    assert!(a.prefetch_image(ClientId(1), "pixel.fake").unwrap());
+    assert!(a.prefetch_image(ClientId(1), "pixel.fake").unwrap());
     let image = a.image_for(ClientId(1), "pixel.fake").unwrap().unwrap();
     assert_eq!(image.rgba, [10, 20, 30, 255]);
     a.image_for(ClientId(1), "pixel.fake").unwrap();
@@ -488,6 +490,7 @@ fn image_admission_reclaims_only_the_needed_unowned_cache_entries() {
         before,
         "unfulfillable requests preserve cached work"
     );
+    assert!(assets.prefetch_image(client, "next.sized").unwrap());
     assets.image_for(client, "next.sized").unwrap().unwrap();
     assert_eq!(
         paths(&assets),
@@ -513,7 +516,7 @@ fn image_admission_reclaims_only_the_needed_unowned_cache_entries() {
         AssetState::Ready
     );
     drop(held);
-    // A transient admission failure from an automatic image request must
+    // A transient admission failure from a prefetch/renderer request must
     // recover when enough residency becomes reclaimable.
     assets.image_for(client, "blocked.sized").unwrap().unwrap();
     assert!(assets.tasks_inspect()["resident_bytes"].as_u64().unwrap() <= 16 << 20);

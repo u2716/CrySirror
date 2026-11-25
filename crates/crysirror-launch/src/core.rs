@@ -253,7 +253,10 @@ pub fn load_fonts(rt: &mut Runtime, override_font: Option<&Path>) -> Result<()> 
 /// snapshot trees stop nesting. A request whose images are still loading is
 /// retried next frame.
 pub fn materialize_canvases(renderer: &mut Renderer, rt: &mut Runtime) -> Result<()> {
+    let profiler = rt.profiler.clone();
+    let frame = profiler.frame();
     if rt.has_pending_target_images() {
+        let _span = profiler.span(frame, "canvas.target_readback");
         let canvas = rt.project.canvas;
         renderer.set_engine_frame(rt.host.engine.frame(canvas)?)?;
         renderer.flush_target_writes(&rt.host.scene,&mut rt.assets,canvas,rt.project.background)?;
@@ -261,13 +264,18 @@ pub fn materialize_canvases(renderer: &mut Renderer, rt: &mut Runtime) -> Result
     }
     rt.prepare_world_photos(|scene,size,assets| renderer.world_photo(scene,size,assets));
     rt.prepare_frame_captures(|rt| {
+        let _span = profiler.span(frame, "canvas.frame_capture");
         let canvas = rt.project.canvas;
         renderer.set_engine_frame(rt.host.engine.frame(canvas)?)?;
         let image = renderer.capture(&rt.host.scene, &mut rt.assets, canvas, rt.project.background)?;
         Ok(image.into_raw())
     })?;
-    rt.prepare_canvas_images(|request,assets| renderer.snapshot_readback(assets,request.client,request.size,&request.layers))?;
+    rt.prepare_canvas_images(|request,assets| {
+        let _span = profiler.span(frame, "canvas.region_readback");
+        renderer.snapshot_readback(assets,request.client,request.size,&request.layers)
+    })?;
     for request in rt.host.engine.canvases.materialize_requests() {
+        let _span = profiler.span(frame, "canvas.compaction");
         let Some(image) = renderer.materialize_snapshot(&mut rt.assets, request.client, request.size, &request.layers)?
         else {
             continue;
@@ -288,7 +296,7 @@ pub fn materialize_canvases(renderer: &mut Renderer, rt: &mut Runtime) -> Result
         engine.canvases.resolve_materialized(&request, &path, &mut engine.layers)?;
         log::debug!("canvas {} materialized as {path}", request.surface);
     }
-    renderer.advance_frame_histories(&mut rt.assets,rt.host.engine.layers.frame(rt.project.canvas)?,rt.project.canvas)?;
+    renderer.advance_layer_histories(&mut rt.assets, &rt.host.engine.layers, rt.project.canvas)?;
     Ok(())
 }
 

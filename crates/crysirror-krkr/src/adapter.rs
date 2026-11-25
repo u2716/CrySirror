@@ -3,7 +3,7 @@
 //! `krkr` VmAdapter: runs original TJS2 scripts through `crysirror-tjs2`
 //! and translates KiriKiri native objects onto engine Layer/Canvas services.
 use crate::{
-    host::{Batch, KrkrHost},
+    host::KrkrHost,
     natives::{self, Rt, has_member},
     storage::{LauncherOverlay, Storage},
 };
@@ -178,7 +178,7 @@ impl KrkrVm {
                 extra.extend(paints.iter().skip(pass.paint).map(|id| Variant::Object(ObjectHandle(*id))));
             }
         }
-        let started = std::time::Instant::now();
+        let started = web_time::Instant::now();
         let freed = rt.collect_garbage(&extra);
         let live = rt.live_object_count();
         self.gc_threshold = live + (live / 2).max(50_000);
@@ -421,17 +421,17 @@ impl KrkrVm {
         crate::native_pad::sync(rt).map_err(|e|anyhow::anyhow!("{e}"))?;
         rt.host_mut().sync().map_err(|e| anyhow::anyhow!("{e}"))?;
         let batches = std::mem::take(&mut rt.host_mut().batches);
+        let mut encoded = Vec::new();
         for batch in batches {
-            let payload = match batch {
-                Batch::Layers(ops) => json!({"layers": ops}),
-                Batch::Canvases(ops) => json!({"canvases": ops}),
-                Batch::Ui(ops) => json!({"ui":ops}),
-            };
-            h.submit_engine(self.client, 1, &serde_json::to_vec(&payload)?)
+            encoded.clear();
+            serde_json::to_writer(&mut encoded, &batch)?;
+            h.submit_engine(self.client, 1, &encoded)
                 .map_err(err)
-                .with_context(|| format!("engine batch {}", truncate(&payload.to_string())))?;
+                .with_context(|| format!("engine batch {}", truncate(&String::from_utf8_lossy(&encoded))))?;
         }
-        for path in std::mem::take(&mut rt.host_mut().retired_images) {
+        let mut retired = std::mem::take(&mut rt.host_mut().retired_images);
+        retired.extend(rt.host().motion.take_retired_textures());
+        for path in retired {
             h.release_image_resource(self.client,&path).map_err(err)
                 .context("retire native image publication after Canvas commit")?;
         }
@@ -658,6 +658,23 @@ impl KrkrVm {
     }
     fn drive_sound(&mut self, h: &mut dyn HostServices) -> Result<bool> {
         for _ in 0..128 {
+            let rt = self.rt.as_mut().unwrap();
+            if let Some(path) = rt.host().pending_image_metadata.as_ref() {
+                match rt.host().images.as_ref().context("image metadata unavailable")?.prepare_metadata(path) {
+                    Ok(false) => return Ok(false),
+                    Ok(true) => {}
+                    Err(error) => {
+                        // Let the retried native instruction raise an ordinary,
+                        // catchable TJS exception at the original call site.
+                        let failure = (path.clone(), error.to_string());
+                        rt.host_mut().image_metadata_failure = Some(failure);
+                    }
+                }
+                rt.host_mut().pending_image_metadata = None;
+            }
+            if self.rt.as_ref().unwrap().host().bitmap_work.as_ref().is_some_and(|s| s.parked) {
+                return Ok(false);
+            }
             self.flush(h)?;
             if self.modal_boundary()? {return Ok(false);}
             {
@@ -689,6 +706,9 @@ impl KrkrVm {
                 return Ok(false);
             }
             if !crate::message_dialog::poll(self.rt.as_mut().unwrap(), h, self.client)? {
+                return Ok(false);
+            }
+            if !crate::edit_dialog::poll(self.rt.as_mut().unwrap(), h, self.client)? {
                 return Ok(false);
             }
             if !crate::save_struct::poll(self.rt.as_mut().unwrap())? {
@@ -742,12 +762,27 @@ impl KrkrVm {
         self.rt.as_mut().unwrap().host_mut().now = now;
         self.rt.as_mut().unwrap().host_mut().display = h.display_info();
         let input=self.modal_input(h,input)?;
-        let input=crate::native_pad::filter_input(self.rt.as_ref().unwrap(),input);
+        let mut input=crate::native_pad::filter_input(self.rt.as_ref().unwrap(),input);
         let host = self.rt.as_mut().unwrap().host_mut();
-        host.pressed_since_query |= input.buttons_down & !host.held_buttons;
-        if !booting { host.pressed_since_query |= input.buttons_pressed; }
-        host.held_buttons = input.buttons_down;
-        self.inbox.push(self.client.0,now,input)?;
+        host.bitmap_work = Some(crate::host::BitmapWorkSlice::default());
+        // Startup scripts already observed the first input before boot returned.
+        host.prompt_release_mask &= input.buttons_down & !input.buttons_pressed;
+        if host.input_prompt.is_none() {
+            input.buttons_down &= !host.prompt_release_mask;
+            input.buttons_pressed &= !host.prompt_release_mask;
+            host.pressed_since_query |= input.buttons_down & !host.held_buttons;
+            if !booting { host.pressed_since_query |= input.buttons_pressed; }
+            host.held_buttons = input.buttons_down;
+            self.inbox.push(self.client.0,now,input)?;
+        } else {
+            host.prompt_release_mask |= input.buttons_down;
+            // The dialog can finish during this same tick. deliver_input
+            // also uses this sample directly when the game inbox is empty.
+            input.buttons_down = 0;
+            input.buttons_pressed = 0;
+            host.held_buttons = 0;
+            host.pressed_since_query = 0;
+        }
         if !self.drive_sound(h)? {
             return Ok(VmYield::BudgetExhausted);
         }
@@ -970,7 +1005,7 @@ impl VmAdapter for KrkrVm {
             // Only a batched bitmap redraw retains the previous picture.
             // Ordinary resource waits and the rest of a VM frame do not block
             // startup/animation presentation. Native modals must remain visible.
-            rt.host().dialog_pending.is_none() && rt.host().bitmap_redraw_pending
+            rt.host().dialog_pending.is_none() && rt.host().input_prompt.is_none() && rt.host().bitmap_redraw_pending
         })
     }
     fn engine_id(&self) -> &'static str {
@@ -1002,7 +1037,7 @@ impl VmAdapter for KrkrVm {
                 self.collect_garbage();
                 // Native resource retirement is committed before this frame's
                 // renderer snapshot or a freed slot can be reused next step.
-                if self.rt.as_ref().is_some_and(|rt|!rt.host().batches.is_empty()) {
+                if self.rt.as_ref().is_some_and(|rt|!rt.host().batches.is_empty() || !rt.host().retired_images.is_empty()) {
                     self.flush(h).map_err(|e|Error::Io(format!("native retirement: {e:#}")))?;
                 }
                 Ok(y)

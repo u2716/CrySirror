@@ -2520,6 +2520,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "crc32fast",
  "crysirror-codec-emote",
  "crysirror-core",
  "crysirror-formats-arc",
@@ -2539,6 +2540,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "web-time",
 ]
 
 [[package]]
@@ -3075,6 +3077,7 @@ dependencies = [
  "glam 0.27.0",
  "serde",
  "serde_json",
+ "unicode-segmentation",
 ]
 
 [[package]]

@@ -46,10 +46,10 @@ Native rectangle reference: [KiriKiri Z RectItf.cpp](https://github.com/krkrz/kr
 | Status | Entries |
 | --- | ---: |
 | Empty handler | 2 |
-| Handled | 901 |
+| Handled | 909 |
 | Parameterized | 1 |
 | Partial | 2 |
-| Unsupported | 110 |
+| Unsupported | 111 |
 
 These tables cover the checked-in catalogues and explicit dispatch branches. An engine-wide upstream denominator is not inferred from these rows.
 
@@ -150,7 +150,20 @@ Native API names use the Rust registration receiver when the native class is sel
 
 | ID / API | Purpose | Status | Gap / condition | Source |
 | --- | --- | --- | --- | --- |
-| `c.currentLineNumber` | currentLineNumber | Handled | — | [csv_plugin.rs:129](../../crates/crysirror-krkr/src/csv_plugin.rs#L129) |
+| `c.currentLineNumber` | currentLineNumber | Handled | — | [csv_plugin.rs:144](../../crates/crysirror-krkr/src/csv_plugin.rs#L144) |
+| `c.parse` | parse | Handled | — | [csv_plugin.rs:140](../../crates/crysirror-krkr/src/csv_plugin.rs#L140) |
+| `c.parseStorage` | parseStorage | Handled | — | [csv_plugin.rs:140](../../crates/crysirror-krkr/src/csv_plugin.rs#L140) |
+
+## Registered TJS native APIs / d2d_view / attach
+
+| ID / API | Purpose | Status | Gap / condition | Source |
+| --- | --- | --- | --- | --- |
+| `layer.viewState` | viewState | Handled | — | [d2d_view.rs:97](../../crates/crysirror-krkr/src/d2d_view.rs#L97) |
+| `state.opacity` | opacity | Handled | — | [d2d_view.rs:104](../../crates/crysirror-krkr/src/d2d_view.rs#L104) |
+| `state.order` | order | Handled | — | [d2d_view.rs:104](../../crates/crysirror-krkr/src/d2d_view.rs#L104) |
+| `state.setRect` | setRect | Handled | — | [d2d_view.rs:134](../../crates/crysirror-krkr/src/d2d_view.rs#L134) |
+| `state.visible` | visible | Handled | — | [d2d_view.rs:104](../../crates/crysirror-krkr/src/d2d_view.rs#L104) |
+| `state.zinterp` | zinterp | Handled | — | [d2d_view.rs:104](../../crates/crysirror-krkr/src/d2d_view.rs#L104) |
 
 ## Registered TJS native APIs / date_api / construct
 
@@ -221,17 +234,17 @@ Native API names use the Rust registration receiver when the native class is sel
 | ID / API | Purpose | Status | Gap / condition | Source |
 | --- | --- | --- | --- | --- |
 | `font.finalize` | finalize | Handled | — | [font_class.rs:21](../../crates/crysirror-krkr/src/font_class.rs#L21) |
-| `font.getEscHeightX` | getEscHeightX | Handled | — | [font_class.rs:137](../../crates/crysirror-krkr/src/font_class.rs#L137) |
-| `font.getEscHeightY` | getEscHeightY | Handled | — | [font_class.rs:137](../../crates/crysirror-krkr/src/font_class.rs#L137) |
-| `font.getEscWidthX` | getEscWidthX | Handled | — | [font_class.rs:137](../../crates/crysirror-krkr/src/font_class.rs#L137) |
-| `font.getEscWidthY` | getEscWidthY | Handled | — | [font_class.rs:137](../../crates/crysirror-krkr/src/font_class.rs#L137) |
+| `font.getEscHeightX` | getEscHeightX | Handled | — | [font_class.rs:142](../../crates/crysirror-krkr/src/font_class.rs#L142) |
+| `font.getEscHeightY` | getEscHeightY | Handled | — | [font_class.rs:142](../../crates/crysirror-krkr/src/font_class.rs#L142) |
+| `font.getEscWidthX` | getEscWidthX | Handled | — | [font_class.rs:142](../../crates/crysirror-krkr/src/font_class.rs#L142) |
+| `font.getEscWidthY` | getEscWidthY | Handled | — | [font_class.rs:142](../../crates/crysirror-krkr/src/font_class.rs#L142) |
 | `font.getGlyphDrawRect` | getGlyphDrawRect | Handled | — | [font_class.rs:22](../../crates/crysirror-krkr/src/font_class.rs#L22) |
-| `font.getList` | getList | Handled | — | [font_class.rs:50](../../crates/crysirror-krkr/src/font_class.rs#L50) |
-| `font.getTextHeight` | getTextHeight | Handled | — | [font_class.rs:122](../../crates/crysirror-krkr/src/font_class.rs#L122) |
-| `font.getTextWidth` | getTextWidth | Handled | — | [font_class.rs:116](../../crates/crysirror-krkr/src/font_class.rs#L116) |
-| `font.mapPrerenderedFont` | mapPrerenderedFont | Handled | — | [font_class.rs:97](../../crates/crysirror-krkr/src/font_class.rs#L97) |
-| `font.rasterizer` | rasterizer | Partial | Font.rasterizer={preference}: CrySirror portable outline compatibility profile; native GDI/FreeType raster pixels are not implemented | [font_class.rs:159](../../crates/crysirror-krkr/src/font_class.rs#L159) |
-| `font.unmapPrerenderedFont` | unmapPrerenderedFont | Handled | — | [font_class.rs:107](../../crates/crysirror-krkr/src/font_class.rs#L107) |
+| `font.getList` | getList | Handled | — | [font_class.rs:55](../../crates/crysirror-krkr/src/font_class.rs#L55) |
+| `font.getTextHeight` | getTextHeight | Handled | — | [font_class.rs:127](../../crates/crysirror-krkr/src/font_class.rs#L127) |
+| `font.getTextWidth` | getTextWidth | Handled | — | [font_class.rs:121](../../crates/crysirror-krkr/src/font_class.rs#L121) |
+| `font.mapPrerenderedFont` | mapPrerenderedFont | Handled | — | [font_class.rs:102](../../crates/crysirror-krkr/src/font_class.rs#L102) |
+| `font.rasterizer` | rasterizer | Partial | Font.rasterizer={preference}: CrySirror portable outline compatibility profile; native GDI/FreeType raster pixels are not implemented | [font_class.rs:164](../../crates/crysirror-krkr/src/font_class.rs#L164) |
+| `font.unmapPrerenderedFont` | unmapPrerenderedFont | Handled | — | [font_class.rs:112](../../crates/crysirror-krkr/src/font_class.rs#L112) |
 
 ## Registered TJS native APIs / get_sample / install
 
@@ -272,7 +285,7 @@ Native API names use the Rust registration receiver when the native class is sel
 
 | ID / API | Purpose | Status | Gap / condition | Source |
 | --- | --- | --- | --- | --- |
-| `class.copyRaster` | copyRaster | Handled | — | [image_api.rs:426](../../crates/crysirror-krkr/src/image_api.rs#L426) |
+| `class.copyRaster` | copyRaster | Handled | — | [image_api.rs:456](../../crates/crysirror-krkr/src/image_api.rs#L456) |
 
 ## Registered TJS native APIs / json_plugin / install
 
@@ -361,88 +374,88 @@ Native API names use the Rust registration receiver when the native class is sel
 
 | ID / API | Purpose | Status | Gap / condition | Source |
 | --- | --- | --- | --- | --- |
-| `c.captureCanvas` | captureCanvas | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.clear` | clear | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.draw` | draw | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.drawAffine` | drawAffine | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.fadeOutTimeline` | fadeOutTimeline | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.findMotion` | findMotion | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.findSource` | findSource | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.getCommandList` | getCommandList | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.getDiffTimelineLabelList` | getDiffTimelineLabelList | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.getLayerGetter` | getLayerGetter | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.getLayerGetterList` | getLayerGetterList | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.getLayerMotion` | getLayerMotion | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.getLayerNames` | getLayerNames | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.getLayerSetter` | getLayerSetter | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.getLoopTimeline` | getLoopTimeline | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.getMainTimelineLabelList` | getMainTimelineLabelList | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.getPlayingTimelineInfoList` | getPlayingTimelineInfoList | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.getSubImageLayers` | getSubImageLayers | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.getTimelineBlendRatio` | getTimelineBlendRatio | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.getTimelinePlaying` | getTimelinePlaying | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.getVariable` | getVariable | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.getVariableFrameList` | getVariableFrameList | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.getVariableRange` | getVariableRange | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.initPhysics` | initPhysics | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.isExistMotion` | isExistMotion | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.modifyRoot` | modifyRoot | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.play` | play | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.playTimeline` | playTimeline | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.progress` | progress | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.releaseSyncWait` | releaseSyncWait | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.serialize` | serialize | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.setCameraOffset` | setCameraOffset | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.setColor` | setColor | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.setCoord` | setCoord | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.setDrawAffineTranslateMatrix` | setDrawAffineTranslateMatrix | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.setRotate` | setRotate | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.setScale` | setScale | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.setSlant` | setSlant | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.setTimelineBlendRatio` | setTimelineBlendRatio | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.setVariable` | setVariable | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.setZoom` | setZoom | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.skip` | skip | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.skipToSync` | skipToSync | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.startWind` | startWind | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.stop` | stop | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.stopTimeline` | stopTimeline | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.stopWind` | stopWind | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.unloadUnusedTextures` | unloadUnusedTextures | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `c.unserialize` | unserialize | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:352](../../crates/crysirror-krkr/src/motion_plugin.rs#L352) |
-| `h.getSubImageLayers` | getSubImageLayers | Handled | — | [motion_plugin.rs:379](../../crates/crysirror-krkr/src/motion_plugin.rs#L379) |
+| `c.captureCanvas` | captureCanvas | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.clear` | clear | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.draw` | draw | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.drawAffine` | drawAffine | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.fadeOutTimeline` | fadeOutTimeline | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.findMotion` | findMotion | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.findSource` | findSource | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.getCommandList` | getCommandList | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.getDiffTimelineLabelList` | getDiffTimelineLabelList | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.getLayerGetter` | getLayerGetter | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.getLayerGetterList` | getLayerGetterList | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.getLayerMotion` | getLayerMotion | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.getLayerNames` | getLayerNames | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.getLayerSetter` | getLayerSetter | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.getLoopTimeline` | getLoopTimeline | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.getMainTimelineLabelList` | getMainTimelineLabelList | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.getPlayingTimelineInfoList` | getPlayingTimelineInfoList | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.getSubImageLayers` | getSubImageLayers | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.getTimelineBlendRatio` | getTimelineBlendRatio | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.getTimelinePlaying` | getTimelinePlaying | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.getVariable` | getVariable | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.getVariableFrameList` | getVariableFrameList | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.getVariableRange` | getVariableRange | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.initPhysics` | initPhysics | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.isExistMotion` | isExistMotion | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.modifyRoot` | modifyRoot | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.play` | play | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.playTimeline` | playTimeline | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.progress` | progress | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.releaseSyncWait` | releaseSyncWait | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.serialize` | serialize | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.setCameraOffset` | setCameraOffset | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.setColor` | setColor | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.setCoord` | setCoord | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.setDrawAffineTranslateMatrix` | setDrawAffineTranslateMatrix | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.setRotate` | setRotate | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.setScale` | setScale | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.setSlant` | setSlant | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.setTimelineBlendRatio` | setTimelineBlendRatio | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.setVariable` | setVariable | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.setZoom` | setZoom | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.skip` | skip | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.skipToSync` | skipToSync | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.startWind` | startWind | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.stop` | stop | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.stopTimeline` | stopTimeline | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.stopWind` | stopWind | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.unloadUnusedTextures` | unloadUnusedTextures | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `c.unserialize` | unserialize | Unsupported | Motion.Player.{m} / Motion playback mapped onto the shared puppet service | [motion_plugin.rs:381](../../crates/crysirror-krkr/src/motion_plugin.rs#L381) |
+| `h.getSubImageLayers` | getSubImageLayers | Handled | — | [motion_plugin.rs:408](../../crates/crysirror-krkr/src/motion_plugin.rs#L408) |
 
 ## Registered TJS native APIs / motion_plugin / install_player
 
 | ID / API | Purpose | Status | Gap / condition | Source |
 | --- | --- | --- | --- | --- |
-| `c.allplaying` | allplaying | Handled | — | [motion_plugin.rs:495](../../crates/crysirror-krkr/src/motion_plugin.rs#L495) |
-| `c.animating` | animating | Handled | — | [motion_plugin.rs:495](../../crates/crysirror-krkr/src/motion_plugin.rs#L495) |
-| `c.chara` | chara | Handled | — | [motion_plugin.rs:468](../../crates/crysirror-krkr/src/motion_plugin.rs#L468) |
-| `c.colorWeight` | colorWeight | Handled | — | [motion_plugin.rs:519](../../crates/crysirror-krkr/src/motion_plugin.rs#L519) |
-| `c.completionType` | completionType | Handled | — | [motion_plugin.rs:519](../../crates/crysirror-krkr/src/motion_plugin.rs#L519) |
-| `c.frameLastTime` | frameLastTime | Handled | — | [motion_plugin.rs:519](../../crates/crysirror-krkr/src/motion_plugin.rs#L519) |
-| `c.frameLoopTime` | frameLoopTime | Handled | — | [motion_plugin.rs:519](../../crates/crysirror-krkr/src/motion_plugin.rs#L519) |
-| `c.frameTickCount` | frameTickCount | Handled | — | [motion_plugin.rs:519](../../crates/crysirror-krkr/src/motion_plugin.rs#L519) |
-| `c.lastTime` | lastTime | Handled | — | [motion_plugin.rs:519](../../crates/crysirror-krkr/src/motion_plugin.rs#L519) |
-| `c.loopTime` | loopTime | Handled | — | [motion_plugin.rs:519](../../crates/crysirror-krkr/src/motion_plugin.rs#L519) |
-| `c.maskMode` | maskMode | Handled | — | [motion_plugin.rs:519](../../crates/crysirror-krkr/src/motion_plugin.rs#L519) |
-| `c.motion` | motion | Handled | — | [motion_plugin.rs:468](../../crates/crysirror-krkr/src/motion_plugin.rs#L468) |
-| `c.opacity` | opacity | Handled | — | [motion_plugin.rs:519](../../crates/crysirror-krkr/src/motion_plugin.rs#L519) |
-| `c.outline` | outline | Handled | — | [motion_plugin.rs:589](../../crates/crysirror-krkr/src/motion_plugin.rs#L589) |
-| `c.playing` | playing | Handled | — | [motion_plugin.rs:495](../../crates/crysirror-krkr/src/motion_plugin.rs#L495) |
-| `c.resourceManager` | resourceManager | Handled | — | [motion_plugin.rs:569](../../crates/crysirror-krkr/src/motion_plugin.rs#L569) |
-| `c.speed` | speed | Handled | — | [motion_plugin.rs:519](../../crates/crysirror-krkr/src/motion_plugin.rs#L519) |
-| `c.tickCount` | tickCount | Handled | — | [motion_plugin.rs:519](../../crates/crysirror-krkr/src/motion_plugin.rs#L519) |
-| `c.variableKeys` | variableKeys | Handled | — | [motion_plugin.rs:582](../../crates/crysirror-krkr/src/motion_plugin.rs#L582) |
-| `c.varibleKeys` | varibleKeys | Handled | — | [motion_plugin.rs:582](../../crates/crysirror-krkr/src/motion_plugin.rs#L582) |
-| `c.visible` | visible | Handled | — | [motion_plugin.rs:519](../../crates/crysirror-krkr/src/motion_plugin.rs#L519) |
+| `c.allplaying` | allplaying | Handled | — | [motion_plugin.rs:524](../../crates/crysirror-krkr/src/motion_plugin.rs#L524) |
+| `c.animating` | animating | Handled | — | [motion_plugin.rs:524](../../crates/crysirror-krkr/src/motion_plugin.rs#L524) |
+| `c.chara` | chara | Handled | — | [motion_plugin.rs:497](../../crates/crysirror-krkr/src/motion_plugin.rs#L497) |
+| `c.colorWeight` | colorWeight | Handled | — | [motion_plugin.rs:548](../../crates/crysirror-krkr/src/motion_plugin.rs#L548) |
+| `c.completionType` | completionType | Handled | — | [motion_plugin.rs:548](../../crates/crysirror-krkr/src/motion_plugin.rs#L548) |
+| `c.frameLastTime` | frameLastTime | Handled | — | [motion_plugin.rs:548](../../crates/crysirror-krkr/src/motion_plugin.rs#L548) |
+| `c.frameLoopTime` | frameLoopTime | Handled | — | [motion_plugin.rs:548](../../crates/crysirror-krkr/src/motion_plugin.rs#L548) |
+| `c.frameTickCount` | frameTickCount | Handled | — | [motion_plugin.rs:548](../../crates/crysirror-krkr/src/motion_plugin.rs#L548) |
+| `c.lastTime` | lastTime | Handled | — | [motion_plugin.rs:548](../../crates/crysirror-krkr/src/motion_plugin.rs#L548) |
+| `c.loopTime` | loopTime | Handled | — | [motion_plugin.rs:548](../../crates/crysirror-krkr/src/motion_plugin.rs#L548) |
+| `c.maskMode` | maskMode | Handled | — | [motion_plugin.rs:548](../../crates/crysirror-krkr/src/motion_plugin.rs#L548) |
+| `c.motion` | motion | Handled | — | [motion_plugin.rs:497](../../crates/crysirror-krkr/src/motion_plugin.rs#L497) |
+| `c.opacity` | opacity | Handled | — | [motion_plugin.rs:548](../../crates/crysirror-krkr/src/motion_plugin.rs#L548) |
+| `c.outline` | outline | Handled | — | [motion_plugin.rs:618](../../crates/crysirror-krkr/src/motion_plugin.rs#L618) |
+| `c.playing` | playing | Handled | — | [motion_plugin.rs:524](../../crates/crysirror-krkr/src/motion_plugin.rs#L524) |
+| `c.resourceManager` | resourceManager | Handled | — | [motion_plugin.rs:598](../../crates/crysirror-krkr/src/motion_plugin.rs#L598) |
+| `c.speed` | speed | Handled | — | [motion_plugin.rs:548](../../crates/crysirror-krkr/src/motion_plugin.rs#L548) |
+| `c.tickCount` | tickCount | Handled | — | [motion_plugin.rs:548](../../crates/crysirror-krkr/src/motion_plugin.rs#L548) |
+| `c.variableKeys` | variableKeys | Handled | — | [motion_plugin.rs:611](../../crates/crysirror-krkr/src/motion_plugin.rs#L611) |
+| `c.varibleKeys` | varibleKeys | Handled | — | [motion_plugin.rs:611](../../crates/crysirror-krkr/src/motion_plugin.rs#L611) |
+| `c.visible` | visible | Handled | — | [motion_plugin.rs:548](../../crates/crysirror-krkr/src/motion_plugin.rs#L548) |
 
 ## Registered TJS native APIs / msdf_plugin / install
 
 | ID / API | Purpose | Status | Gap / condition | Source |
 | --- | --- | --- | --- | --- |
-| `scripts.makeColorTable` | makeColorTable | Handled | — | [msdf_plugin.rs:165](../../crates/crysirror-krkr/src/msdf_plugin.rs#L165) |
+| `scripts.makeColorTable` | makeColorTable | Handled | — | [msdf_plugin.rs:166](../../crates/crysirror-krkr/src/msdf_plugin.rs#L166) |
 
 ## Registered TJS native APIs / multitrack / install
 
@@ -513,41 +526,42 @@ Native API names use the Rust registration receiver when the native class is sel
 
 | ID / API | Purpose | Status | Gap / condition | Source |
 | --- | --- | --- | --- | --- |
-| `h.interface` | interface | Unsupported | property is read-only | [natives.rs:1120](../../crates/crysirror-krkr/src/natives.rs#L1120) |
+| `h.interface` | interface | Unsupported | property is read-only | [natives.rs:1123](../../crates/crysirror-krkr/src/natives.rs#L1123) |
 
 ## Registered TJS native APIs / natives / font_properties
 
 | ID / API | Purpose | Status | Gap / condition | Source |
 | --- | --- | --- | --- | --- |
-| `font.angle` | angle | Handled | — | [natives.rs:1699](../../crates/crysirror-krkr/src/natives.rs#L1699) |
-| `font.bold` | bold | Handled | — | [natives.rs:1699](../../crates/crysirror-krkr/src/natives.rs#L1699) |
-| `font.face` | face | Handled | — | [natives.rs:1699](../../crates/crysirror-krkr/src/natives.rs#L1699) |
-| `font.faceIsFileName` | faceIsFileName | Handled | — | [natives.rs:1699](../../crates/crysirror-krkr/src/natives.rs#L1699) |
-| `font.height` | height | Handled | — | [natives.rs:1699](../../crates/crysirror-krkr/src/natives.rs#L1699) |
-| `font.italic` | italic | Handled | — | [natives.rs:1699](../../crates/crysirror-krkr/src/natives.rs#L1699) |
-| `font.strikeout` | strikeout | Handled | — | [natives.rs:1699](../../crates/crysirror-krkr/src/natives.rs#L1699) |
-| `font.underline` | underline | Handled | — | [natives.rs:1699](../../crates/crysirror-krkr/src/natives.rs#L1699) |
+| `font.angle` | angle | Handled | — | [natives.rs:1708](../../crates/crysirror-krkr/src/natives.rs#L1708) |
+| `font.bold` | bold | Handled | — | [natives.rs:1708](../../crates/crysirror-krkr/src/natives.rs#L1708) |
+| `font.face` | face | Handled | — | [natives.rs:1708](../../crates/crysirror-krkr/src/natives.rs#L1708) |
+| `font.faceIsFileName` | faceIsFileName | Handled | — | [natives.rs:1708](../../crates/crysirror-krkr/src/natives.rs#L1708) |
+| `font.height` | height | Handled | — | [natives.rs:1708](../../crates/crysirror-krkr/src/natives.rs#L1708) |
+| `font.italic` | italic | Handled | — | [natives.rs:1708](../../crates/crysirror-krkr/src/natives.rs#L1708) |
+| `font.strikeout` | strikeout | Handled | — | [natives.rs:1708](../../crates/crysirror-krkr/src/natives.rs#L1708) |
+| `font.underline` | underline | Handled | — | [natives.rs:1708](../../crates/crysirror-krkr/src/natives.rs#L1708) |
 
 ## Registered TJS native APIs / natives / install_layer
 
 | ID / API | Purpose | Status | Gap / condition | Source |
 | --- | --- | --- | --- | --- |
-| `class.attentionLeft` | attentionLeft | Handled | — | [natives.rs:1905](../../crates/crysirror-krkr/src/natives.rs#L1905) |
-| `class.attentionTop` | attentionTop | Handled | — | [natives.rs:1905](../../crates/crysirror-krkr/src/natives.rs#L1905) |
-| `class.callOnPaint` | callOnPaint | Handled | — | [natives.rs:1905](../../crates/crysirror-krkr/src/natives.rs#L1905) |
-| `class.enabled` | enabled | Handled | — | [natives.rs:1905](../../crates/crysirror-krkr/src/natives.rs#L1905) |
-| `class.face` | face | Handled | — | [natives.rs:1905](../../crates/crysirror-krkr/src/natives.rs#L1905) |
-| `class.focusable` | focusable | Handled | — | [natives.rs:1905](../../crates/crysirror-krkr/src/natives.rs#L1905) |
-| `class.hitThreshold` | hitThreshold | Handled | — | [natives.rs:1905](../../crates/crysirror-krkr/src/natives.rs#L1905) |
-| `class.hitType` | hitType | Handled | — | [natives.rs:1905](../../crates/crysirror-krkr/src/natives.rs#L1905) |
-| `class.holdAlpha` | holdAlpha | Handled | — | [natives.rs:1905](../../crates/crysirror-krkr/src/natives.rs#L1905) |
-| `class.ignoreHintSensing` | ignoreHintSensing | Handled | — | [natives.rs:1905](../../crates/crysirror-krkr/src/natives.rs#L1905) |
-| `class.imeMode` | imeMode | Handled | — | [natives.rs:1905](../../crates/crysirror-krkr/src/natives.rs#L1905) |
-| `class.joinFocusChain` | joinFocusChain | Handled | — | [natives.rs:1905](../../crates/crysirror-krkr/src/natives.rs#L1905) |
-| `class.neutralColor` | neutralColor | Handled | — | [natives.rs:1905](../../crates/crysirror-krkr/src/natives.rs#L1905) |
-| `class.showParentHint` | showParentHint | Handled | — | [natives.rs:1905](../../crates/crysirror-krkr/src/natives.rs#L1905) |
-| `class.type` | type | Handled | — | [natives.rs:1874](../../crates/crysirror-krkr/src/natives.rs#L1874) |
-| `class.useAttention` | useAttention | Handled | — | [natives.rs:1905](../../crates/crysirror-krkr/src/natives.rs#L1905) |
+| `class.attentionLeft` | attentionLeft | Handled | — | [natives.rs:1932](../../crates/crysirror-krkr/src/natives.rs#L1932) |
+| `class.attentionTop` | attentionTop | Handled | — | [natives.rs:1932](../../crates/crysirror-krkr/src/natives.rs#L1932) |
+| `class.callOnPaint` | callOnPaint | Handled | — | [natives.rs:1932](../../crates/crysirror-krkr/src/natives.rs#L1932) |
+| `class.enabled` | enabled | Handled | — | [natives.rs:1932](../../crates/crysirror-krkr/src/natives.rs#L1932) |
+| `class.face` | face | Handled | — | [natives.rs:1932](../../crates/crysirror-krkr/src/natives.rs#L1932) |
+| `class.focusable` | focusable | Handled | — | [natives.rs:1932](../../crates/crysirror-krkr/src/natives.rs#L1932) |
+| `class.font` | font | Unsupported | property is read-only | [natives.rs:1898](../../crates/crysirror-krkr/src/natives.rs#L1898) |
+| `class.hitThreshold` | hitThreshold | Handled | — | [natives.rs:1932](../../crates/crysirror-krkr/src/natives.rs#L1932) |
+| `class.hitType` | hitType | Handled | — | [natives.rs:1932](../../crates/crysirror-krkr/src/natives.rs#L1932) |
+| `class.holdAlpha` | holdAlpha | Handled | — | [natives.rs:1932](../../crates/crysirror-krkr/src/natives.rs#L1932) |
+| `class.ignoreHintSensing` | ignoreHintSensing | Handled | — | [natives.rs:1932](../../crates/crysirror-krkr/src/natives.rs#L1932) |
+| `class.imeMode` | imeMode | Handled | — | [natives.rs:1932](../../crates/crysirror-krkr/src/natives.rs#L1932) |
+| `class.joinFocusChain` | joinFocusChain | Handled | — | [natives.rs:1932](../../crates/crysirror-krkr/src/natives.rs#L1932) |
+| `class.neutralColor` | neutralColor | Handled | — | [natives.rs:1932](../../crates/crysirror-krkr/src/natives.rs#L1932) |
+| `class.showParentHint` | showParentHint | Handled | — | [natives.rs:1932](../../crates/crysirror-krkr/src/natives.rs#L1932) |
+| `class.type` | type | Handled | — | [natives.rs:1901](../../crates/crysirror-krkr/src/natives.rs#L1901) |
+| `class.useAttention` | useAttention | Handled | — | [natives.rs:1932](../../crates/crysirror-krkr/src/natives.rs#L1932) |
 
 ## Registered TJS native APIs / natives / install_system
 
@@ -560,26 +574,26 @@ Native API names use the Rust registration receiver when the native class is sel
 
 | ID / API | Purpose | Status | Gap / condition | Source |
 | --- | --- | --- | --- | --- |
-| `class.HWND` | HWND | Unsupported | property is read-only | [natives.rs:1190](../../crates/crysirror-krkr/src/natives.rs#L1190) |
-| `class.borderStyle` | borderStyle | Handled | — | [natives.rs:1397](../../crates/crysirror-krkr/src/natives.rs#L1397) |
-| `class.caption` | caption | Handled | — | [natives.rs:1362](../../crates/crysirror-krkr/src/natives.rs#L1362) |
-| `class.drawDevice` | drawDevice | Handled | — | [natives.rs:1198](../../crates/crysirror-krkr/src/natives.rs#L1198) |
-| `class.focusedLayer` | focusedLayer | Handled | — | [natives.rs:1280](../../crates/crysirror-krkr/src/natives.rs#L1280) |
-| `class.fullScreen` | fullScreen | Handled | — | [natives.rs:1377](../../crates/crysirror-krkr/src/natives.rs#L1377) |
-| `class.innerSunken` | innerSunken | Handled | — | [natives.rs:1230](../../crates/crysirror-krkr/src/natives.rs#L1230) |
-| `class.layerLeft` | layerLeft | Handled | — | [natives.rs:1304](../../crates/crysirror-krkr/src/natives.rs#L1304) |
-| `class.layerTop` | layerTop | Handled | — | [natives.rs:1304](../../crates/crysirror-krkr/src/natives.rs#L1304) |
-| `class.left` | left | Handled | — | [natives.rs:1352](../../crates/crysirror-krkr/src/natives.rs#L1352) |
-| `class.maxHeight` | maxHeight | Handled | — | [natives.rs:1257](../../crates/crysirror-krkr/src/natives.rs#L1257) |
-| `class.maxWidth` | maxWidth | Handled | — | [natives.rs:1257](../../crates/crysirror-krkr/src/natives.rs#L1257) |
-| `class.minHeight` | minHeight | Handled | — | [natives.rs:1257](../../crates/crysirror-krkr/src/natives.rs#L1257) |
-| `class.minWidth` | minWidth | Handled | — | [natives.rs:1257](../../crates/crysirror-krkr/src/natives.rs#L1257) |
-| `class.setMaxSize` | setMaxSize | Handled | — | [natives.rs:1272](../../crates/crysirror-krkr/src/natives.rs#L1272) |
-| `class.setMinSize` | setMinSize | Handled | — | [natives.rs:1272](../../crates/crysirror-krkr/src/natives.rs#L1272) |
-| `class.showScrollBars` | showScrollBars | Handled | — | [natives.rs:1230](../../crates/crysirror-krkr/src/natives.rs#L1230) |
-| `class.top` | top | Handled | — | [natives.rs:1352](../../crates/crysirror-krkr/src/natives.rs#L1352) |
-| `class.zoomDenom` | zoomDenom | Handled | — | [natives.rs:1328](../../crates/crysirror-krkr/src/natives.rs#L1328) |
-| `class.zoomNumer` | zoomNumer | Handled | — | [natives.rs:1328](../../crates/crysirror-krkr/src/natives.rs#L1328) |
+| `class.HWND` | HWND | Unsupported | property is read-only | [natives.rs:1195](../../crates/crysirror-krkr/src/natives.rs#L1195) |
+| `class.borderStyle` | borderStyle | Handled | — | [natives.rs:1404](../../crates/crysirror-krkr/src/natives.rs#L1404) |
+| `class.caption` | caption | Handled | — | [natives.rs:1369](../../crates/crysirror-krkr/src/natives.rs#L1369) |
+| `class.drawDevice` | drawDevice | Handled | — | [natives.rs:1203](../../crates/crysirror-krkr/src/natives.rs#L1203) |
+| `class.focusedLayer` | focusedLayer | Handled | — | [natives.rs:1285](../../crates/crysirror-krkr/src/natives.rs#L1285) |
+| `class.fullScreen` | fullScreen | Handled | — | [natives.rs:1384](../../crates/crysirror-krkr/src/natives.rs#L1384) |
+| `class.innerSunken` | innerSunken | Handled | — | [natives.rs:1235](../../crates/crysirror-krkr/src/natives.rs#L1235) |
+| `class.layerLeft` | layerLeft | Handled | — | [natives.rs:1309](../../crates/crysirror-krkr/src/natives.rs#L1309) |
+| `class.layerTop` | layerTop | Handled | — | [natives.rs:1309](../../crates/crysirror-krkr/src/natives.rs#L1309) |
+| `class.left` | left | Handled | — | [natives.rs:1359](../../crates/crysirror-krkr/src/natives.rs#L1359) |
+| `class.maxHeight` | maxHeight | Handled | — | [natives.rs:1262](../../crates/crysirror-krkr/src/natives.rs#L1262) |
+| `class.maxWidth` | maxWidth | Handled | — | [natives.rs:1262](../../crates/crysirror-krkr/src/natives.rs#L1262) |
+| `class.minHeight` | minHeight | Handled | — | [natives.rs:1262](../../crates/crysirror-krkr/src/natives.rs#L1262) |
+| `class.minWidth` | minWidth | Handled | — | [natives.rs:1262](../../crates/crysirror-krkr/src/natives.rs#L1262) |
+| `class.setMaxSize` | setMaxSize | Handled | — | [natives.rs:1277](../../crates/crysirror-krkr/src/natives.rs#L1277) |
+| `class.setMinSize` | setMinSize | Handled | — | [natives.rs:1277](../../crates/crysirror-krkr/src/natives.rs#L1277) |
+| `class.showScrollBars` | showScrollBars | Handled | — | [natives.rs:1235](../../crates/crysirror-krkr/src/natives.rs#L1235) |
+| `class.top` | top | Handled | — | [natives.rs:1359](../../crates/crysirror-krkr/src/natives.rs#L1359) |
+| `class.zoomDenom` | zoomDenom | Handled | — | [natives.rs:1334](../../crates/crysirror-krkr/src/natives.rs#L1334) |
+| `class.zoomNumer` | zoomNumer | Handled | — | [natives.rs:1334](../../crates/crysirror-krkr/src/natives.rs#L1334) |
 
 ## Registered TJS native APIs / natives / methods
 
@@ -846,23 +860,23 @@ Native API names use the Rust registration receiver when the native class is sel
 
 | ID / API | Purpose | Status | Gap / condition | Source |
 | --- | --- | --- | --- | --- |
-| `target.loadDataPack` | loadDataPack | Handled | — | [packinone.rs:127](../../crates/crysirror-krkr/src/plugin_ports/packinone.rs#L127) |
-| `target.makeDataPackDigest` | makeDataPackDigest | Handled | — | [packinone.rs:125](../../crates/crysirror-krkr/src/plugin_ports/packinone.rs#L125) |
-| `target.makeDataPackThumb` | makeDataPackThumb | Handled | — | [packinone.rs:124](../../crates/crysirror-krkr/src/plugin_ports/packinone.rs#L124) |
-| `target.saveDataPack` | saveDataPack | Handled | — | [packinone.rs:123](../../crates/crysirror-krkr/src/plugin_ports/packinone.rs#L123) |
+| `target.loadDataPack` | loadDataPack | Handled | — | [packinone.rs:126](../../crates/crysirror-krkr/src/plugin_ports/packinone.rs#L126) |
+| `target.makeDataPackDigest` | makeDataPackDigest | Handled | — | [packinone.rs:124](../../crates/crysirror-krkr/src/plugin_ports/packinone.rs#L124) |
+| `target.makeDataPackThumb` | makeDataPackThumb | Handled | — | [packinone.rs:123](../../crates/crysirror-krkr/src/plugin_ports/packinone.rs#L123) |
+| `target.saveDataPack` | saveDataPack | Handled | — | [packinone.rs:122](../../crates/crysirror-krkr/src/plugin_ports/packinone.rs#L122) |
 
 ## Registered TJS native APIs / packinone / install_storages_octet
 
 | ID / API | Purpose | Status | Gap / condition | Source |
 | --- | --- | --- | --- | --- |
-| `storages.loadOctet` | loadOctet | Handled | — | [packinone.rs:57](../../crates/crysirror-krkr/src/plugin_ports/packinone.rs#L57) |
-| `storages.saveOctet` | saveOctet | Handled | — | [packinone.rs:56](../../crates/crysirror-krkr/src/plugin_ports/packinone.rs#L56) |
+| `storages.loadOctet` | loadOctet | Handled | — | [packinone.rs:56](../../crates/crysirror-krkr/src/plugin_ports/packinone.rs#L56) |
+| `storages.saveOctet` | saveOctet | Handled | — | [packinone.rs:55](../../crates/crysirror-krkr/src/plugin_ports/packinone.rs#L55) |
 
 ## Registered TJS native APIs / plugins / install
 
 | ID / API | Purpose | Status | Gap / condition | Source |
 | --- | --- | --- | --- | --- |
-| `global.CanLoadPlugin` | CanLoadPlugin | Handled | — | [plugins.rs:212](../../crates/crysirror-krkr/src/plugins.rs#L212) |
+| `global.CanLoadPlugin` | CanLoadPlugin | Handled | — | [plugins.rs:214](../../crates/crysirror-krkr/src/plugins.rs#L214) |
 
 ## Registered TJS native APIs / pointer / install
 
@@ -882,7 +896,7 @@ Native API names use the Rust registration receiver when the native class is sel
 
 | ID / API | Purpose | Status | Gap / condition | Source |
 | --- | --- | --- | --- | --- |
-| `c.root` | root | Handled | — | [psbfile_plugin.rs:84](../../crates/crysirror-krkr/src/psbfile_plugin.rs#L84) |
+| `c.root` | root | Handled | — | [psbfile_plugin.rs:117](../../crates/crysirror-krkr/src/psbfile_plugin.rs#L117) |
 
 ## Registered TJS native APIs / psd_plugin / members
 
@@ -917,16 +931,16 @@ Native API names use the Rust registration receiver when the native class is sel
 
 | ID / API | Purpose | Status | Gap / condition | Source |
 | --- | --- | --- | --- | --- |
-| `scripts.clone` | clone | Handled | — | [scripts_ex.rs:122](../../crates/crysirror-krkr/src/plugin_ports/scripts_ex.rs#L122) |
-| `scripts.equalStruct` | equalStruct | Handled | — | [scripts_ex.rs:122](../../crates/crysirror-krkr/src/plugin_ports/scripts_ex.rs#L122) |
-| `scripts.equalStructNumericLoose` | equalStructNumericLoose | Handled | — | [scripts_ex.rs:122](../../crates/crysirror-krkr/src/plugin_ports/scripts_ex.rs#L122) |
-| `scripts.foreach` | foreach | Handled | — | [scripts_ex.rs:122](../../crates/crysirror-krkr/src/plugin_ports/scripts_ex.rs#L122) |
-| `scripts.getMD5HashString` | getMD5HashString | Handled | — | [scripts_ex.rs:122](../../crates/crysirror-krkr/src/plugin_ports/scripts_ex.rs#L122) |
-| `scripts.getObjectContext` | getObjectContext | Handled | — | [scripts_ex.rs:122](../../crates/crysirror-krkr/src/plugin_ports/scripts_ex.rs#L122) |
-| `scripts.getObjectCount` | getObjectCount | Handled | — | [scripts_ex.rs:122](../../crates/crysirror-krkr/src/plugin_ports/scripts_ex.rs#L122) |
-| `scripts.getObjectKeys` | getObjectKeys | Handled | — | [scripts_ex.rs:122](../../crates/crysirror-krkr/src/plugin_ports/scripts_ex.rs#L122) |
-| `scripts.isNullContext` | isNullContext | Handled | — | [scripts_ex.rs:122](../../crates/crysirror-krkr/src/plugin_ports/scripts_ex.rs#L122) |
-| `scripts.rehash` | rehash | Handled | — | [scripts_ex.rs:122](../../crates/crysirror-krkr/src/plugin_ports/scripts_ex.rs#L122) |
+| `scripts.clone` | clone | Handled | — | [scripts_ex.rs:121](../../crates/crysirror-krkr/src/plugin_ports/scripts_ex.rs#L121) |
+| `scripts.equalStruct` | equalStruct | Handled | — | [scripts_ex.rs:121](../../crates/crysirror-krkr/src/plugin_ports/scripts_ex.rs#L121) |
+| `scripts.equalStructNumericLoose` | equalStructNumericLoose | Handled | — | [scripts_ex.rs:121](../../crates/crysirror-krkr/src/plugin_ports/scripts_ex.rs#L121) |
+| `scripts.foreach` | foreach | Handled | — | [scripts_ex.rs:135](../../crates/crysirror-krkr/src/plugin_ports/scripts_ex.rs#L135) |
+| `scripts.getMD5HashString` | getMD5HashString | Handled | — | [scripts_ex.rs:121](../../crates/crysirror-krkr/src/plugin_ports/scripts_ex.rs#L121) |
+| `scripts.getObjectContext` | getObjectContext | Handled | — | [scripts_ex.rs:121](../../crates/crysirror-krkr/src/plugin_ports/scripts_ex.rs#L121) |
+| `scripts.getObjectCount` | getObjectCount | Handled | — | [scripts_ex.rs:121](../../crates/crysirror-krkr/src/plugin_ports/scripts_ex.rs#L121) |
+| `scripts.getObjectKeys` | getObjectKeys | Handled | — | [scripts_ex.rs:121](../../crates/crysirror-krkr/src/plugin_ports/scripts_ex.rs#L121) |
+| `scripts.isNullContext` | isNullContext | Handled | — | [scripts_ex.rs:121](../../crates/crysirror-krkr/src/plugin_ports/scripts_ex.rs#L121) |
+| `scripts.rehash` | rehash | Handled | — | [scripts_ex.rs:121](../../crates/crysirror-krkr/src/plugin_ports/scripts_ex.rs#L121) |
 
 ## Registered TJS native APIs / sound / install
 
@@ -1086,145 +1100,145 @@ Native API names use the Rust registration receiver when the native class is sel
 
 | ID / API | Purpose | Status | Gap / condition | Source |
 | --- | --- | --- | --- | --- |
-| `handle.ReferPointer` | ReferPointer | Handled | — | [win32_dialog.rs:624](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L624) |
+| `handle.ReferPointer` | ReferPointer | Handled | — | [win32_dialog.rs:608](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L608) |
 
 ## Registered TJS native APIs / win32_dialog / install_blob_members
 
 | ID / API | Purpose | Status | Gap / condition | Source |
 | --- | --- | --- | --- | --- |
-| `handle.getByte` | getByte | Handled | — | [win32_dialog.rs:661](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L661) |
-| `handle.getDWord` | getDWord | Handled | — | [win32_dialog.rs:661](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L661) |
-| `handle.getDWordLong` | getDWordLong | Handled | — | [win32_dialog.rs:674](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L674) |
-| `handle.getText` | getText | Handled | — | [win32_dialog.rs:668](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L668) |
-| `handle.getWord` | getWord | Handled | — | [win32_dialog.rs:661](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L661) |
-| `handle.pointer` | pointer | Unsupported | WIN32Dialog: property is read-only | [win32_dialog.rs:656](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L656) |
-| `handle.setByte` | setByte | Handled | — | [win32_dialog.rs:678](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L678) |
-| `handle.setDWord` | setDWord | Handled | — | [win32_dialog.rs:678](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L678) |
-| `handle.setDWordLong` | setDWordLong | Handled | — | [win32_dialog.rs:685](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L685) |
-| `handle.setText` | setText | Handled | — | [win32_dialog.rs:678](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L678) |
-| `handle.setWord` | setWord | Handled | — | [win32_dialog.rs:678](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L678) |
+| `handle.getByte` | getByte | Handled | — | [win32_dialog.rs:645](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L645) |
+| `handle.getDWord` | getDWord | Handled | — | [win32_dialog.rs:645](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L645) |
+| `handle.getDWordLong` | getDWordLong | Handled | — | [win32_dialog.rs:658](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L658) |
+| `handle.getText` | getText | Handled | — | [win32_dialog.rs:652](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L652) |
+| `handle.getWord` | getWord | Handled | — | [win32_dialog.rs:645](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L645) |
+| `handle.pointer` | pointer | Unsupported | WIN32Dialog: property is read-only | [win32_dialog.rs:640](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L640) |
+| `handle.setByte` | setByte | Handled | — | [win32_dialog.rs:662](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L662) |
+| `handle.setDWord` | setDWord | Handled | — | [win32_dialog.rs:662](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L662) |
+| `handle.setDWordLong` | setDWordLong | Handled | — | [win32_dialog.rs:669](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L669) |
+| `handle.setText` | setText | Handled | — | [win32_dialog.rs:662](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L662) |
+| `handle.setWord` | setWord | Handled | — | [win32_dialog.rs:662](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L662) |
 
 ## Registered TJS native APIs / win32_dialog / install_dialog_members
 
 | ID / API | Purpose | Status | Gap / condition | Source |
 | --- | --- | --- | --- | --- |
-| `handle.bringToFront` | bringToFront | Handled | — | [win32_dialog.rs:289](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L289) |
-| `handle.close` | close | Handled | — | [win32_dialog.rs:156](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L156) |
-| `handle.closeProgress` | closeProgress | Handled | — | [win32_dialog.rs:289](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L289) |
-| `handle.deleteAllTab` | deleteAllTab | Handled | — | [win32_dialog.rs:188](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L188) |
-| `handle.deleteTab` | deleteTab | Handled | — | [win32_dialog.rs:245](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L245) |
-| `handle.finalize` | finalize | Handled | — | [win32_dialog.rs:108](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L108) |
-| `handle.getBaseUnits` | getBaseUnits | Handled | — | [win32_dialog.rs:292](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L292) |
-| `handle.getClientRect` | getClientRect | Handled | — | [win32_dialog.rs:294](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L294) |
-| `handle.getCurSel` | getCurSel | Handled | — | [win32_dialog.rs:188](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L188) |
-| `handle.getItem` | getItem | Handled | — | [win32_dialog.rs:188](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L188) |
-| `handle.getItemClassName` | getItemClassName | Handled | — | [win32_dialog.rs:206](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L206) |
-| `handle.getItemEnabled` | getItemEnabled | Handled | — | [win32_dialog.rs:188](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L188) |
-| `handle.getItemHeight` | getItemHeight | Handled | — | [win32_dialog.rs:188](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L188) |
-| `handle.getItemID` | getItemID | Handled | — | [win32_dialog.rs:188](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L188) |
-| `handle.getItemInt` | getItemInt | Handled | — | [win32_dialog.rs:188](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L188) |
-| `handle.getItemLeft` | getItemLeft | Handled | — | [win32_dialog.rs:188](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L188) |
-| `handle.getItemLong` | getItemLong | Handled | — | [win32_dialog.rs:245](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L245) |
-| `handle.getItemText` | getItemText | Handled | — | [win32_dialog.rs:206](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L206) |
-| `handle.getItemTop` | getItemTop | Handled | — | [win32_dialog.rs:188](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L188) |
-| `handle.getItemWidth` | getItemWidth | Handled | — | [win32_dialog.rs:188](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L188) |
-| `handle.getPlacement` | getPlacement | Handled | — | [win32_dialog.rs:313](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L313) |
-| `handle.getScrollInfo` | getScrollInfo | Handled | — | [win32_dialog.rs:197](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L197) |
-| `handle.getWindowRect` | getWindowRect | Handled | — | [win32_dialog.rs:294](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L294) |
-| `handle.insertTab` | insertTab | Handled | — | [win32_dialog.rs:275](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L275) |
-| `handle.invalidateAll` | invalidateAll | Handled | — | [win32_dialog.rs:188](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L188) |
-| `handle.invalidateRect` | invalidateRect | Handled | — | [win32_dialog.rs:245](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L245) |
-| `handle.isExistentItem` | isExistentItem | Handled | — | [win32_dialog.rs:188](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L188) |
-| `handle.loadResource` | loadResource | Handled | — | [win32_dialog.rs:117](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L117) |
-| `handle.lockItemUpdate` | lockItemUpdate | Handled | — | [win32_dialog.rs:188](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L188) |
-| `handle.makeTemplate` | makeTemplate | Handled | — | [win32_dialog.rs:117](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L117) |
-| `handle.mapRect` | mapRect | Handled | — | [win32_dialog.rs:297](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L297) |
-| `handle.maximize` | maximize | Handled | — | [win32_dialog.rs:321](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L321) |
-| `handle.onCommand` | onCommand | Handled | — | [win32_dialog.rs:267](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L267) |
-| `handle.onHScroll` | onHScroll | Handled | — | [win32_dialog.rs:267](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L267) |
-| `handle.onInit` | onInit | Handled | — | [win32_dialog.rs:267](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L267) |
-| `handle.onNotify` | onNotify | Handled | — | [win32_dialog.rs:226](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L226) |
-| `handle.onSize` | onSize | Handled | — | [win32_dialog.rs:267](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L267) |
-| `handle.onVScroll` | onVScroll | Handled | — | [win32_dialog.rs:267](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L267) |
-| `handle.open` | open | Handled | — | [win32_dialog.rs:135](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L135) |
-| `handle.openProgress` | openProgress | Handled | — | [win32_dialog.rs:188](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L188) |
-| `handle.propSheetMessage` | propSheetMessage | Handled | — | [win32_dialog.rs:275](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L275) |
-| `handle.restoreMaximize` | restoreMaximize | Handled | — | [win32_dialog.rs:321](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L321) |
-| `handle.selectTab` | selectTab | Handled | — | [win32_dialog.rs:245](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L245) |
-| `handle.sendItemMessage` | sendItemMessage | Handled | — | [win32_dialog.rs:125](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L125) |
-| `handle.setActive` | setActive | Handled | — | [win32_dialog.rs:289](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L289) |
-| `handle.setCurSel` | setCurSel | Handled | — | [win32_dialog.rs:245](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L245) |
-| `handle.setItemBitmap` | setItemBitmap | Handled | — | [win32_dialog.rs:125](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L125) |
-| `handle.setItemEnabled` | setItemEnabled | Handled | — | [win32_dialog.rs:226](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L226) |
-| `handle.setItemFocus` | setItemFocus | Handled | — | [win32_dialog.rs:156](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L156) |
-| `handle.setItemInt` | setItemInt | Handled | — | [win32_dialog.rs:226](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L226) |
-| `handle.setItemLong` | setItemLong | Handled | — | [win32_dialog.rs:275](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L275) |
-| `handle.setItemPos` | setItemPos | Handled | — | [win32_dialog.rs:267](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L267) |
-| `handle.setItemSize` | setItemSize | Handled | — | [win32_dialog.rs:267](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L267) |
-| `handle.setItemText` | setItemText | Handled | — | [win32_dialog.rs:226](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L226) |
-| `handle.setMessageResult` | setMessageResult | Handled | — | [win32_dialog.rs:156](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L156) |
-| `handle.setPlacement` | setPlacement | Handled | — | [win32_dialog.rs:314](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L314) |
-| `handle.setPos` | setPos | Handled | — | [win32_dialog.rs:226](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L226) |
-| `handle.setScrollInfo` | setScrollInfo | Handled | — | [win32_dialog.rs:156](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L156) |
-| `handle.setSize` | setSize | Handled | — | [win32_dialog.rs:226](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L226) |
-| `handle.show` | show | Handled | — | [win32_dialog.rs:156](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L156) |
-| `handle.unlockItemUpdate` | unlockItemUpdate | Handled | — | [win32_dialog.rs:291](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L291) |
+| `handle.bringToFront` | bringToFront | Handled | — | [win32_dialog.rs:273](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L273) |
+| `handle.close` | close | Handled | — | [win32_dialog.rs:152](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L152) |
+| `handle.closeProgress` | closeProgress | Handled | — | [win32_dialog.rs:273](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L273) |
+| `handle.deleteAllTab` | deleteAllTab | Handled | — | [win32_dialog.rs:178](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L178) |
+| `handle.deleteTab` | deleteTab | Handled | — | [win32_dialog.rs:229](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L229) |
+| `handle.finalize` | finalize | Handled | — | [win32_dialog.rs:105](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L105) |
+| `handle.getBaseUnits` | getBaseUnits | Handled | — | [win32_dialog.rs:276](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L276) |
+| `handle.getClientRect` | getClientRect | Handled | — | [win32_dialog.rs:278](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L278) |
+| `handle.getCurSel` | getCurSel | Handled | — | [win32_dialog.rs:178](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L178) |
+| `handle.getItem` | getItem | Handled | — | [win32_dialog.rs:178](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L178) |
+| `handle.getItemClassName` | getItemClassName | Handled | — | [win32_dialog.rs:195](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L195) |
+| `handle.getItemEnabled` | getItemEnabled | Handled | — | [win32_dialog.rs:178](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L178) |
+| `handle.getItemHeight` | getItemHeight | Handled | — | [win32_dialog.rs:178](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L178) |
+| `handle.getItemID` | getItemID | Handled | — | [win32_dialog.rs:178](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L178) |
+| `handle.getItemInt` | getItemInt | Handled | — | [win32_dialog.rs:178](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L178) |
+| `handle.getItemLeft` | getItemLeft | Handled | — | [win32_dialog.rs:178](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L178) |
+| `handle.getItemLong` | getItemLong | Handled | — | [win32_dialog.rs:229](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L229) |
+| `handle.getItemText` | getItemText | Handled | — | [win32_dialog.rs:196](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L196) |
+| `handle.getItemTop` | getItemTop | Handled | — | [win32_dialog.rs:178](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L178) |
+| `handle.getItemWidth` | getItemWidth | Handled | — | [win32_dialog.rs:178](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L178) |
+| `handle.getPlacement` | getPlacement | Handled | — | [win32_dialog.rs:297](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L297) |
+| `handle.getScrollInfo` | getScrollInfo | Handled | — | [win32_dialog.rs:187](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L187) |
+| `handle.getWindowRect` | getWindowRect | Handled | — | [win32_dialog.rs:278](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L278) |
+| `handle.insertTab` | insertTab | Handled | — | [win32_dialog.rs:259](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L259) |
+| `handle.invalidateAll` | invalidateAll | Handled | — | [win32_dialog.rs:178](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L178) |
+| `handle.invalidateRect` | invalidateRect | Handled | — | [win32_dialog.rs:229](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L229) |
+| `handle.isExistentItem` | isExistentItem | Handled | — | [win32_dialog.rs:178](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L178) |
+| `handle.loadResource` | loadResource | Handled | — | [win32_dialog.rs:113](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L113) |
+| `handle.lockItemUpdate` | lockItemUpdate | Handled | — | [win32_dialog.rs:178](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L178) |
+| `handle.makeTemplate` | makeTemplate | Handled | — | [win32_dialog.rs:114](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L114) |
+| `handle.mapRect` | mapRect | Handled | — | [win32_dialog.rs:281](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L281) |
+| `handle.maximize` | maximize | Handled | — | [win32_dialog.rs:305](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L305) |
+| `handle.onCommand` | onCommand | Handled | — | [win32_dialog.rs:251](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L251) |
+| `handle.onHScroll` | onHScroll | Handled | — | [win32_dialog.rs:251](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L251) |
+| `handle.onInit` | onInit | Handled | — | [win32_dialog.rs:251](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L251) |
+| `handle.onNotify` | onNotify | Handled | — | [win32_dialog.rs:209](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L209) |
+| `handle.onSize` | onSize | Handled | — | [win32_dialog.rs:251](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L251) |
+| `handle.onVScroll` | onVScroll | Handled | — | [win32_dialog.rs:251](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L251) |
+| `handle.open` | open | Handled | — | [win32_dialog.rs:121](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L121) |
+| `handle.openProgress` | openProgress | Handled | — | [win32_dialog.rs:178](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L178) |
+| `handle.propSheetMessage` | propSheetMessage | Handled | — | [win32_dialog.rs:259](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L259) |
+| `handle.restoreMaximize` | restoreMaximize | Handled | — | [win32_dialog.rs:305](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L305) |
+| `handle.selectTab` | selectTab | Handled | — | [win32_dialog.rs:229](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L229) |
+| `handle.sendItemMessage` | sendItemMessage | Handled | — | [win32_dialog.rs:117](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L117) |
+| `handle.setActive` | setActive | Handled | — | [win32_dialog.rs:273](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L273) |
+| `handle.setCurSel` | setCurSel | Handled | — | [win32_dialog.rs:229](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L229) |
+| `handle.setItemBitmap` | setItemBitmap | Handled | — | [win32_dialog.rs:116](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L116) |
+| `handle.setItemEnabled` | setItemEnabled | Handled | — | [win32_dialog.rs:209](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L209) |
+| `handle.setItemFocus` | setItemFocus | Handled | — | [win32_dialog.rs:145](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L145) |
+| `handle.setItemInt` | setItemInt | Handled | — | [win32_dialog.rs:209](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L209) |
+| `handle.setItemLong` | setItemLong | Handled | — | [win32_dialog.rs:259](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L259) |
+| `handle.setItemPos` | setItemPos | Handled | — | [win32_dialog.rs:251](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L251) |
+| `handle.setItemSize` | setItemSize | Handled | — | [win32_dialog.rs:251](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L251) |
+| `handle.setItemText` | setItemText | Handled | — | [win32_dialog.rs:216](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L216) |
+| `handle.setMessageResult` | setMessageResult | Handled | — | [win32_dialog.rs:145](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L145) |
+| `handle.setPlacement` | setPlacement | Handled | — | [win32_dialog.rs:298](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L298) |
+| `handle.setPos` | setPos | Handled | — | [win32_dialog.rs:209](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L209) |
+| `handle.setScrollInfo` | setScrollInfo | Handled | — | [win32_dialog.rs:145](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L145) |
+| `handle.setSize` | setSize | Handled | — | [win32_dialog.rs:209](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L209) |
+| `handle.show` | show | Handled | — | [win32_dialog.rs:145](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L145) |
+| `handle.unlockItemUpdate` | unlockItemUpdate | Handled | — | [win32_dialog.rs:275](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L275) |
 
 ## Registered TJS native APIs / win32_dialog / install_dialog_statics
 
 | ID / API | Purpose | Status | Gap / condition | Source |
 | --- | --- | --- | --- | --- |
-| `class.chooseColor` | chooseColor | Handled | — | [win32_dialog.rs:420](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L420) |
-| `class.getOctetAddress` | getOctetAddress | Handled | — | [win32_dialog.rs:412](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L412) |
-| `class.getStringAddress` | getStringAddress | Handled | — | [win32_dialog.rs:412](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L412) |
-| `class.initCommonControls` | initCommonControls | Handled | — | [win32_dialog.rs:419](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L419) |
-| `class.initCommonControlsEx` | initCommonControlsEx | Handled | — | [win32_dialog.rs:401](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L401) |
-| `class.messageBox` | messageBox | Handled | — | [win32_dialog.rs:388](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L388) |
-| `class.openPropertySheet` | openPropertySheet | Handled | — | [win32_dialog.rs:412](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L412) |
+| `class.chooseColor` | chooseColor | Handled | — | [win32_dialog.rs:404](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L404) |
+| `class.getOctetAddress` | getOctetAddress | Handled | — | [win32_dialog.rs:396](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L396) |
+| `class.getStringAddress` | getStringAddress | Handled | — | [win32_dialog.rs:396](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L396) |
+| `class.initCommonControls` | initCommonControls | Handled | — | [win32_dialog.rs:403](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L403) |
+| `class.initCommonControlsEx` | initCommonControlsEx | Handled | — | [win32_dialog.rs:385](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L385) |
+| `class.messageBox` | messageBox | Handled | — | [win32_dialog.rs:372](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L372) |
+| `class.openPropertySheet` | openPropertySheet | Handled | — | [win32_dialog.rs:396](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L396) |
 
 ## Registered TJS native APIs / win32_dialog / install_draw_item_members
 
 | ID / API | Purpose | Status | Gap / condition | Source |
 | --- | --- | --- | --- | --- |
-| `handle.ctrlID` | ctrlID | Unsupported | WIN32Dialog: property is read-only | [win32_dialog.rs:590](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L590) |
-| `handle.ctrlType` | ctrlType | Unsupported | WIN32Dialog: property is read-only | [win32_dialog.rs:590](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L590) |
-| `handle.draw` | draw | Handled | — | [win32_dialog.rs:575](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L575) |
-| `handle.hwndItem` | hwndItem | Unsupported | WIN32Dialog: property is read-only | [win32_dialog.rs:590](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L590) |
-| `handle.itemAction` | itemAction | Unsupported | WIN32Dialog: property is read-only | [win32_dialog.rs:590](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L590) |
-| `handle.itemData` | itemData | Unsupported | WIN32Dialog: property is read-only | [win32_dialog.rs:590](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L590) |
-| `handle.itemID` | itemID | Unsupported | WIN32Dialog: property is read-only | [win32_dialog.rs:590](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L590) |
-| `handle.itemRect` | itemRect | Unsupported | WIN32Dialog: property is read-only | [win32_dialog.rs:592](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L592) |
-| `handle.itemState` | itemState | Unsupported | WIN32Dialog: property is read-only | [win32_dialog.rs:590](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L590) |
+| `handle.ctrlID` | ctrlID | Unsupported | WIN32Dialog: property is read-only | [win32_dialog.rs:574](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L574) |
+| `handle.ctrlType` | ctrlType | Unsupported | WIN32Dialog: property is read-only | [win32_dialog.rs:574](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L574) |
+| `handle.draw` | draw | Handled | — | [win32_dialog.rs:559](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L559) |
+| `handle.hwndItem` | hwndItem | Unsupported | WIN32Dialog: property is read-only | [win32_dialog.rs:574](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L574) |
+| `handle.itemAction` | itemAction | Unsupported | WIN32Dialog: property is read-only | [win32_dialog.rs:574](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L574) |
+| `handle.itemData` | itemData | Unsupported | WIN32Dialog: property is read-only | [win32_dialog.rs:574](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L574) |
+| `handle.itemID` | itemID | Unsupported | WIN32Dialog: property is read-only | [win32_dialog.rs:574](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L574) |
+| `handle.itemRect` | itemRect | Unsupported | WIN32Dialog: property is read-only | [win32_dialog.rs:576](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L576) |
+| `handle.itemState` | itemState | Unsupported | WIN32Dialog: property is read-only | [win32_dialog.rs:574](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L574) |
 
 ## Registered TJS native APIs / win32_dialog / install_header_members
 
 | ID / API | Purpose | Status | Gap / condition | Source |
 | --- | --- | --- | --- | --- |
-| `handle.store` | store | Handled | — | [win32_dialog.rs:530](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L530) |
+| `handle.store` | store | Handled | — | [win32_dialog.rs:514](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L514) |
 
 ## Registered TJS native APIs / win32_dialog / install_items_members
 
 | ID / API | Purpose | Status | Gap / condition | Source |
 | --- | --- | --- | --- | --- |
-| `handle.store` | store | Handled | — | [win32_dialog.rs:541](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L541) |
+| `handle.store` | store | Handled | — | [win32_dialog.rs:525](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L525) |
 
 ## Registered TJS native APIs / win32_dialog / install_notify_members
 
 | ID / API | Purpose | Status | Gap / condition | Source |
 | --- | --- | --- | --- | --- |
-| `handle.code` | code | Unsupported | WIN32Dialog: property is read-only | [win32_dialog.rs:597](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L597) |
-| `handle.getByte` | getByte | Handled | — | [win32_dialog.rs:602](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L602) |
-| `handle.getDWord` | getDWord | Handled | — | [win32_dialog.rs:602](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L602) |
-| `handle.getWord` | getWord | Handled | — | [win32_dialog.rs:602](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L602) |
-| `handle.hwndFrom` | hwndFrom | Unsupported | WIN32Dialog: property is read-only | [win32_dialog.rs:597](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L597) |
-| `handle.idFrom` | idFrom | Unsupported | WIN32Dialog: property is read-only | [win32_dialog.rs:597](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L597) |
+| `handle.code` | code | Unsupported | WIN32Dialog: property is read-only | [win32_dialog.rs:581](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L581) |
+| `handle.getByte` | getByte | Handled | — | [win32_dialog.rs:586](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L586) |
+| `handle.getDWord` | getDWord | Handled | — | [win32_dialog.rs:586](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L586) |
+| `handle.getWord` | getWord | Handled | — | [win32_dialog.rs:586](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L586) |
+| `handle.hwndFrom` | hwndFrom | Unsupported | WIN32Dialog: property is read-only | [win32_dialog.rs:581](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L581) |
+| `handle.idFrom` | idFrom | Unsupported | WIN32Dialog: property is read-only | [win32_dialog.rs:581](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L581) |
 
 ## Registered TJS native APIs / win32_dialog / subclass_constructor
 
 | ID / API | Purpose | Status | Gap / condition | Source |
 | --- | --- | --- | --- | --- |
-| `handle.finalize` | finalize | Handled | — | [win32_dialog.rs:524](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L524) |
-| `instance.finalize` | finalize | Handled | — | [win32_dialog.rs:518](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L518) |
+| `handle.finalize` | finalize | Handled | — | [win32_dialog.rs:508](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L508) |
+| `instance.finalize` | finalize | Handled | — | [win32_dialog.rs:502](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L502) |
 
 ## Registered TJS native APIs / window_ex / install_native_unless_present
 
@@ -1313,149 +1327,149 @@ Native API names use the Rust registration receiver when the native class is sel
 
 | ID / API | Purpose | Status | Gap / condition | Source |
 | --- | --- | --- | --- | --- |
-| `0x00 nop` | No-operation instruction | Empty handler | Original no-op status not established | [mod.rs:811](../../crates/crysirror-tjs2/src/vm/mod.rs#L811) |
-| `0x01 const` | Load a constant | Handled | — | [mod.rs:812](../../crates/crysirror-tjs2/src/vm/mod.rs#L812) |
-| `0x02 cp` | Copy a value | Handled | — | [mod.rs:836](../../crates/crysirror-tjs2/src/vm/mod.rs#L836) |
-| `0x03 cl` | cl | Handled | — | [mod.rs:840](../../crates/crysirror-tjs2/src/vm/mod.rs#L840) |
-| `0x04 ccl` | ccl | Handled | — | [mod.rs:841](../../crates/crysirror-tjs2/src/vm/mod.rs#L841) |
-| `0x05 tt` | tt | Handled | — | [mod.rs:846](../../crates/crysirror-tjs2/src/vm/mod.rs#L846) |
-| `0x06 tf` | tf | Handled | — | [mod.rs:847](../../crates/crysirror-tjs2/src/vm/mod.rs#L847) |
-| `0x07 ceq` | ceq | Handled | — | [mod.rs:848](../../crates/crysirror-tjs2/src/vm/mod.rs#L848) |
-| `0x08 cdeq` | cdeq | Handled | — | [mod.rs:853](../../crates/crysirror-tjs2/src/vm/mod.rs#L853) |
-| `0x09 clt` | clt | Handled | — | [mod.rs:858](../../crates/crysirror-tjs2/src/vm/mod.rs#L858) |
-| `0x0A cgt` | cgt | Handled | — | [mod.rs:863](../../crates/crysirror-tjs2/src/vm/mod.rs#L863) |
-| `0x0B setf` | setf | Handled | — | [mod.rs:868](../../crates/crysirror-tjs2/src/vm/mod.rs#L868) |
-| `0x0C setnf` | setnf | Handled | — | [mod.rs:869](../../crates/crysirror-tjs2/src/vm/mod.rs#L869) |
-| `0x0D lnot` | lnot | Handled | — | [mod.rs:870](../../crates/crysirror-tjs2/src/vm/mod.rs#L870) |
-| `0x0E nf` | nf | Handled | — | [mod.rs:874](../../crates/crysirror-tjs2/src/vm/mod.rs#L874) |
-| `0x0F jf` | jf | Handled | — | [mod.rs:875](../../crates/crysirror-tjs2/src/vm/mod.rs#L875) |
-| `0x10 jnf` | jnf | Handled | — | [mod.rs:880](../../crates/crysirror-tjs2/src/vm/mod.rs#L880) |
-| `0x11 jmp` | jmp | Handled | — | [mod.rs:885](../../crates/crysirror-tjs2/src/vm/mod.rs#L885) |
-| `0x12 inc` | inc | Handled | — | [mod.rs:886](../../crates/crysirror-tjs2/src/vm/mod.rs#L886) |
-| `0x13 incpd` | incpd | Handled | — | [mod.rs:894](../../crates/crysirror-tjs2/src/vm/mod.rs#L894) |
-| `0x14 incpi` | incpi | Handled | — | [mod.rs:894](../../crates/crysirror-tjs2/src/vm/mod.rs#L894) |
-| `0x15 incp` | incp | Handled | — | [mod.rs:894](../../crates/crysirror-tjs2/src/vm/mod.rs#L894) |
-| `0x16 dec` | dec | Handled | — | [mod.rs:886](../../crates/crysirror-tjs2/src/vm/mod.rs#L886) |
-| `0x17 decpd` | decpd | Handled | — | [mod.rs:894](../../crates/crysirror-tjs2/src/vm/mod.rs#L894) |
-| `0x18 decpi` | decpi | Handled | — | [mod.rs:894](../../crates/crysirror-tjs2/src/vm/mod.rs#L894) |
-| `0x19 decp` | decp | Handled | — | [mod.rs:894](../../crates/crysirror-tjs2/src/vm/mod.rs#L894) |
-| `0x1A lor` | lor | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x1B lorpd` | lorpd | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x1C lorpi` | lorpi | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x1D lorp` | lorp | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x1E land` | land | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x1F landpd` | landpd | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x20 landpi` | landpi | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x21 landp` | landp | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x22 bor` | bor | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x23 borpd` | borpd | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x24 borpi` | borpi | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x25 borp` | borp | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x26 bxor` | bxor | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x27 bxorpd` | bxorpd | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x28 bxorpi` | bxorpi | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x29 bxorp` | bxorp | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x2A band` | band | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x2B bandpd` | bandpd | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x2C bandpi` | bandpi | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x2D bandp` | bandp | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x2E sar` | sar | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x2F sarpd` | sarpd | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x30 sarpi` | sarpi | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x31 sarp` | sarp | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x32 sal` | sal | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x33 salpd` | salpd | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x34 salpi` | salpi | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x35 salp` | salp | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x36 sr` | sr | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x37 srpd` | srpd | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x38 srpi` | srpi | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x39 srp` | srp | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x3A add` | add | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x3B addpd` | addpd | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x3C addpi` | addpi | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x3D addp` | addp | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x3E sub` | sub | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x3F subpd` | subpd | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x40 subpi` | subpi | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x41 subp` | subp | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x42 mod` | mod | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x43 modpd` | modpd | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x44 modpi` | modpi | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x45 modp` | modp | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x46 div` | div | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x47 divpd` | divpd | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x48 divpi` | divpi | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x49 divp` | divp | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x4A idiv` | idiv | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x4B idivpd` | idivpd | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x4C idivpi` | idivpi | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x4D idivp` | idivp | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x4E mul` | mul | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x4F mulpd` | mulpd | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x50 mulpi` | mulpi | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x51 mulp` | mulp | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
-| `0x52 bnot` | bnot | Handled | — | [mod.rs:896](../../crates/crysirror-tjs2/src/vm/mod.rs#L896) |
-| `0x53 typeof` | typeof | Handled | — | [mod.rs:900](../../crates/crysirror-tjs2/src/vm/mod.rs#L900) |
-| `0x54 typeofd` | typeofd | Handled | — | [mod.rs:904](../../crates/crysirror-tjs2/src/vm/mod.rs#L904) |
-| `0x55 typeofi` | typeofi | Handled | — | [mod.rs:908](../../crates/crysirror-tjs2/src/vm/mod.rs#L908) |
-| `0x56 eval` | eval | Handled | — | [mod.rs:912](../../crates/crysirror-tjs2/src/vm/mod.rs#L912) |
-| `0x57 eexp` | eexp | Handled | — | [mod.rs:912](../../crates/crysirror-tjs2/src/vm/mod.rs#L912) |
-| `0x58 chkins` | chkins | Handled | — | [mod.rs:913](../../crates/crysirror-tjs2/src/vm/mod.rs#L913) |
-| `0x59 asc` | asc | Handled | — | [mod.rs:918](../../crates/crysirror-tjs2/src/vm/mod.rs#L918) |
-| `0x5A chr` | chr | Handled | — | [mod.rs:922](../../crates/crysirror-tjs2/src/vm/mod.rs#L922) |
-| `0x5B num` | num | Handled | — | [mod.rs:926](../../crates/crysirror-tjs2/src/vm/mod.rs#L926) |
-| `0x5C chs` | chs | Handled | — | [mod.rs:930](../../crates/crysirror-tjs2/src/vm/mod.rs#L930) |
-| `0x5D inv` | inv | Handled | — | [mod.rs:934](../../crates/crysirror-tjs2/src/vm/mod.rs#L934) |
-| `0x5E chkinv` | chkinv | Handled | — | [mod.rs:937](../../crates/crysirror-tjs2/src/vm/mod.rs#L937) |
-| `0x5F int` | int | Handled | — | [mod.rs:944](../../crates/crysirror-tjs2/src/vm/mod.rs#L944) |
-| `0x60 real` | real | Handled | — | [mod.rs:948](../../crates/crysirror-tjs2/src/vm/mod.rs#L948) |
-| `0x61 str` | str | Handled | — | [mod.rs:952](../../crates/crysirror-tjs2/src/vm/mod.rs#L952) |
-| `0x62 octet` | octet | Handled | — | [mod.rs:956](../../crates/crysirror-tjs2/src/vm/mod.rs#L956) |
-| `0x63 call` | Call a function | Handled | — | [mod.rs:960](../../crates/crysirror-tjs2/src/vm/mod.rs#L960) |
-| `0x64 calld` | Call a named property | Handled | — | [mod.rs:996](../../crates/crysirror-tjs2/src/vm/mod.rs#L996) |
-| `0x65 calli` | Call an indexed property | Handled | — | [mod.rs:1033](../../crates/crysirror-tjs2/src/vm/mod.rs#L1033) |
-| `0x66 new` | Construct an object | Handled | — | [mod.rs:960](../../crates/crysirror-tjs2/src/vm/mod.rs#L960) |
-| `0x67 gpd` | gpd | Handled | — | [mod.rs:1070](../../crates/crysirror-tjs2/src/vm/mod.rs#L1070) |
-| `0x68 spd` | spd | Handled | — | [mod.rs:1081](../../crates/crysirror-tjs2/src/vm/mod.rs#L1081) |
-| `0x69 spde` | spde | Handled | — | [mod.rs:1081](../../crates/crysirror-tjs2/src/vm/mod.rs#L1081) |
-| `0x6A spdeh` | spdeh | Handled | — | [mod.rs:1081](../../crates/crysirror-tjs2/src/vm/mod.rs#L1081) |
-| `0x6B gpi` | gpi | Handled | — | [mod.rs:1093](../../crates/crysirror-tjs2/src/vm/mod.rs#L1093) |
-| `0x6C spi` | spi | Handled | — | [mod.rs:1104](../../crates/crysirror-tjs2/src/vm/mod.rs#L1104) |
-| `0x6D spie` | spie | Handled | — | [mod.rs:1104](../../crates/crysirror-tjs2/src/vm/mod.rs#L1104) |
-| `0x6E gpds` | gpds | Handled | — | [mod.rs:1070](../../crates/crysirror-tjs2/src/vm/mod.rs#L1070) |
-| `0x6F spds` | spds | Handled | — | [mod.rs:1081](../../crates/crysirror-tjs2/src/vm/mod.rs#L1081) |
-| `0x70 gpis` | gpis | Handled | — | [mod.rs:1093](../../crates/crysirror-tjs2/src/vm/mod.rs#L1093) |
-| `0x71 spis` | spis | Handled | — | [mod.rs:1104](../../crates/crysirror-tjs2/src/vm/mod.rs#L1104) |
-| `0x72 setp` | setp | Handled | — | [mod.rs:1115](../../crates/crysirror-tjs2/src/vm/mod.rs#L1115) |
-| `0x73 getp` | getp | Handled | — | [mod.rs:1120](../../crates/crysirror-tjs2/src/vm/mod.rs#L1120) |
-| `0x74 deld` | deld | Handled | — | [mod.rs:1125](../../crates/crysirror-tjs2/src/vm/mod.rs#L1125) |
-| `0x75 deli` | deli | Handled | — | [mod.rs:1133](../../crates/crysirror-tjs2/src/vm/mod.rs#L1133) |
-| `0x76 srv` | srv | Handled | — | [mod.rs:1141](../../crates/crysirror-tjs2/src/vm/mod.rs#L1141) |
-| `0x77 ret` | Return from a call | Handled | — | [mod.rs:1142](../../crates/crysirror-tjs2/src/vm/mod.rs#L1142) |
-| `0x78 entry` | entry | Handled | — | [mod.rs:1143](../../crates/crysirror-tjs2/src/vm/mod.rs#L1143) |
-| `0x79 extry` | extry | Handled | — | [mod.rs:1150](../../crates/crysirror-tjs2/src/vm/mod.rs#L1150) |
-| `0x7A throw` | Throw an exception | Handled | — | [mod.rs:1153](../../crates/crysirror-tjs2/src/vm/mod.rs#L1153) |
-| `0x7B chgthis` | chgthis | Handled | — | [mod.rs:1161](../../crates/crysirror-tjs2/src/vm/mod.rs#L1161) |
-| `0x7C global` | global | Handled | — | [mod.rs:1167](../../crates/crysirror-tjs2/src/vm/mod.rs#L1167) |
-| `0x7D addci` | addci | Handled | — | [mod.rs:1168](../../crates/crysirror-tjs2/src/vm/mod.rs#L1168) |
-| `0x7E regmember` | regmember | Handled | — | [mod.rs:1215](../../crates/crysirror-tjs2/src/vm/mod.rs#L1215) |
-| `0x7F debugger` | Debugger instruction | Empty handler | Original no-op status not established | [mod.rs:811](../../crates/crysirror-tjs2/src/vm/mod.rs#L811) |
+| `0x00 nop` | No-operation instruction | Empty handler | Original no-op status not established | [mod.rs:826](../../crates/crysirror-tjs2/src/vm/mod.rs#L826) |
+| `0x01 const` | Load a constant | Handled | — | [mod.rs:827](../../crates/crysirror-tjs2/src/vm/mod.rs#L827) |
+| `0x02 cp` | Copy a value | Handled | — | [mod.rs:851](../../crates/crysirror-tjs2/src/vm/mod.rs#L851) |
+| `0x03 cl` | cl | Handled | — | [mod.rs:855](../../crates/crysirror-tjs2/src/vm/mod.rs#L855) |
+| `0x04 ccl` | ccl | Handled | — | [mod.rs:856](../../crates/crysirror-tjs2/src/vm/mod.rs#L856) |
+| `0x05 tt` | tt | Handled | — | [mod.rs:861](../../crates/crysirror-tjs2/src/vm/mod.rs#L861) |
+| `0x06 tf` | tf | Handled | — | [mod.rs:862](../../crates/crysirror-tjs2/src/vm/mod.rs#L862) |
+| `0x07 ceq` | ceq | Handled | — | [mod.rs:863](../../crates/crysirror-tjs2/src/vm/mod.rs#L863) |
+| `0x08 cdeq` | cdeq | Handled | — | [mod.rs:868](../../crates/crysirror-tjs2/src/vm/mod.rs#L868) |
+| `0x09 clt` | clt | Handled | — | [mod.rs:873](../../crates/crysirror-tjs2/src/vm/mod.rs#L873) |
+| `0x0A cgt` | cgt | Handled | — | [mod.rs:878](../../crates/crysirror-tjs2/src/vm/mod.rs#L878) |
+| `0x0B setf` | setf | Handled | — | [mod.rs:883](../../crates/crysirror-tjs2/src/vm/mod.rs#L883) |
+| `0x0C setnf` | setnf | Handled | — | [mod.rs:884](../../crates/crysirror-tjs2/src/vm/mod.rs#L884) |
+| `0x0D lnot` | lnot | Handled | — | [mod.rs:885](../../crates/crysirror-tjs2/src/vm/mod.rs#L885) |
+| `0x0E nf` | nf | Handled | — | [mod.rs:889](../../crates/crysirror-tjs2/src/vm/mod.rs#L889) |
+| `0x0F jf` | jf | Handled | — | [mod.rs:890](../../crates/crysirror-tjs2/src/vm/mod.rs#L890) |
+| `0x10 jnf` | jnf | Handled | — | [mod.rs:895](../../crates/crysirror-tjs2/src/vm/mod.rs#L895) |
+| `0x11 jmp` | jmp | Handled | — | [mod.rs:900](../../crates/crysirror-tjs2/src/vm/mod.rs#L900) |
+| `0x12 inc` | inc | Handled | — | [mod.rs:901](../../crates/crysirror-tjs2/src/vm/mod.rs#L901) |
+| `0x13 incpd` | incpd | Handled | — | [mod.rs:909](../../crates/crysirror-tjs2/src/vm/mod.rs#L909) |
+| `0x14 incpi` | incpi | Handled | — | [mod.rs:909](../../crates/crysirror-tjs2/src/vm/mod.rs#L909) |
+| `0x15 incp` | incp | Handled | — | [mod.rs:909](../../crates/crysirror-tjs2/src/vm/mod.rs#L909) |
+| `0x16 dec` | dec | Handled | — | [mod.rs:901](../../crates/crysirror-tjs2/src/vm/mod.rs#L901) |
+| `0x17 decpd` | decpd | Handled | — | [mod.rs:909](../../crates/crysirror-tjs2/src/vm/mod.rs#L909) |
+| `0x18 decpi` | decpi | Handled | — | [mod.rs:909](../../crates/crysirror-tjs2/src/vm/mod.rs#L909) |
+| `0x19 decp` | decp | Handled | — | [mod.rs:909](../../crates/crysirror-tjs2/src/vm/mod.rs#L909) |
+| `0x1A lor` | lor | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x1B lorpd` | lorpd | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x1C lorpi` | lorpi | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x1D lorp` | lorp | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x1E land` | land | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x1F landpd` | landpd | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x20 landpi` | landpi | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x21 landp` | landp | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x22 bor` | bor | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x23 borpd` | borpd | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x24 borpi` | borpi | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x25 borp` | borp | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x26 bxor` | bxor | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x27 bxorpd` | bxorpd | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x28 bxorpi` | bxorpi | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x29 bxorp` | bxorp | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x2A band` | band | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x2B bandpd` | bandpd | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x2C bandpi` | bandpi | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x2D bandp` | bandp | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x2E sar` | sar | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x2F sarpd` | sarpd | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x30 sarpi` | sarpi | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x31 sarp` | sarp | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x32 sal` | sal | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x33 salpd` | salpd | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x34 salpi` | salpi | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x35 salp` | salp | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x36 sr` | sr | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x37 srpd` | srpd | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x38 srpi` | srpi | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x39 srp` | srp | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x3A add` | add | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x3B addpd` | addpd | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x3C addpi` | addpi | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x3D addp` | addp | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x3E sub` | sub | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x3F subpd` | subpd | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x40 subpi` | subpi | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x41 subp` | subp | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x42 mod` | mod | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x43 modpd` | modpd | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x44 modpi` | modpi | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x45 modp` | modp | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x46 div` | div | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x47 divpd` | divpd | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x48 divpi` | divpi | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x49 divp` | divp | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x4A idiv` | idiv | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x4B idivpd` | idivpd | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x4C idivpi` | idivpi | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x4D idivp` | idivp | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x4E mul` | mul | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x4F mulpd` | mulpd | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x50 mulpi` | mulpi | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x51 mulp` | mulp | Handled | — | [mod.rs:910](../../crates/crysirror-tjs2/src/vm/mod.rs#L910) |
+| `0x52 bnot` | bnot | Handled | — | [mod.rs:911](../../crates/crysirror-tjs2/src/vm/mod.rs#L911) |
+| `0x53 typeof` | typeof | Handled | — | [mod.rs:915](../../crates/crysirror-tjs2/src/vm/mod.rs#L915) |
+| `0x54 typeofd` | typeofd | Handled | — | [mod.rs:919](../../crates/crysirror-tjs2/src/vm/mod.rs#L919) |
+| `0x55 typeofi` | typeofi | Handled | — | [mod.rs:923](../../crates/crysirror-tjs2/src/vm/mod.rs#L923) |
+| `0x56 eval` | eval | Handled | — | [mod.rs:927](../../crates/crysirror-tjs2/src/vm/mod.rs#L927) |
+| `0x57 eexp` | eexp | Handled | — | [mod.rs:927](../../crates/crysirror-tjs2/src/vm/mod.rs#L927) |
+| `0x58 chkins` | chkins | Handled | — | [mod.rs:928](../../crates/crysirror-tjs2/src/vm/mod.rs#L928) |
+| `0x59 asc` | asc | Handled | — | [mod.rs:933](../../crates/crysirror-tjs2/src/vm/mod.rs#L933) |
+| `0x5A chr` | chr | Handled | — | [mod.rs:937](../../crates/crysirror-tjs2/src/vm/mod.rs#L937) |
+| `0x5B num` | num | Handled | — | [mod.rs:941](../../crates/crysirror-tjs2/src/vm/mod.rs#L941) |
+| `0x5C chs` | chs | Handled | — | [mod.rs:945](../../crates/crysirror-tjs2/src/vm/mod.rs#L945) |
+| `0x5D inv` | inv | Handled | — | [mod.rs:949](../../crates/crysirror-tjs2/src/vm/mod.rs#L949) |
+| `0x5E chkinv` | chkinv | Handled | — | [mod.rs:952](../../crates/crysirror-tjs2/src/vm/mod.rs#L952) |
+| `0x5F int` | int | Handled | — | [mod.rs:959](../../crates/crysirror-tjs2/src/vm/mod.rs#L959) |
+| `0x60 real` | real | Handled | — | [mod.rs:963](../../crates/crysirror-tjs2/src/vm/mod.rs#L963) |
+| `0x61 str` | str | Handled | — | [mod.rs:967](../../crates/crysirror-tjs2/src/vm/mod.rs#L967) |
+| `0x62 octet` | octet | Handled | — | [mod.rs:971](../../crates/crysirror-tjs2/src/vm/mod.rs#L971) |
+| `0x63 call` | Call a function | Handled | — | [mod.rs:975](../../crates/crysirror-tjs2/src/vm/mod.rs#L975) |
+| `0x64 calld` | Call a named property | Handled | — | [mod.rs:1011](../../crates/crysirror-tjs2/src/vm/mod.rs#L1011) |
+| `0x65 calli` | Call an indexed property | Handled | — | [mod.rs:1048](../../crates/crysirror-tjs2/src/vm/mod.rs#L1048) |
+| `0x66 new` | Construct an object | Handled | — | [mod.rs:975](../../crates/crysirror-tjs2/src/vm/mod.rs#L975) |
+| `0x67 gpd` | gpd | Handled | — | [mod.rs:1085](../../crates/crysirror-tjs2/src/vm/mod.rs#L1085) |
+| `0x68 spd` | spd | Handled | — | [mod.rs:1096](../../crates/crysirror-tjs2/src/vm/mod.rs#L1096) |
+| `0x69 spde` | spde | Handled | — | [mod.rs:1096](../../crates/crysirror-tjs2/src/vm/mod.rs#L1096) |
+| `0x6A spdeh` | spdeh | Handled | — | [mod.rs:1096](../../crates/crysirror-tjs2/src/vm/mod.rs#L1096) |
+| `0x6B gpi` | gpi | Handled | — | [mod.rs:1108](../../crates/crysirror-tjs2/src/vm/mod.rs#L1108) |
+| `0x6C spi` | spi | Handled | — | [mod.rs:1119](../../crates/crysirror-tjs2/src/vm/mod.rs#L1119) |
+| `0x6D spie` | spie | Handled | — | [mod.rs:1119](../../crates/crysirror-tjs2/src/vm/mod.rs#L1119) |
+| `0x6E gpds` | gpds | Handled | — | [mod.rs:1085](../../crates/crysirror-tjs2/src/vm/mod.rs#L1085) |
+| `0x6F spds` | spds | Handled | — | [mod.rs:1096](../../crates/crysirror-tjs2/src/vm/mod.rs#L1096) |
+| `0x70 gpis` | gpis | Handled | — | [mod.rs:1108](../../crates/crysirror-tjs2/src/vm/mod.rs#L1108) |
+| `0x71 spis` | spis | Handled | — | [mod.rs:1119](../../crates/crysirror-tjs2/src/vm/mod.rs#L1119) |
+| `0x72 setp` | setp | Handled | — | [mod.rs:1130](../../crates/crysirror-tjs2/src/vm/mod.rs#L1130) |
+| `0x73 getp` | getp | Handled | — | [mod.rs:1135](../../crates/crysirror-tjs2/src/vm/mod.rs#L1135) |
+| `0x74 deld` | deld | Handled | — | [mod.rs:1140](../../crates/crysirror-tjs2/src/vm/mod.rs#L1140) |
+| `0x75 deli` | deli | Handled | — | [mod.rs:1148](../../crates/crysirror-tjs2/src/vm/mod.rs#L1148) |
+| `0x76 srv` | srv | Handled | — | [mod.rs:1156](../../crates/crysirror-tjs2/src/vm/mod.rs#L1156) |
+| `0x77 ret` | Return from a call | Handled | — | [mod.rs:1157](../../crates/crysirror-tjs2/src/vm/mod.rs#L1157) |
+| `0x78 entry` | entry | Handled | — | [mod.rs:1158](../../crates/crysirror-tjs2/src/vm/mod.rs#L1158) |
+| `0x79 extry` | extry | Handled | — | [mod.rs:1165](../../crates/crysirror-tjs2/src/vm/mod.rs#L1165) |
+| `0x7A throw` | Throw an exception | Handled | — | [mod.rs:1168](../../crates/crysirror-tjs2/src/vm/mod.rs#L1168) |
+| `0x7B chgthis` | chgthis | Handled | — | [mod.rs:1176](../../crates/crysirror-tjs2/src/vm/mod.rs#L1176) |
+| `0x7C global` | global | Handled | — | [mod.rs:1182](../../crates/crysirror-tjs2/src/vm/mod.rs#L1182) |
+| `0x7D addci` | addci | Handled | — | [mod.rs:1183](../../crates/crysirror-tjs2/src/vm/mod.rs#L1183) |
+| `0x7E regmember` | regmember | Handled | — | [mod.rs:1230](../../crates/crysirror-tjs2/src/vm/mod.rs#L1230) |
+| `0x7F debugger` | Debugger instruction | Empty handler | Original no-op status not established | [mod.rs:826](../../crates/crysirror-tjs2/src/vm/mod.rs#L826) |
 
 ## TJS2 VM opcodes / inst.opcode=104..=106 \| 111
 
 | ID / API | Purpose | Status | Gap / condition | Source |
 | --- | --- | --- | --- | --- |
-| `0x69` | Execute execute instruction branch | Handled | — | [mod.rs:1083](../../crates/crysirror-tjs2/src/vm/mod.rs#L1083) |
-| `0x6A` | Execute execute instruction branch | Handled | — | [mod.rs:1084](../../crates/crysirror-tjs2/src/vm/mod.rs#L1084) |
-| `0x6F` | Execute execute instruction branch | Handled | — | [mod.rs:1085](../../crates/crysirror-tjs2/src/vm/mod.rs#L1085) |
+| `0x69` | Execute execute instruction branch | Handled | — | [mod.rs:1098](../../crates/crysirror-tjs2/src/vm/mod.rs#L1098) |
+| `0x6A` | Execute execute instruction branch | Handled | — | [mod.rs:1099](../../crates/crysirror-tjs2/src/vm/mod.rs#L1099) |
+| `0x6F` | Execute execute instruction branch | Handled | — | [mod.rs:1100](../../crates/crysirror-tjs2/src/vm/mod.rs#L1100) |
 
 ## TJS2 VM opcodes / inst.opcode=108 \| 109 \| 113
 
 | ID / API | Purpose | Status | Gap / condition | Source |
 | --- | --- | --- | --- | --- |
-| `0x6D` | Execute execute instruction branch | Handled | — | [mod.rs:1106](../../crates/crysirror-tjs2/src/vm/mod.rs#L1106) |
-| `0x71` | Execute execute instruction branch | Handled | — | [mod.rs:1107](../../crates/crysirror-tjs2/src/vm/mod.rs#L1107) |
+| `0x6D` | Execute execute instruction branch | Handled | — | [mod.rs:1121](../../crates/crysirror-tjs2/src/vm/mod.rs#L1121) |
+| `0x71` | Execute execute instruction branch | Handled | — | [mod.rs:1122](../../crates/crysirror-tjs2/src/vm/mod.rs#L1122) |
 
 ## TextRenderBase default properties
 
@@ -1587,13 +1601,13 @@ fn execute(&mut self, h: &mut dyn HostServices, input: InputFrame) -> Result<VmY
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `kind == 1 && !self .rt .as_ref() .unwrap() .host() .timers .get(&id) .is_some_and(\|t\| t.enabled && t.interval != 0)` | Local state/value operations | Handled | [837](../../crates/crysirror-krkr/src/adapter.rs#L837) |
-| `condition` | `kind==3` | crate::layer_movie::take_event, self.rt.as_mut, self.events.entry | Handled | [849](../../crates/crysirror-krkr/src/adapter.rs#L849) |
-| `kind` | `0` | Local state/value operations | Handled | [857](../../crates/crysirror-krkr/src/adapter.rs#L857) |
-| `kind` | `1` | Local state/value operations | Handled | [858](../../crates/crysirror-krkr/src/adapter.rs#L858) |
-| `kind` | `2` | Local state/value operations | Handled | [859](../../crates/crysirror-krkr/src/adapter.rs#L859) |
-| `kind` | `_` | Local state/value operations | Handled | [860](../../crates/crysirror-krkr/src/adapter.rs#L860) |
-| `condition` | `has_member(rt, ObjectHandle(id), "onPaint")` | self.call | Handled | [932](../../crates/crysirror-krkr/src/adapter.rs#L932) |
+| `condition` | `kind == 1 && !self .rt .as_ref() .unwrap() .host() .timers .get(&id) .is_some_and(\|t\| t.enabled && t.interval != 0)` | Local state/value operations | Handled | [872](../../crates/crysirror-krkr/src/adapter.rs#L872) |
+| `condition` | `kind==3` | crate::layer_movie::take_event, self.rt.as_mut, self.events.entry | Handled | [884](../../crates/crysirror-krkr/src/adapter.rs#L884) |
+| `kind` | `0` | Local state/value operations | Handled | [892](../../crates/crysirror-krkr/src/adapter.rs#L892) |
+| `kind` | `1` | Local state/value operations | Handled | [893](../../crates/crysirror-krkr/src/adapter.rs#L893) |
+| `kind` | `2` | Local state/value operations | Handled | [894](../../crates/crysirror-krkr/src/adapter.rs#L894) |
+| `kind` | `_` | Local state/value operations | Handled | [895](../../crates/crysirror-krkr/src/adapter.rs#L895) |
+| `condition` | `has_member(rt, ObjectHandle(id), "onPaint")` | self.call | Handled | [967](../../crates/crysirror-krkr/src/adapter.rs#L967) |
 
 ### adapter.rs / KrkrVm::hit_candidate
 
@@ -1645,6 +1659,34 @@ fn link(rt: &mut Rt, name: &str) -> Result<()>
 | `name` | `"wuvorbis.dll"` | Local state/value operations | Handled | [10](../../crates/crysirror-krkr/src/audio_plugin.rs#L10) |
 | `name` | `"wumsadp.dll"` | Local state/value operations | Handled | [11](../../crates/crysirror-krkr/src/audio_plugin.rs#L11) |
 | `name` | `_` | TjsError::runtime | Unsupported: unknown native audio codec module | [12](../../crates/crysirror-krkr/src/audio_plugin.rs#L12) |
+
+### d2d_view.rs / attach
+
+```rust
+fn attach(rt: &mut Rt, window: ObjectHandle, layer: ObjectHandle) -> ()
+```
+
+| Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
+| --- | --- | --- | --- | --- |
+| `key` | `"visible"` | i64::from | Handled | [115](../../crates/crysirror-krkr/src/d2d_view.rs#L115) |
+| `key` | `"opacity"` | Local state/value operations | Handled | [116](../../crates/crysirror-krkr/src/d2d_view.rs#L116) |
+| `key` | `"order"` | Local state/value operations | Handled | [117](../../crates/crysirror-krkr/src/d2d_view.rs#L117) |
+| `key` | `_` | Local state/value operations | Handled | [118](../../crates/crysirror-krkr/src/d2d_view.rs#L118) |
+| `key` | `"visible"` | Local state/value operations | Handled | [125](../../crates/crysirror-krkr/src/d2d_view.rs#L125) |
+| `key` | `"opacity"` | Local state/value operations | Handled | [126](../../crates/crysirror-krkr/src/d2d_view.rs#L126) |
+| `key` | `"order"` | Local state/value operations | Handled | [127](../../crates/crysirror-krkr/src/d2d_view.rs#L127) |
+| `key` | `_` | Local state/value operations | Handled | [128](../../crates/crysirror-krkr/src/d2d_view.rs#L128) |
+
+### d2d_view.rs / sync_window_zoom
+
+```rust
+fn sync_window_zoom(rt: &mut Rt, window: ObjectHandle) -> ()
+```
+
+| Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
+| --- | --- | --- | --- | --- |
+| `rt.object_member(window, key)` | `Variant::Integer(n) if n > 0` | Local state/value operations | Handled | [52](../../crates/crysirror-krkr/src/d2d_view.rs#L52) |
+| `rt.object_member(window, key)` | `_` | Local state/value operations | Handled | [53](../../crates/crysirror-krkr/src/d2d_view.rs#L53) |
 
 ### draw_plugin.rs / draw
 
@@ -1710,6 +1752,20 @@ fn shape(rt: &Rt, name: &str, a: &[Variant], skip: usize) -> Result<Vec<C>>
 | `name` | `"drawLines"` | vector::polygon | Handled | [208](../../crates/crysirror-krkr/src/draw_plugin.rs#L208) |
 | `name` | `_` | Local state/value operations | Unsupported: solid rectangle/polygon/line path profile | [212](../../crates/crysirror-krkr/src/draw_plugin.rs#L212) |
 
+### edit_dialog.rs / set_item_text
+
+```rust
+fn set_item_text(
+    rt: &mut Rt,
+    this: Option<ObjectHandle>,
+    args: Vec<Variant>,
+) -> Result<Variant>
+```
+
+| Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
+| --- | --- | --- | --- | --- |
+| `condition` | `rt.object_member(owner, "__editControl") == Variant::Integer(id)` | Local state/value operations | Handled | [84](../../crates/crysirror-krkr/src/edit_dialog.rs#L84) |
+
 ### exe_options.rs / parse
 
 ```rust
@@ -1738,11 +1794,11 @@ fn encode_native_text(text:&str,mode:&str) -> TjsResult<Vec<u8>>
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `mode` | `""` | Local state/value operations | Handled | [1133](../../crates/crysirror-krkr/src/host.rs#L1133) |
-| `mode` | `"c"\|"c1"` | Local state/value operations | Handled | [1134](../../crates/crysirror-krkr/src/host.rs#L1134) |
-| `mode` | `"c2"\|"z"` | Local state/value operations | Handled | [1135](../../crates/crysirror-krkr/src/host.rs#L1135) |
-| `mode` | `mode if mode.len()==2&&mode.starts_with('z')&&mode.as_bytes()[1].is_ascii_digit()` | Local state/value operations | Handled | [1136](../../crates/crysirror-krkr/src/host.rs#L1136) |
-| `mode` | `_` | TjsError::runtime | Unsupported: native text offset/unknown compression mode is unsupported | [1137](../../crates/crysirror-krkr/src/host.rs#L1137) |
+| `mode` | `""` | Local state/value operations | Handled | [1230](../../crates/crysirror-krkr/src/host.rs#L1230) |
+| `mode` | `"c"\|"c1"` | Local state/value operations | Handled | [1231](../../crates/crysirror-krkr/src/host.rs#L1231) |
+| `mode` | `"c2"\|"z"` | Local state/value operations | Handled | [1232](../../crates/crysirror-krkr/src/host.rs#L1232) |
+| `mode` | `mode if mode.len()==2&&mode.starts_with('z')&&mode.as_bytes()[1].is_ascii_digit()` | Local state/value operations | Handled | [1233](../../crates/crysirror-krkr/src/host.rs#L1233) |
+| `mode` | `_` | TjsError::runtime | Unsupported: native text offset/unknown compression mode is unsupported | [1234](../../crates/crysirror-krkr/src/host.rs#L1234) |
 
 ### host.rs / KrkrHost::bind_reserved_layer
 
@@ -1752,7 +1808,7 @@ fn bind_reserved_layer(&mut self, handle: ObjectHandle, window: usize, parent: O
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `id==handle.0` | TjsError::runtime | Unsupported: native parent cycle | [502](../../crates/crysirror-krkr/src/host.rs#L502) |
+| `condition` | `id==handle.0` | TjsError::runtime | Unsupported: native parent cycle | [582](../../crates/crysirror-krkr/src/host.rs#L582) |
 
 ### host.rs / KrkrHost::canvas_op
 
@@ -1762,13 +1818,13 @@ fn canvas_op(&mut self, mut op: Value) -> ()
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `op["op"].as_str() == Some("copy")` | self.layers.iter, u64::from, self.motion.has_frame | Handled | [366](../../crates/crysirror-krkr/src/host.rs#L366) |
-| `condition` | `matches!( op["op"].as_str(), Some("clear" \| "set" \| "draw" \| "copy" \| "create") )` | self.layers.values_mut, u8::try_from | Handled | [374](../../crates/crysirror-krkr/src/host.rs#L374) |
-| `condition` | `let Some(id) = op .get("destination") .or_else(\|\| op.get("id")) .and_then(Value::as_u64)` | self.layers.values_mut, u8::try_from | Handled | [378](../../crates/crysirror-krkr/src/host.rs#L378) |
-| `condition; under op["op"].as_str()=Some("clear")` | `let Ok(color)=serde_json::from_value::<[u8;4]>(op["color"].clone())` | Local state/value operations | Handled | [392](../../crates/crysirror-krkr/src/host.rs#L392) |
-| `op["op"].as_str()` | `Some("clear")` | u8::try_from | Handled | [391](../../crates/crysirror-krkr/src/host.rs#L391) |
-| `op["op"].as_str()` | `Some("draw") if l.full_alpha == Some(255)` | Local state/value operations | Handled | [398](../../crates/crysirror-krkr/src/host.rs#L398) |
-| `op["op"].as_str()` | `_` | Local state/value operations | Handled | [399](../../crates/crysirror-krkr/src/host.rs#L399) |
+| `condition` | `op["op"].as_str() == Some("copy")` | usize::try_from, self.slot_owners.get, self.motion.has_frame, self.layers.get | Handled | [434](../../crates/crysirror-krkr/src/host.rs#L434) |
+| `condition` | `matches!( op["op"].as_str(), Some("clear" \| "set" \| "draw" \| "copy" \| "create") )` | usize::try_from, self.slot_owners.get, self.layers.get_mut, u8::try_from | Handled | [444](../../crates/crysirror-krkr/src/host.rs#L444) |
+| `condition` | `let Some(id) = op .get("destination") .or_else(\|\| op.get("id")) .and_then(Value::as_u64)` | usize::try_from, self.slot_owners.get, self.layers.get_mut, u8::try_from | Handled | [448](../../crates/crysirror-krkr/src/host.rs#L448) |
+| `condition; under op["op"].as_str()=Some("clear")` | `let Ok(color)=serde_json::from_value::<[u8;4]>(op["color"].clone())` | Local state/value operations | Handled | [463](../../crates/crysirror-krkr/src/host.rs#L463) |
+| `op["op"].as_str()` | `Some("clear")` | u8::try_from | Handled | [462](../../crates/crysirror-krkr/src/host.rs#L462) |
+| `op["op"].as_str()` | `Some("draw") if l.full_alpha == Some(255)` | Local state/value operations | Handled | [469](../../crates/crysirror-krkr/src/host.rs#L469) |
+| `op["op"].as_str()` | `_` | Local state/value operations | Handled | [470](../../crates/crysirror-krkr/src/host.rs#L470) |
 
 ### host.rs / KrkrHost::sync
 
@@ -1778,7 +1834,7 @@ fn sync(&mut self) -> TjsResult<()>
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `l.kind == 0` | Local state/value operations | Handled | [850](../../crates/crysirror-krkr/src/host.rs#L850) |
+| `condition` | `l.kind == 0` | Local state/value operations | Handled | [944](../../crates/crysirror-krkr/src/host.rs#L944) |
 
 ### host.rs / KrkrHost::write_binary
 
@@ -1788,7 +1844,7 @@ fn write_binary(&mut self, name: &str, mode: &str, bytes: &[u8]) -> TjsResult<()
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `mode != "b"` | TjsError::runtime | Unsupported: native binary stream mode is unsupported | [1078](../../crates/crysirror-krkr/src/host.rs#L1078) |
+| `condition` | `mode != "b"` | TjsError::runtime | Unsupported: native binary stream mode is unsupported | [1175](../../crates/crysirror-krkr/src/host.rs#L1175) |
 
 ### http_plugin.rs / members
 
@@ -1830,7 +1886,7 @@ fn prepare_hit_image(
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `kind!=0 \|\| !(1..256).contains(&threshold) \|\| !layer.has_image \|\| layer.kind==1 \|\| layer.full_alpha.is_some() \|\| px<0 \|\| py<0 \|\| px>=layer.image_width \|\| py>=layer.image_height` | Local state/value operations | Handled | [397](../../crates/crysirror-krkr/src/image_api.rs#L397) |
+| `condition` | `kind!=0 \|\| !(1..256).contains(&threshold) \|\| !layer.has_image \|\| layer.kind==1 \|\| layer.full_alpha.is_some() \|\| px<0 \|\| py<0 \|\| px>=layer.image_width \|\| py>=layer.image_height` | Local state/value operations | Handled | [427](../../crates/crysirror-krkr/src/image_api.rs#L427) |
 
 ### image_api.rs / queue_chain
 
@@ -1845,7 +1901,7 @@ fn queue_chain(
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `e["kind"] == "flip"` | Local state/value operations | Handled | [482](../../crates/crysirror-krkr/src/image_api.rs#L482) |
+| `condition` | `e["kind"] == "flip"` | Local state/value operations | Handled | [512](../../crates/crysirror-krkr/src/image_api.rs#L512) |
 
 ### image_api.rs / save_format
 
@@ -1855,11 +1911,11 @@ fn save_format(mode:&str) -> Option<SaveFormat>
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `mode.to_ascii_lowercase().trim_start_matches('.')` | `"bmp"\|"bmp32"\|"dib"` | SaveFormat::Bmp | Handled | [252](../../crates/crysirror-krkr/src/image_api.rs#L252) |
-| `mode.to_ascii_lowercase().trim_start_matches('.')` | `"bmp24"` | SaveFormat::Bmp | Handled | [253](../../crates/crysirror-krkr/src/image_api.rs#L253) |
-| `mode.to_ascii_lowercase().trim_start_matches('.')` | `"bmp8"` | SaveFormat::Bmp | Handled | [254](../../crates/crysirror-krkr/src/image_api.rs#L254) |
-| `mode.to_ascii_lowercase().trim_start_matches('.')` | `"png"` | Local state/value operations | Handled | [255](../../crates/crysirror-krkr/src/image_api.rs#L255) |
-| `mode.to_ascii_lowercase().trim_start_matches('.')` | `_` | Local state/value operations | Return only: Boolean/optional result interpreted by the caller | [256](../../crates/crysirror-krkr/src/image_api.rs#L256) |
+| `mode.to_ascii_lowercase().trim_start_matches('.')` | `"bmp"\|"bmp32"\|"dib"` | SaveFormat::Bmp | Handled | [255](../../crates/crysirror-krkr/src/image_api.rs#L255) |
+| `mode.to_ascii_lowercase().trim_start_matches('.')` | `"bmp24"` | SaveFormat::Bmp | Handled | [256](../../crates/crysirror-krkr/src/image_api.rs#L256) |
+| `mode.to_ascii_lowercase().trim_start_matches('.')` | `"bmp8"` | SaveFormat::Bmp | Handled | [257](../../crates/crysirror-krkr/src/image_api.rs#L257) |
+| `mode.to_ascii_lowercase().trim_start_matches('.')` | `"png"` | Local state/value operations | Handled | [258](../../crates/crysirror-krkr/src/image_api.rs#L258) |
+| `mode.to_ascii_lowercase().trim_start_matches('.')` | `_` | Local state/value operations | Return only: Boolean/optional result interpreted by the caller | [259](../../crates/crysirror-krkr/src/image_api.rs#L259) |
 
 ### image_api.rs / save_layer_image
 
@@ -1869,7 +1925,7 @@ fn save_layer_image(rt:&mut Rt,t:Option<ObjectHandle>,args:Vec<Variant>) -> Resu
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `matches!(mode.to_ascii_lowercase().trim_start_matches('.'),"jpg"\|"jpeg"\|"tlg"\|"tlg5"\|"tlg6")` | Local state/value operations | Handled | [268](../../crates/crysirror-krkr/src/image_api.rs#L268) |
+| `condition` | `matches!(mode.to_ascii_lowercase().trim_start_matches('.'),"jpg"\|"jpeg"\|"tlg"\|"tlg5"\|"tlg6")` | Local state/value operations | Handled | [271](../../crates/crysirror-krkr/src/image_api.rs#L271) |
 
 ### input_delivery.rs / Delivery::posted
 
@@ -2009,30 +2065,30 @@ fn install_player(rt: &mut Rt, c: ObjectHandle) -> ()
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `key == "chara"` | Local state/value operations | Handled | [474](../../crates/crysirror-krkr/src/motion_plugin.rs#L474) |
-| `condition` | `key == "motion"` | Local state/value operations | Unsupported: Motion.Player.motion assignment / play(motion,flags) | [483](../../crates/crysirror-krkr/src/motion_plugin.rs#L483) |
-| `key` | `"speed"` | Local state/value operations | Handled | [526](../../crates/crysirror-krkr/src/motion_plugin.rs#L526) |
-| `key` | `"tickCount"` | Local state/value operations | Handled | [527](../../crates/crysirror-krkr/src/motion_plugin.rs#L527) |
-| `key` | `"frameTickCount"` | Local state/value operations | Handled | [528](../../crates/crysirror-krkr/src/motion_plugin.rs#L528) |
-| `key` | `"lastTime"` | Local state/value operations | Handled | [529](../../crates/crysirror-krkr/src/motion_plugin.rs#L529) |
-| `key` | `"frameLastTime"` | Local state/value operations | Handled | [530](../../crates/crysirror-krkr/src/motion_plugin.rs#L530) |
-| `key` | `"loopTime"` | Local state/value operations | Handled | [531](../../crates/crysirror-krkr/src/motion_plugin.rs#L531) |
-| `key` | `"frameLoopTime"` | Local state/value operations | Handled | [532](../../crates/crysirror-krkr/src/motion_plugin.rs#L532) |
-| `key` | `"opacity"` | f64::from | Handled | [533](../../crates/crysirror-krkr/src/motion_plugin.rs#L533) |
-| `key` | `"visible"` | Local state/value operations | Handled | [534](../../crates/crysirror-krkr/src/motion_plugin.rs#L534) |
-| `key` | `"completionType"` | Local state/value operations | Handled | [535](../../crates/crysirror-krkr/src/motion_plugin.rs#L535) |
-| `key` | `"colorWeight"` | Local state/value operations | Handled | [536](../../crates/crysirror-krkr/src/motion_plugin.rs#L536) |
-| `key` | `"maskMode"` | Local state/value operations | Handled | [537](../../crates/crysirror-krkr/src/motion_plugin.rs#L537) |
-| `key` | `_` | Local state/value operations | Handled | [538](../../crates/crysirror-krkr/src/motion_plugin.rs#L538) |
-| `key` | `"speed" if n >= 0.` | Local state/value operations | Handled | [550](../../crates/crysirror-krkr/src/motion_plugin.rs#L550) |
-| `key` | `"tickCount" if n >= 0.` | Local state/value operations | Handled | [551](../../crates/crysirror-krkr/src/motion_plugin.rs#L551) |
-| `key` | `"frameTickCount" if n >= 0.` | Local state/value operations | Handled | [552](../../crates/crysirror-krkr/src/motion_plugin.rs#L552) |
-| `key` | `"opacity" if (0. ..=255.).contains(&n)` | Local state/value operations | Handled | [553](../../crates/crysirror-krkr/src/motion_plugin.rs#L553) |
-| `key` | `"visible"` | Local state/value operations | Handled | [554](../../crates/crysirror-krkr/src/motion_plugin.rs#L554) |
-| `key` | `"completionType" if n == 0. \|\| n == 1. \|\| n == 2.` | Local state/value operations | Handled | [555](../../crates/crysirror-krkr/src/motion_plugin.rs#L555) |
-| `key` | `"colorWeight" if n == 4286611584.` | Local state/value operations | Empty handler: Original no-op status not established | [556](../../crates/crysirror-krkr/src/motion_plugin.rs#L556) |
-| `key` | `"maskMode" if n == 1. \|\| n == 2.` | Local state/value operations | Empty handler: Original no-op status not established | [557](../../crates/crysirror-krkr/src/motion_plugin.rs#L557) |
-| `key` | `_` | Local state/value operations | Unsupported: Motion.Player.{key}={n} / supported motion property profile | [558](../../crates/crysirror-krkr/src/motion_plugin.rs#L558) |
+| `condition` | `key == "chara"` | Local state/value operations | Handled | [503](../../crates/crysirror-krkr/src/motion_plugin.rs#L503) |
+| `condition` | `key == "motion"` | Local state/value operations | Unsupported: Motion.Player.motion assignment / play(motion,flags) | [512](../../crates/crysirror-krkr/src/motion_plugin.rs#L512) |
+| `key` | `"speed"` | Local state/value operations | Handled | [555](../../crates/crysirror-krkr/src/motion_plugin.rs#L555) |
+| `key` | `"tickCount"` | Local state/value operations | Handled | [556](../../crates/crysirror-krkr/src/motion_plugin.rs#L556) |
+| `key` | `"frameTickCount"` | Local state/value operations | Handled | [557](../../crates/crysirror-krkr/src/motion_plugin.rs#L557) |
+| `key` | `"lastTime"` | Local state/value operations | Handled | [558](../../crates/crysirror-krkr/src/motion_plugin.rs#L558) |
+| `key` | `"frameLastTime"` | Local state/value operations | Handled | [559](../../crates/crysirror-krkr/src/motion_plugin.rs#L559) |
+| `key` | `"loopTime"` | Local state/value operations | Handled | [560](../../crates/crysirror-krkr/src/motion_plugin.rs#L560) |
+| `key` | `"frameLoopTime"` | Local state/value operations | Handled | [561](../../crates/crysirror-krkr/src/motion_plugin.rs#L561) |
+| `key` | `"opacity"` | f64::from | Handled | [562](../../crates/crysirror-krkr/src/motion_plugin.rs#L562) |
+| `key` | `"visible"` | Local state/value operations | Handled | [563](../../crates/crysirror-krkr/src/motion_plugin.rs#L563) |
+| `key` | `"completionType"` | Local state/value operations | Handled | [564](../../crates/crysirror-krkr/src/motion_plugin.rs#L564) |
+| `key` | `"colorWeight"` | Local state/value operations | Handled | [565](../../crates/crysirror-krkr/src/motion_plugin.rs#L565) |
+| `key` | `"maskMode"` | Local state/value operations | Handled | [566](../../crates/crysirror-krkr/src/motion_plugin.rs#L566) |
+| `key` | `_` | Local state/value operations | Handled | [567](../../crates/crysirror-krkr/src/motion_plugin.rs#L567) |
+| `key` | `"speed" if n >= 0.` | Local state/value operations | Handled | [579](../../crates/crysirror-krkr/src/motion_plugin.rs#L579) |
+| `key` | `"tickCount" if n >= 0.` | Local state/value operations | Handled | [580](../../crates/crysirror-krkr/src/motion_plugin.rs#L580) |
+| `key` | `"frameTickCount" if n >= 0.` | Local state/value operations | Handled | [581](../../crates/crysirror-krkr/src/motion_plugin.rs#L581) |
+| `key` | `"opacity" if (0. ..=255.).contains(&n)` | Local state/value operations | Handled | [582](../../crates/crysirror-krkr/src/motion_plugin.rs#L582) |
+| `key` | `"visible"` | Local state/value operations | Handled | [583](../../crates/crysirror-krkr/src/motion_plugin.rs#L583) |
+| `key` | `"completionType" if n == 0. \|\| n == 1. \|\| n == 2.` | Local state/value operations | Handled | [584](../../crates/crysirror-krkr/src/motion_plugin.rs#L584) |
+| `key` | `"colorWeight" if n == 4286611584.` | Local state/value operations | Empty handler: Original no-op status not established | [585](../../crates/crysirror-krkr/src/motion_plugin.rs#L585) |
+| `key` | `"maskMode" if n == 1. \|\| n == 2.` | Local state/value operations | Empty handler: Original no-op status not established | [586](../../crates/crysirror-krkr/src/motion_plugin.rs#L586) |
+| `key` | `_` | Local state/value operations | Unsupported: Motion.Player.{key}={n} / supported motion property profile | [587](../../crates/crysirror-krkr/src/motion_plugin.rs#L587) |
 
 ### motion_plugin.rs / State::invalidate
 
@@ -2042,7 +2098,7 @@ fn invalidate(&mut self, id: usize) -> ()
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `self .loading .as_ref() .is_some_and(\|p\| p.manager == id \|\| p.result.0 == id)` | self.loading.take | Handled | [185](../../crates/crysirror-krkr/src/motion_plugin.rs#L185) |
+| `condition` | `self .loading .as_ref() .is_some_and(\|p\| p.manager == id \|\| p.result.0 == id)` | self.loading.take | Handled | [214](../../crates/crysirror-krkr/src/motion_plugin.rs#L214) |
 
 ### native_extra.rs / post_input
 
@@ -2052,11 +2108,11 @@ fn post_input(rt: &mut Rt, t: Option<ObjectHandle>, a: Vec<Variant>) -> Result<V
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `name.as_str()` | `"onKeyDown"` | Local state/value operations | Handled | [272](../../crates/crysirror-krkr/src/native_extra.rs#L272) |
-| `name.as_str()` | `"onKeyUp"` | Local state/value operations | Handled | [273](../../crates/crysirror-krkr/src/native_extra.rs#L273) |
-| `name.as_str()` | `"onKeyPress"` | Local state/value operations | Handled | [274](../../crates/crysirror-krkr/src/native_extra.rs#L274) |
-| `name.as_str()` | `_` | TjsError::runtime | Unsupported: Specified event name is unknown: {name} | [275](../../crates/crysirror-krkr/src/native_extra.rs#L275) |
-| `condition` | `method == "onKeyPress"` | Local state/value operations | Handled | [286](../../crates/crysirror-krkr/src/native_extra.rs#L286) |
+| `name.as_str()` | `"onKeyDown"` | Local state/value operations | Handled | [270](../../crates/crysirror-krkr/src/native_extra.rs#L270) |
+| `name.as_str()` | `"onKeyUp"` | Local state/value operations | Handled | [271](../../crates/crysirror-krkr/src/native_extra.rs#L271) |
+| `name.as_str()` | `"onKeyPress"` | Local state/value operations | Handled | [272](../../crates/crysirror-krkr/src/native_extra.rs#L272) |
+| `name.as_str()` | `_` | TjsError::runtime | Unsupported: Specified event name is unknown: {name} | [273](../../crates/crysirror-krkr/src/native_extra.rs#L273) |
+| `condition` | `method == "onKeyPress"` | Local state/value operations | Handled | [284](../../crates/crysirror-krkr/src/native_extra.rs#L284) |
 
 ### native_extra.rs / release_touch
 
@@ -2070,7 +2126,7 @@ fn release_touch(
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `rt.host().extra.touches.get(&id) == Some(&h.0)` | Local state/value operations | Handled | [235](../../crates/crysirror-krkr/src/native_extra.rs#L235) |
+| `condition` | `rt.host().extra.touches.get(&id) == Some(&h.0)` | Local state/value operations | Handled | [233](../../crates/crysirror-krkr/src/native_extra.rs#L233) |
 
 ### native_extra.rs / State::invalidate
 
@@ -2165,12 +2221,12 @@ fn composite_source(
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `(replace, dest.kind == 1, alpha_source)` | `_ if mode == -1` | Local state/value operations | Handled | [3467](../../crates/crysirror-krkr/src/natives.rs#L3467) |
-| `(replace, dest.kind == 1, alpha_source)` | `(true, _, _)` | Local state/value operations | Handled | [3468](../../crates/crysirror-krkr/src/natives.rs#L3468) |
-| `(replace, dest.kind == 1, alpha_source)` | `(false, false, true)` | Local state/value operations | Handled | [3469](../../crates/crysirror-krkr/src/natives.rs#L3469) |
-| `(replace, dest.kind == 1, alpha_source)` | `(false, false, false)` | Local state/value operations | Handled | [3470](../../crates/crysirror-krkr/src/natives.rs#L3470) |
-| `(replace, dest.kind == 1, alpha_source)` | `(false, true, true)` | Local state/value operations | Handled | [3471](../../crates/crysirror-krkr/src/natives.rs#L3471) |
-| `(replace, dest.kind == 1, alpha_source)` | `(false, true, false)` | Local state/value operations | Handled | [3472](../../crates/crysirror-krkr/src/natives.rs#L3472) |
+| `(replace, dest.kind == 1, alpha_source)` | `_ if mode == -1` | Local state/value operations | Handled | [3525](../../crates/crysirror-krkr/src/natives.rs#L3525) |
+| `(replace, dest.kind == 1, alpha_source)` | `(true, _, _)` | Local state/value operations | Handled | [3526](../../crates/crysirror-krkr/src/natives.rs#L3526) |
+| `(replace, dest.kind == 1, alpha_source)` | `(false, false, true)` | Local state/value operations | Handled | [3527](../../crates/crysirror-krkr/src/natives.rs#L3527) |
+| `(replace, dest.kind == 1, alpha_source)` | `(false, false, false)` | Local state/value operations | Handled | [3528](../../crates/crysirror-krkr/src/natives.rs#L3528) |
+| `(replace, dest.kind == 1, alpha_source)` | `(false, true, true)` | Local state/value operations | Handled | [3529](../../crates/crysirror-krkr/src/natives.rs#L3529) |
+| `(replace, dest.kind == 1, alpha_source)` | `(false, true, false)` | Local state/value operations | Handled | [3530](../../crates/crysirror-krkr/src/natives.rs#L3530) |
 
 ### natives.rs / draw_face
 
@@ -2180,9 +2236,9 @@ fn draw_face(rt: &Rt, h: ObjectHandle) -> i64
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `rt.host().layers.get(&h.0).map_or(2, \|l\| l.kind)` | `1 \| 3 \| 4 \| 5 \| 8 \| 9 \| 10 \| 11` | Local state/value operations | Handled | [2851](../../crates/crysirror-krkr/src/natives.rs#L2851) |
-| `rt.host().layers.get(&h.0).map_or(2, \|l\| l.kind)` | `12` | Local state/value operations | Handled | [2852](../../crates/crysirror-krkr/src/natives.rs#L2852) |
-| `rt.host().layers.get(&h.0).map_or(2, \|l\| l.kind)` | `_` | Local state/value operations | Handled | [2853](../../crates/crysirror-krkr/src/natives.rs#L2853) |
+| `rt.host().layers.get(&h.0).map_or(2, \|l\| l.kind)` | `1 \| 3 \| 4 \| 5 \| 8 \| 9 \| 10 \| 11` | Local state/value operations | Handled | [2895](../../crates/crysirror-krkr/src/natives.rs#L2895) |
+| `rt.host().layers.get(&h.0).map_or(2, \|l\| l.kind)` | `12` | Local state/value operations | Handled | [2896](../../crates/crysirror-krkr/src/natives.rs#L2896) |
+| `rt.host().layers.get(&h.0).map_or(2, \|l\| l.kind)` | `_` | Local state/value operations | Handled | [2897](../../crates/crysirror-krkr/src/natives.rs#L2897) |
 
 ### natives.rs / font_properties
 
@@ -2192,9 +2248,9 @@ fn font_properties(rt: &mut Rt, font: ObjectHandle) -> ()
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `*name` | `"face"` | Variant::String, String::new | Handled | [1693](../../crates/crysirror-krkr/src/natives.rs#L1693) |
-| `*name` | `"height"` | Variant::Integer | Handled | [1694](../../crates/crysirror-krkr/src/natives.rs#L1694) |
-| `*name` | `_` | Variant::Integer | Handled | [1695](../../crates/crysirror-krkr/src/natives.rs#L1695) |
+| `*name` | `"face"` | Variant::String, String::new | Handled | [1702](../../crates/crysirror-krkr/src/natives.rs#L1702) |
+| `*name` | `"height"` | Variant::Integer | Handled | [1703](../../crates/crysirror-krkr/src/natives.rs#L1703) |
+| `*name` | `_` | Variant::Integer | Handled | [1704](../../crates/crysirror-krkr/src/natives.rs#L1704) |
 
 ### natives.rs / install_layer
 
@@ -2204,8 +2260,8 @@ fn install_layer(rt: &mut Rt) -> ()
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `!(0..=31).contains(&kind)` | TjsError::runtime | Unsupported: invalid Layer.type | [1879](../../crates/crysirror-krkr/src/natives.rs#L1879) |
-| `condition` | `id == h.0` | TjsError::runtime | Unsupported: native parent cycle | [2601](../../crates/crysirror-krkr/src/natives.rs#L2601) |
+| `condition` | `!(0..=31).contains(&kind)` | TjsError::runtime | Unsupported: invalid Layer.type | [1906](../../crates/crysirror-krkr/src/natives.rs#L1906) |
+| `condition` | `id == h.0` | TjsError::runtime | Unsupported: native parent cycle | [2637](../../crates/crysirror-krkr/src/natives.rs#L2637) |
 
 ### natives.rs / install_scripts
 
@@ -2215,7 +2271,7 @@ fn install_scripts(rt: &mut Rt) -> ()
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `name.to_ascii_lowercase().ends_with(".pbd") \|\| rt.host().storage()?.resolve(&name).is_some()` | Local state/value operations | Handled | [897](../../crates/crysirror-krkr/src/natives.rs#L897) |
+| `condition` | `name.to_ascii_lowercase().ends_with(".pbd") \|\| rt.host().storage()?.resolve(&name).is_some()` | Local state/value operations | Handled | [900](../../crates/crysirror-krkr/src/natives.rs#L900) |
 
 ### natives.rs / install_window
 
@@ -2225,10 +2281,10 @@ fn install_window(rt: &mut Rt) -> ()
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `name` | `"minWidth"` | Local state/value operations | Handled | [1252](../../crates/crysirror-krkr/src/natives.rs#L1252) |
-| `name` | `"minHeight"` | Local state/value operations | Handled | [1253](../../crates/crysirror-krkr/src/natives.rs#L1253) |
-| `name` | `"maxWidth"` | Local state/value operations | Handled | [1254](../../crates/crysirror-krkr/src/natives.rs#L1254) |
-| `name` | `_` | Local state/value operations | Handled | [1255](../../crates/crysirror-krkr/src/natives.rs#L1255) |
+| `name` | `"minWidth"` | Local state/value operations | Handled | [1257](../../crates/crysirror-krkr/src/natives.rs#L1257) |
+| `name` | `"minHeight"` | Local state/value operations | Handled | [1258](../../crates/crysirror-krkr/src/natives.rs#L1258) |
+| `name` | `"maxWidth"` | Local state/value operations | Handled | [1259](../../crates/crysirror-krkr/src/natives.rs#L1259) |
+| `name` | `_` | Local state/value operations | Handled | [1260](../../crates/crysirror-krkr/src/natives.rs#L1260) |
 
 ### natives.rs / layer_copy
 
@@ -2243,17 +2299,17 @@ fn layer_copy(
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `rt.host().layer(h)?.kind` | `2 \| 13..=28` | Local state/value operations | Handled | [3193](../../crates/crysirror-krkr/src/natives.rs#L3193) |
-| `rt.host().layer(h)?.kind` | `12` | Local state/value operations | Handled | [3194](../../crates/crysirror-krkr/src/natives.rs#L3194) |
-| `rt.host().layer(h)?.kind` | `_` | Local state/value operations | Handled | [3195](../../crates/crysirror-krkr/src/natives.rs#L3195) |
-| `condition` | `atop && !matches!(mode, 2 \| 13 \| 128 \| 16 \| 17)` | Local state/value operations | Handled | [3214](../../crates/crysirror-krkr/src/natives.rs#L3214) |
-| `(atop, mode)` | `(false, _)` | Local state/value operations | Return only: Boolean/optional result interpreted by the caller | [3229](../../crates/crysirror-krkr/src/natives.rs#L3229) |
-| `(atop, mode)` | `_ if copy_main` | Local state/value operations | Handled | [3230](../../crates/crysirror-krkr/src/natives.rs#L3230) |
-| `(atop, mode)` | `(true, 2 \| 13 \| 128)` | Local state/value operations | Handled | [3231](../../crates/crysirror-krkr/src/natives.rs#L3231) |
-| `(atop, mode)` | `(true, 16)` | Local state/value operations | Handled | [3232](../../crates/crysirror-krkr/src/natives.rs#L3232) |
-| `(atop, mode)` | `(true, 17)` | Local state/value operations | Handled | [3233](../../crates/crysirror-krkr/src/natives.rs#L3233) |
-| `(atop, mode)` | `(true, m)` | Local state/value operations | Unsupported: {member} holdAlpha mode {m} / keep-alpha canvas blend for this operation mode | [3234](../../crates/crysirror-krkr/src/natives.rs#L3234) |
-| `condition` | `!matches!(mode, 2 \| 128) && atop_mode.is_none()` | Local state/value operations | Unsupported: {member} mode {mode} / canvas blend operation modes | [3256](../../crates/crysirror-krkr/src/natives.rs#L3256) |
+| `rt.host().layer(h)?.kind` | `2 \| 13..=28` | Local state/value operations | Handled | [3246](../../crates/crysirror-krkr/src/natives.rs#L3246) |
+| `rt.host().layer(h)?.kind` | `12` | Local state/value operations | Handled | [3247](../../crates/crysirror-krkr/src/natives.rs#L3247) |
+| `rt.host().layer(h)?.kind` | `_` | Local state/value operations | Handled | [3248](../../crates/crysirror-krkr/src/natives.rs#L3248) |
+| `condition` | `atop && !matches!(mode, 2 \| 13 \| 128 \| 16 \| 17)` | Local state/value operations | Handled | [3277](../../crates/crysirror-krkr/src/natives.rs#L3277) |
+| `(atop, mode)` | `(false, _)` | Local state/value operations | Return only: Boolean/optional result interpreted by the caller | [3292](../../crates/crysirror-krkr/src/natives.rs#L3292) |
+| `(atop, mode)` | `_ if copy_main` | Local state/value operations | Handled | [3293](../../crates/crysirror-krkr/src/natives.rs#L3293) |
+| `(atop, mode)` | `(true, 2 \| 13 \| 128)` | Local state/value operations | Handled | [3294](../../crates/crysirror-krkr/src/natives.rs#L3294) |
+| `(atop, mode)` | `(true, 16)` | Local state/value operations | Handled | [3295](../../crates/crysirror-krkr/src/natives.rs#L3295) |
+| `(atop, mode)` | `(true, 17)` | Local state/value operations | Handled | [3296](../../crates/crysirror-krkr/src/natives.rs#L3296) |
+| `(atop, mode)` | `(true, m)` | Local state/value operations | Unsupported: {member} holdAlpha mode {m} / keep-alpha canvas blend for this operation mode | [3297](../../crates/crysirror-krkr/src/natives.rs#L3297) |
+| `condition` | `!matches!(mode, 2 \| 128) && atop_mode.is_none()` | Local state/value operations | Unsupported: {member} mode {mode} / canvas blend operation modes | [3314](../../crates/crysirror-krkr/src/natives.rs#L3314) |
 
 ### natives.rs / layer_get_layer_at
 
@@ -2263,9 +2319,9 @@ fn layer_get_layer_at(rt: &mut Rt, t: Option<ObjectHandle>, a: Vec<Variant>) -> 
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `exclude_self && id == h.0` | Local state/value operations | Handled | [2765](../../crates/crysirror-krkr/src/natives.rs#L2765) |
-| `condition` | `kind == 1` | TjsError::runtime | Handled | [2773](../../crates/crysirror-krkr/src/natives.rs#L2773) |
-| `condition; under receiver=else: kind == 1` | `layer.kind == 1` | Local state/value operations | Handled | [2781](../../crates/crysirror-krkr/src/natives.rs#L2781) |
+| `condition` | `exclude_self && id == h.0` | Local state/value operations | Handled | [2809](../../crates/crysirror-krkr/src/natives.rs#L2809) |
+| `condition` | `kind == 1` | TjsError::runtime | Handled | [2817](../../crates/crysirror-krkr/src/natives.rs#L2817) |
+| `condition; under receiver=else: kind == 1` | `layer.kind == 1` | Local state/value operations | Handled | [2825](../../crates/crysirror-krkr/src/natives.rs#L2825) |
 
 ### natives.rs / layer_instance_defaults
 
@@ -2275,17 +2331,7 @@ fn layer_instance_defaults(rt: &mut Rt, h: ObjectHandle, window: ObjectHandle) -
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `key == "__preLeft"` | Local state/value operations | Handled | [1790](../../crates/crysirror-krkr/src/natives.rs#L1790) |
-
-### natives.rs / layer_load_images
-
-```rust
-fn layer_load_images(rt: &mut Rt, t: Option<ObjectHandle>, a: Vec<Variant>) -> Result<Variant>
-```
-
-| Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
-| --- | --- | --- | --- | --- |
-| `condition` | `name.to_lowercase().starts_with("psb://")` | crate::psbfile_plugin::load_image | Handled | [2896](../../crates/crysirror-krkr/src/natives.rs#L2896) |
+| `condition` | `key == "__preLeft"` | Local state/value operations | Handled | [1800](../../crates/crysirror-krkr/src/natives.rs#L1800) |
 
 ### natives.rs / layer_node_enabled_plain
 
@@ -2305,7 +2351,7 @@ fn layer_operate_affine(rt: &mut Rt, t: Option<ObjectHandle>, a: Vec<Variant>) -
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `!matches!(mode, 2 \| 128)` | Local state/value operations | Unsupported: {M} mode {mode} / canvas blend operation modes | [3822](../../crates/crysirror-krkr/src/natives.rs#L3822) |
+| `condition` | `!matches!(mode, 2 \| 128)` | Local state/value operations | Unsupported: {M} mode {mode} / canvas blend operation modes | [3882](../../crates/crysirror-krkr/src/natives.rs#L3882) |
 
 ### natives.rs / layer_operate_stretch
 
@@ -2315,7 +2361,7 @@ fn layer_operate_stretch(rt: &mut Rt, t: Option<ObjectHandle>, a: Vec<Variant>) 
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `!matches!(mode, 2 \| 128)` | Local state/value operations | Unsupported: {M} mode {mode} / canvas blend operation modes | [3716](../../crates/crysirror-krkr/src/natives.rs#L3716) |
+| `condition` | `!matches!(mode, 2 \| 128)` | Local state/value operations | Unsupported: {M} mode {mode} / canvas blend operation modes | [3776](../../crates/crysirror-krkr/src/natives.rs#L3776) |
 
 ### natives.rs / ps_blend
 
@@ -2325,23 +2371,23 @@ fn ps_blend(mode: i64) -> Option<crysirror_core::image_processing::PsBlend>
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `mode` | `13` | Local state/value operations | Handled | [3353](../../crates/crysirror-krkr/src/natives.rs#L3353) |
-| `mode` | `14` | Local state/value operations | Handled | [3354](../../crates/crysirror-krkr/src/natives.rs#L3354) |
-| `mode` | `15` | Local state/value operations | Handled | [3355](../../crates/crysirror-krkr/src/natives.rs#L3355) |
-| `mode` | `16` | Local state/value operations | Handled | [3356](../../crates/crysirror-krkr/src/natives.rs#L3356) |
-| `mode` | `17` | Local state/value operations | Handled | [3357](../../crates/crysirror-krkr/src/natives.rs#L3357) |
-| `mode` | `18` | Local state/value operations | Handled | [3358](../../crates/crysirror-krkr/src/natives.rs#L3358) |
-| `mode` | `19` | Local state/value operations | Handled | [3359](../../crates/crysirror-krkr/src/natives.rs#L3359) |
-| `mode` | `20` | Local state/value operations | Handled | [3360](../../crates/crysirror-krkr/src/natives.rs#L3360) |
-| `mode` | `21` | Local state/value operations | Handled | [3361](../../crates/crysirror-krkr/src/natives.rs#L3361) |
-| `mode` | `23` | Local state/value operations | Handled | [3362](../../crates/crysirror-krkr/src/natives.rs#L3362) |
-| `mode` | `24` | Local state/value operations | Handled | [3363](../../crates/crysirror-krkr/src/natives.rs#L3363) |
-| `mode` | `25` | Local state/value operations | Handled | [3364](../../crates/crysirror-krkr/src/natives.rs#L3364) |
-| `mode` | `22` | Local state/value operations | Handled | [3365](../../crates/crysirror-krkr/src/natives.rs#L3365) |
-| `mode` | `26` | Local state/value operations | Handled | [3366](../../crates/crysirror-krkr/src/natives.rs#L3366) |
-| `mode` | `27` | Local state/value operations | Handled | [3367](../../crates/crysirror-krkr/src/natives.rs#L3367) |
-| `mode` | `28` | Local state/value operations | Handled | [3368](../../crates/crysirror-krkr/src/natives.rs#L3368) |
-| `mode` | `_` | Local state/value operations | Return only: Boolean/optional result interpreted by the caller | [3369](../../crates/crysirror-krkr/src/natives.rs#L3369) |
+| `mode` | `13` | Local state/value operations | Handled | [3411](../../crates/crysirror-krkr/src/natives.rs#L3411) |
+| `mode` | `14` | Local state/value operations | Handled | [3412](../../crates/crysirror-krkr/src/natives.rs#L3412) |
+| `mode` | `15` | Local state/value operations | Handled | [3413](../../crates/crysirror-krkr/src/natives.rs#L3413) |
+| `mode` | `16` | Local state/value operations | Handled | [3414](../../crates/crysirror-krkr/src/natives.rs#L3414) |
+| `mode` | `17` | Local state/value operations | Handled | [3415](../../crates/crysirror-krkr/src/natives.rs#L3415) |
+| `mode` | `18` | Local state/value operations | Handled | [3416](../../crates/crysirror-krkr/src/natives.rs#L3416) |
+| `mode` | `19` | Local state/value operations | Handled | [3417](../../crates/crysirror-krkr/src/natives.rs#L3417) |
+| `mode` | `20` | Local state/value operations | Handled | [3418](../../crates/crysirror-krkr/src/natives.rs#L3418) |
+| `mode` | `21` | Local state/value operations | Handled | [3419](../../crates/crysirror-krkr/src/natives.rs#L3419) |
+| `mode` | `23` | Local state/value operations | Handled | [3420](../../crates/crysirror-krkr/src/natives.rs#L3420) |
+| `mode` | `24` | Local state/value operations | Handled | [3421](../../crates/crysirror-krkr/src/natives.rs#L3421) |
+| `mode` | `25` | Local state/value operations | Handled | [3422](../../crates/crysirror-krkr/src/natives.rs#L3422) |
+| `mode` | `22` | Local state/value operations | Handled | [3423](../../crates/crysirror-krkr/src/natives.rs#L3423) |
+| `mode` | `26` | Local state/value operations | Handled | [3424](../../crates/crysirror-krkr/src/natives.rs#L3424) |
+| `mode` | `27` | Local state/value operations | Handled | [3425](../../crates/crysirror-krkr/src/natives.rs#L3425) |
+| `mode` | `28` | Local state/value operations | Handled | [3426](../../crates/crysirror-krkr/src/natives.rs#L3426) |
+| `mode` | `_` | Local state/value operations | Return only: Boolean/optional result interpreted by the caller | [3427](../../crates/crysirror-krkr/src/natives.rs#L3427) |
 
 ### piled_copy.rs / copy
 
@@ -2380,17 +2426,17 @@ fn data_pack_storage_name(name: &str) -> String
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `name .rsplit_once('.') .is_some_and(\|(_, extension)\| extension.eq_ignore_ascii_case("pbd"))` | Local state/value operations | Handled | [1101](../../crates/crysirror-krkr/src/plugin_ports/packinone.rs#L1101) |
+| `condition` | `name .rsplit_once('.') .is_some_and(\|(_, extension)\| extension.eq_ignore_ascii_case("pbd"))` | Local state/value operations | Handled | [1259](../../crates/crysirror-krkr/src/plugin_ports/packinone.rs#L1259) |
 
-### plugin_ports/packinone.rs / png_end
+### plugin_ports/packinone.rs / walk_png
 
 ```rust
-fn png_end(bytes: &[u8]) -> Option<usize>
+fn walk_png(bytes: &[u8], mut segment: impl FnMut(usize, &[u8], &[u8]) -> Option<()>) -> Option<usize>
 ```
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `kind == b"IEND"` | Local state/value operations | Handled | [1094](../../crates/crysirror-krkr/src/plugin_ports/packinone.rs#L1094) |
+| `condition` | `kind == b"IEND"` | Local state/value operations | Handled | [1251](../../crates/crysirror-krkr/src/plugin_ports/packinone.rs#L1251) |
 
 ### plugin_ports/scripts_ex.rs / clone_scripts_value
 
@@ -2404,7 +2450,7 @@ fn clone_scripts_value(
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `!matches!(runtime.object_member(source, "clone"), Variant::Void) && let Ok(result) = runtime.call_object_method(source, "clone", Vec::new())` | Local state/value operations | Handled | [653](../../crates/crysirror-krkr/src/plugin_ports/scripts_ex.rs#L653) |
+| `condition` | `!matches!(runtime.object_member(source, "clone"), Variant::Void) && let Ok(result) = runtime.call_object_method(source, "clone", Vec::new())` | Local state/value operations | Handled | [662](../../crates/crysirror-krkr/src/plugin_ports/scripts_ex.rs#L662) |
 
 ### plugin_ports/win32_dialog.rs / message_box
 
@@ -2418,15 +2464,15 @@ fn message_box(
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `kind & 0xF` | `0` | Local state/value operations | Handled | [450](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L450) |
-| `kind & 0xF` | `1` | Local state/value operations | Handled | [451](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L451) |
-| `kind & 0xF` | `2` | Local state/value operations | Handled | [452](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L452) |
-| `kind & 0xF` | `3` | Local state/value operations | Handled | [453](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L453) |
-| `kind & 0xF` | `4` | Local state/value operations | Handled | [454](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L454) |
-| `kind & 0xF` | `5` | Local state/value operations | Handled | [455](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L455) |
-| `kind & 0xF` | `6` | Local state/value operations | Handled | [456](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L456) |
-| `kind & 0xF` | `other` | crate::natives::unsupported | Unsupported: {M} button set {other} / Win32 message box button sets 0..=6 | [457](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L457) |
-| `condition` | `kind & 0x4000 != 0` | crate::natives::unsupported | Unsupported: {M} MB_HELP / a dialog help callback | [464](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L464) |
+| `kind & 0xF` | `0` | Local state/value operations | Handled | [434](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L434) |
+| `kind & 0xF` | `1` | Local state/value operations | Handled | [435](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L435) |
+| `kind & 0xF` | `2` | Local state/value operations | Handled | [436](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L436) |
+| `kind & 0xF` | `3` | Local state/value operations | Handled | [437](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L437) |
+| `kind & 0xF` | `4` | Local state/value operations | Handled | [438](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L438) |
+| `kind & 0xF` | `5` | Local state/value operations | Handled | [439](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L439) |
+| `kind & 0xF` | `6` | Local state/value operations | Handled | [440](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L440) |
+| `kind & 0xF` | `other` | crate::natives::unsupported | Unsupported: {M} button set {other} / Win32 message box button sets 0..=6 | [441](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L441) |
+| `condition` | `kind & 0x4000 != 0` | crate::natives::unsupported | Unsupported: {M} MB_HELP / a dialog help callback | [448](../../crates/crysirror-krkr/src/plugin_ports/win32_dialog.rs#L448) |
 
 ### plugin_ports/window_ex.rs / menu_item_property_get
 
@@ -2520,7 +2566,7 @@ fn install(rt: &mut Rt, plugins: crysirror_tjs2::runtime::ObjectHandle) -> ()
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `matches!(name.as_str(), "motionplayer.dll" \| "motionplayer_nod3d.dll")` | crate::motion_plugin::install | Handled | [157](../../crates/crysirror-krkr/src/plugins.rs#L157) |
+| `condition` | `matches!(name.as_str(), "motionplayer.dll" \| "motionplayer_nod3d.dll" \| "emoteplayer.dll")` | crate::motion_plugin::install | Handled | [159](../../crates/crysirror-krkr/src/plugins.rs#L159) |
 
 ### pointer.rs / apply
 
@@ -2683,11 +2729,11 @@ fn exchange_tree(rt:&mut Rt,a:ObjectHandle,b:ObjectHandle,keep:bool) -> Result<(
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `id==a.0` | Local state/value operations | Handled | [332](../../crates/crysirror-krkr/src/transitions.rs#L332) |
-| `condition` | `id==b.0` | Local state/value operations | Handled | [332](../../crates/crysirror-krkr/src/transitions.rs#L332) |
-| `condition` | `next[&replaced].0==Some(id)` | Local state/value operations | Handled | [370](../../crates/crysirror-krkr/src/transitions.rs#L370) |
-| `condition` | `next[&child].0==Some(id)` | Local state/value operations | Handled | [370](../../crates/crysirror-krkr/src/transitions.rs#L370) |
-| `condition` | `next[&child].0==Some(id)&&!children.contains(&child)` | Local state/value operations | Handled | [373](../../crates/crysirror-krkr/src/transitions.rs#L373) |
+| `condition` | `id==a.0` | Local state/value operations | Handled | [335](../../crates/crysirror-krkr/src/transitions.rs#L335) |
+| `condition` | `id==b.0` | Local state/value operations | Handled | [335](../../crates/crysirror-krkr/src/transitions.rs#L335) |
+| `condition` | `next[&replaced].0==Some(id)` | Local state/value operations | Handled | [373](../../crates/crysirror-krkr/src/transitions.rs#L373) |
+| `condition` | `next[&child].0==Some(id)` | Local state/value operations | Handled | [373](../../crates/crysirror-krkr/src/transitions.rs#L373) |
+| `condition` | `next[&child].0==Some(id)&&!children.contains(&child)` | Local state/value operations | Handled | [376](../../crates/crysirror-krkr/src/transitions.rs#L376) |
 
 ### varfile_plugin.rs / parts
 
@@ -2931,7 +2977,7 @@ fn is_dictionary_instance(&self, object: ObjectHandle) -> bool
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `matches!( self.heap[object.0].kind, ObjectKind::NativeFunction { .. } \| ObjectKind::VmNativeFunction { .. } \| ObjectKind::InterCode { context: BytecodeContextType::Class, .. } )` | Local state/value operations | Handled | [624](../../crates/crysirror-tjs2/src/runtime/mod.rs#L624) |
+| `condition` | `matches!( self.heap[object.0].kind, ObjectKind::NativeFunction { .. } \| ObjectKind::VmNativeFunction { .. } \| ObjectKind::InterCode { context: BytecodeContextType::Class, .. } )` | Local state/value operations | Handled | [625](../../crates/crysirror-tjs2/src/runtime/mod.rs#L625) |
 
 ### runtime/mod.rs / Runtime<H>::set_shared_native
 
@@ -2947,7 +2993,7 @@ fn set_shared_native(
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition; under self.shared_natives.get(key)=None` | `let ObjectKind::NativeFunction { id, .. } = self.heap[handle.0].kind` | self.native_call_trace.native_names.get_mut | Handled | [1779](../../crates/crysirror-tjs2/src/runtime/mod.rs#L1779) |
+| `condition; under self.shared_natives.get(key)=None` | `let ObjectKind::NativeFunction { id, .. } = self.heap[handle.0].kind` | self.native_call_trace.native_names.get_mut | Handled | [1791](../../crates/crysirror-tjs2/src/runtime/mod.rs#L1791) |
 
 ### runtime/mod.rs / Runtime<H>::write_storage_binary
 
@@ -2957,7 +3003,7 @@ fn write_storage_binary(&mut self, name: &str, mode: &str, bytes: &[u8]) -> Resu
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `!name.split_once("://").is_some_and(\|(scheme, _)\| { self.storage_media .contains_key(&scheme.to_ascii_lowercase()) })` | self.host.write_binary | Handled | [514](../../crates/crysirror-tjs2/src/runtime/mod.rs#L514) |
+| `condition` | `!name.split_once("://").is_some_and(\|(scheme, _)\| { self.storage_media .contains_key(&scheme.to_ascii_lowercase()) })` | self.host.write_binary | Handled | [515](../../crates/crysirror-tjs2/src/runtime/mod.rs#L515) |
 
 ### runtime/mod.rs / Runtime<H>::write_storage_text
 
@@ -2967,7 +3013,7 @@ fn write_storage_text(&mut self, name: &str, mode: &str, text: &str) -> Result<(
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `!name.split_once("://").is_some_and(\|(scheme, _)\| { self.storage_media .contains_key(&scheme.to_ascii_lowercase()) })` | self.host.write_text | Handled | [500](../../crates/crysirror-tjs2/src/runtime/mod.rs#L500) |
+| `condition` | `!name.split_once("://").is_some_and(\|(scheme, _)\| { self.storage_media .contains_key(&scheme.to_ascii_lowercase()) })` | self.host.write_text | Handled | [501](../../crates/crysirror-tjs2/src/runtime/mod.rs#L501) |
 
 ### runtime/object.rs / Object::get_raw
 
@@ -3002,7 +3048,7 @@ fn call_primary_class_method(
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `!matches!( self.runtime.heap[class_handle.0].kind, ObjectKind::InterCode { context: BytecodeContextType::Class, .. } )` | Local state/value operations | Handled | [2144](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2144) |
+| `condition` | `!matches!( self.runtime.heap[class_handle.0].kind, ObjectKind::InterCode { context: BytecodeContextType::Class, .. } )` | Local state/value operations | Handled | [2143](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2143) |
 
 ### vm/dispatch.rs / Vm<'bc, 'rt, H>::call_secondary_class_method
 
@@ -3017,7 +3063,7 @@ fn call_secondary_class_method(
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `!matches!( self.runtime.heap[class_handle.0].kind, ObjectKind::InterCode { context: BytecodeContextType::Class, .. } )` | Local state/value operations | Handled | [2095](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2095) |
+| `condition` | `!matches!( self.runtime.heap[class_handle.0].kind, ObjectKind::InterCode { context: BytecodeContextType::Class, .. } )` | Local state/value operations | Handled | [2094](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2094) |
 
 ### vm/dispatch.rs / Vm<'bc, 'rt, H>::call_string_method
 
@@ -3032,21 +3078,21 @@ fn call_string_method(
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `name` | `"toString"` | Variant::String | Handled | [2816](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2816) |
-| `name` | `"escape"` | Variant::String | Handled | [2817](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2817) |
-| `name` | `"sprintf"` | Variant::String | Handled | [2818](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2818) |
-| `name` | `"toLowerCase"` | TjsError::bad_param_count, Variant::String | Handled | [2819](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2819) |
-| `name` | `"toUpperCase"` | TjsError::bad_param_count, Variant::String | Handled | [2827](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2827) |
-| `name` | `"charAt"` | TjsError::bad_param_count, usize::try_from, Variant::String, String::new | Handled | [2833](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2833) |
-| `name` | `"substr" \| "substring"` | TjsError::bad_param_count, Variant::String | Handled | [2846](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2846) |
-| `name` | `"replace"` | TjsError::bad_param_count, Variant::String, self.string_replace | Handled | [2868](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2868) |
-| `name` | `"indexOf"` | TjsError::bad_param_count, Variant::Integer | Handled | [2884](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2884) |
-| `name` | `"lastIndexOf"` | Variant::Integer | Handled | [2911](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2911) |
-| `name` | `"split"` | TjsError::bad_param_count, self.runtime.alloc_array_object, Variant::Object | Handled | [2924](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2924) |
-| `name` | `"trim"` | TjsError::bad_param_count, Variant::String | Handled | [2951](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2951) |
-| `name` | `"reverse"` | TjsError::bad_param_count, Variant::String | Handled | [2958](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2958) |
-| `name` | `"repeat"` | TjsError::bad_param_count, Variant::String, String::new | Handled | [2965](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2965) |
-| `name` | `_` | TjsError::member_not_found | Unsupported: Unconditional rejection | [2979](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2979) |
+| `name` | `"toString"` | Variant::String | Handled | [2815](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2815) |
+| `name` | `"escape"` | Variant::String | Handled | [2816](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2816) |
+| `name` | `"sprintf"` | Variant::String | Handled | [2817](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2817) |
+| `name` | `"toLowerCase"` | TjsError::bad_param_count, Variant::String | Handled | [2818](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2818) |
+| `name` | `"toUpperCase"` | TjsError::bad_param_count, Variant::String | Handled | [2826](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2826) |
+| `name` | `"charAt"` | TjsError::bad_param_count, usize::try_from, Variant::String, String::new | Handled | [2832](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2832) |
+| `name` | `"substr" \| "substring"` | TjsError::bad_param_count, Variant::String | Handled | [2845](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2845) |
+| `name` | `"replace"` | TjsError::bad_param_count, Variant::String, self.string_replace | Handled | [2867](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2867) |
+| `name` | `"indexOf"` | TjsError::bad_param_count, Variant::Integer | Handled | [2883](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2883) |
+| `name` | `"lastIndexOf"` | Variant::Integer | Handled | [2910](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2910) |
+| `name` | `"split"` | TjsError::bad_param_count, self.runtime.alloc_array_object, Variant::Object | Handled | [2923](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2923) |
+| `name` | `"trim"` | TjsError::bad_param_count, Variant::String | Handled | [2950](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2950) |
+| `name` | `"reverse"` | TjsError::bad_param_count, Variant::String | Handled | [2957](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2957) |
+| `name` | `"repeat"` | TjsError::bad_param_count, Variant::String, String::new | Handled | [2964](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2964) |
+| `name` | `_` | TjsError::member_not_found | Unsupported: Unconditional rejection | [2978](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2978) |
 
 ### vm/dispatch.rs / Vm<'bc, 'rt, H>::class_chain_owner
 
@@ -3060,7 +3106,7 @@ fn class_chain_owner(
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `self.runtime.heap[class_handle.0].get_raw(name).is_some()` | Local state/value operations | Handled | [1988](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L1988) |
+| `condition` | `self.runtime.heap[class_handle.0].get_raw(name).is_some()` | Local state/value operations | Handled | [1987](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L1987) |
 
 ### vm/dispatch.rs / Vm<'bc, 'rt, H>::class_chain_provides_member
 
@@ -3070,7 +3116,7 @@ fn class_chain_provides_member(&mut self, handle: ObjectHandle, name: &str) -> R
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `self.runtime.heap[class_handle.0].get_raw(name).is_some()` | Local state/value operations | Handled | [2703](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2703) |
+| `condition` | `self.runtime.heap[class_handle.0].get_raw(name).is_some()` | Local state/value operations | Handled | [2702](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2702) |
 
 ### vm/dispatch.rs / Vm<'bc, 'rt, H>::class_member_for_call
 
@@ -3085,7 +3131,7 @@ fn class_member_for_call(
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `let Some(member) = self.runtime.heap[class_handle.0].get_raw(name)` | self.bind_proxy_value | Handled | [2007](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2007) |
+| `condition` | `let Some(member) = self.runtime.heap[class_handle.0].get_raw(name)` | self.bind_proxy_value | Handled | [2006](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2006) |
 
 ### vm/dispatch.rs / Vm<'bc, 'rt, H>::class_member_owner
 
@@ -3100,7 +3146,38 @@ fn class_member_owner(
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `self.runtime.heap[class_handle.0].get_raw(name).is_some()` | Local state/value operations | Handled | [1882](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L1882) |
+| `condition` | `self.runtime.heap[class_handle.0].get_raw(name).is_some()` | Local state/value operations | Handled | [1881](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L1881) |
+
+### vm/dispatch.rs / Vm<'bc, 'rt, H>::default_prop_get
+
+```rust
+fn default_prop_get(
+        &mut self,
+        target: Variant,
+        caller_this: Option<ObjectHandle>,
+    ) -> Result<Variant>
+```
+
+| Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
+| --- | --- | --- | --- | --- |
+| `condition` | `let ObjectKind::InterCode { file_id, object_index, context: BytecodeContextType::Property, } = self.runtime.heap[handle.0].kind` | self.runtime.script_file, self.effective_member_this, self.execute_file_object_with_this, Vec::new, TjsError::access_denied | Unsupported: Unconditional rejection | [786](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L786) |
+| `condition` | `let ObjectKind::NativeProperty { id, access } = self.runtime.heap[handle.0].kind` | TjsError::access_denied, TjsError::runtime, self.effective_member_this | Handled | [808](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L808) |
+
+### vm/dispatch.rs / Vm<'bc, 'rt, H>::default_prop_set
+
+```rust
+fn default_prop_set(
+        &mut self,
+        target: Variant,
+        value: Variant,
+        caller_this: Option<ObjectHandle>,
+    ) -> Result<()>
+```
+
+| Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
+| --- | --- | --- | --- | --- |
+| `condition` | `let ObjectKind::InterCode { file_id, object_index, context: BytecodeContextType::Property, } = self.runtime.heap[handle.0].kind` | self.runtime.script_file, self.effective_member_this, self.execute_file_object_with_this, TjsError::access_denied | Unsupported: Unconditional rejection | [835](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L835) |
+| `condition` | `let ObjectKind::NativeProperty { id, access } = self.runtime.heap[handle.0].kind` | TjsError::access_denied, TjsError::runtime, self.effective_member_this | Handled | [852](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L852) |
 
 ### vm/dispatch.rs / Vm<'bc, 'rt, H>::execute_update_property
 
@@ -3115,10 +3192,10 @@ fn execute_update_property(
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `inst.opcode` | `19 \| 23` | self.data_slot_string, self.operate_property, OpMember::Name | Handled | [1165](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L1165) |
-| `inst.opcode` | `20 \| 24` | self.operate_property, OpMember::Value | Handled | [1182](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L1182) |
-| `inst.opcode` | `21 \| 25` | self.default_prop_get, self.default_prop_set | Handled | [1199](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L1199) |
-| `inst.opcode` | `_` | Local state/value operations | Handled | [1210](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L1210) |
+| `inst.opcode` | `19 \| 23` | self.data_slot_string, self.operate_property, OpMember::Name | Handled | [1164](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L1164) |
+| `inst.opcode` | `20 \| 24` | self.operate_property, OpMember::Value | Handled | [1181](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L1181) |
+| `inst.opcode` | `21 \| 25` | self.default_prop_get, self.default_prop_set | Handled | [1198](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L1198) |
+| `inst.opcode` | `_` | Local state/value operations | Handled | [1209](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L1209) |
 
 ### vm/dispatch.rs / Vm<'bc, 'rt, H>::handle_class_name_matches
 
@@ -3128,7 +3205,7 @@ fn handle_class_name_matches(&self, handle: ObjectHandle, name: &str) -> bool
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `self.runtime.heap[handle.0] .class_infos .iter() .any(\|info\| info == name)` | Local state/value operations | Handled | [3183](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L3183) |
+| `condition` | `self.runtime.heap[handle.0] .class_infos .iter() .any(\|info\| info == name)` | Local state/value operations | Handled | [3182](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L3182) |
 
 ### vm/dispatch.rs / Vm<'bc, 'rt, H>::instance_of
 
@@ -3138,7 +3215,7 @@ fn instance_of(&mut self, value: &Variant, class_name: &str) -> Result<bool>
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `class_name == "Class" && matches!( self.runtime.heap[handle.0].kind, ObjectKind::InterCode { context: BytecodeContextType::Class, .. } )` | Local state/value operations | Handled | [3289](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L3289) |
+| `condition` | `class_name == "Class" && matches!( self.runtime.heap[handle.0].kind, ObjectKind::InterCode { context: BytecodeContextType::Class, .. } )` | Local state/value operations | Handled | [3288](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L3288) |
 
 ### vm/dispatch.rs / Vm<'bc, 'rt, H>::is_class_in_instance_chain
 
@@ -3152,7 +3229,7 @@ fn is_class_in_instance_chain(
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `matches!( self.runtime.heap[class_handle.0].kind, ObjectKind::InterCode { context: BytecodeContextType::Class, .. } )` | Local state/value operations | Handled | [2047](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2047) |
+| `condition` | `matches!( self.runtime.heap[class_handle.0].kind, ObjectKind::InterCode { context: BytecodeContextType::Class, .. } )` | Local state/value operations | Handled | [2046](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L2046) |
 
 ### vm/dispatch.rs / Vm<'bc, 'rt, H>::member_in_super_chain
 
@@ -3166,7 +3243,7 @@ fn member_in_super_chain(
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `let Some(value) = self.runtime.heap[class_handle.0].get_raw(name)` | Local state/value operations | Handled | [767](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L767) |
+| `condition` | `let Some(value) = self.runtime.heap[class_handle.0].get_raw(name)` | Local state/value operations | Handled | [768](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L768) |
 
 ### vm/dispatch.rs / Vm<'bc, 'rt, H>::octet_property
 
@@ -3176,7 +3253,7 @@ fn octet_property(&self, value: &[u8], member: MemberKind<'_>) -> Result<Variant
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition; under member=MemberKind::Name(name)` | `name == "length"` | Variant::Integer | Handled | [1099](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L1099) |
+| `condition; under member=MemberKind::Name(name)` | `name == "length"` | Variant::Integer | Handled | [1098](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L1098) |
 
 ### vm/dispatch.rs / Vm<'bc, 'rt, H>::operate_property
 
@@ -3193,7 +3270,7 @@ fn operate_property(
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `self.runtime.is_dictionary_instance(handle) && !self.runtime.heap[handle.0].call_missing && self.runtime.heap[handle.0].get_raw(&name).is_none()` | self.prop_set, DispatchFlags::ensure | Handled | [1323](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L1323) |
+| `condition` | `self.runtime.is_dictionary_instance(handle) && !self.runtime.heap[handle.0].call_missing && self.runtime.heap[handle.0].get_raw(&name).is_none()` | self.prop_set, DispatchFlags::ensure | Handled | [1322](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L1322) |
 
 ### vm/dispatch.rs / Vm<'bc, 'rt, H>::prop_get_handle
 
@@ -3209,10 +3286,11 @@ fn prop_get_handle(
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `let Some(this_obj) = bind_this && !flags.no_bound_instance_fallback && let Some(value) = self.runtime.heap[this_obj.0].get_raw(name) && !self.runtime.variant_is_property(&value)` | Local state/value operations | Handled | [171](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L171) |
-| `condition` | `flags.must_exist && self.runtime.heap[handle.0].array_index_missing(name)` | Local state/value operations | Handled | [193](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L193) |
-| `condition` | `let Some(this_obj) = bind_this && !flags.must_exist && !flags.no_bound_instance_fallback && let Some(value) = self.runtime.heap[this_obj.0].get_raw(name) && !self.runtime.variant_is_property(&value)` | Local state/value operations | Handled | [270](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L270) |
-| `condition` | `bind_this.is_none() && let Variant::Object(native) = &value && matches!( self.runtime.heap[native.0].kind, ObjectKind::NativeFunction { constructable: false, .. } \| ObjectKind::VmNativeFunction { .. } )` | self.is_class_object, self.bind_proxy_value | Handled | [317](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L317) |
+| `condition` | `let ObjectKind::Proxy { primary, fallback, bind_this, } = self.runtime.heap[handle.0].kind` | self.prop_get_handle, self.bind_proxy_value, self.handle_class_name_matches, Variant::Closure, Closure::new | Handled | [143](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L143) |
+| `condition` | `let Some(this_obj) = bind_this && !flags.no_bound_instance_fallback && let Some(value) = self.runtime.heap[this_obj.0].get_raw(name) && !self.runtime.variant_is_property(&value)` | Local state/value operations | Handled | [170](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L170) |
+| `condition` | `flags.must_exist && self.runtime.heap[handle.0].array_index_missing(name)` | Local state/value operations | Handled | [192](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L192) |
+| `condition` | `let Some(this_obj) = bind_this && !flags.must_exist && !flags.no_bound_instance_fallback && let Some(value) = self.runtime.heap[this_obj.0].get_raw(name) && !self.runtime.variant_is_property(&value)` | Local state/value operations | Handled | [272](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L272) |
+| `condition` | `bind_this.is_none() && let Variant::Object(native) = &value && matches!( self.runtime.heap[native.0].kind, ObjectKind::NativeFunction { constructable: false, .. } \| ObjectKind::VmNativeFunction { .. } )` | self.is_class_object, self.bind_proxy_value | Handled | [319](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L319) |
 
 ### vm/dispatch.rs / Vm<'bc, 'rt, H>::prop_set_handle
 
@@ -3229,9 +3307,10 @@ fn prop_set_handle(
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `!flags.ignore_prop && let Some(existing) = self.runtime.heap[handle.0].get_raw(name) && self .property_setter(existing, value.clone(), caller_this)? .is_some()` | Local state/value operations | Handled | [577](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L577) |
-| `condition` | `let Some(existing) = self.runtime.heap[class_handle.0].get_raw(name) && self .property_setter(existing, value.clone(), receiver)? .is_some()` | Local state/value operations | Handled | [589](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L589) |
-| `condition` | `self.runtime.heap[handle.0].array_negative_index_after_wrap(name)` | TjsError::member_not_found | Unsupported: Unconditional rejection | [628](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L628) |
+| `condition` | `let ObjectKind::Proxy { primary, fallback, bind_this, } = self.runtime.heap[handle.0].kind` | self.member_in_super_chain, self.set_bound_member, self.prop_set_handle | Handled | [496](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L496) |
+| `condition` | `!flags.ignore_prop && let Some(existing) = self.runtime.heap[handle.0].get_raw(name) && self .property_setter(existing, value.clone(), caller_this)? .is_some()` | Local state/value operations | Handled | [578](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L578) |
+| `condition` | `let Some(existing) = self.runtime.heap[class_handle.0].get_raw(name) && self .property_setter(existing, value.clone(), receiver)? .is_some()` | Local state/value operations | Handled | [590](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L590) |
+| `condition` | `self.runtime.heap[handle.0].array_negative_index_after_wrap(name)` | TjsError::member_not_found | Unsupported: Unconditional rejection | [629](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L629) |
 
 ### vm/dispatch.rs / Vm<'bc, 'rt, H>::register_object_members
 
@@ -3245,7 +3324,7 @@ fn register_object_members(
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `self.runtime.heap[dest.0].call_missing && self.runtime.heap[dest.0].get_raw(&name).is_none() && self.call_set_missing(dest, &name, value.clone())?` | Local state/value operations | Handled | [3380](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L3380) |
+| `condition` | `self.runtime.heap[dest.0].call_missing && self.runtime.heap[dest.0].get_raw(&name).is_none() && self.call_set_missing(dest, &name, value.clone())?` | Local state/value operations | Handled | [3379](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L3379) |
 
 ### vm/dispatch.rs / Vm<'bc, 'rt, H>::secondary_class_member_for_call
 
@@ -3260,9 +3339,9 @@ fn secondary_class_member_for_call(
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition` | `!matches!( self.runtime.heap[qualifier.0].kind, ObjectKind::InterCode { context: BytecodeContextType::Class, .. } ) \|\| !self.is_class_in_instance_chain(instance, qualifier)?` | Local state/value operations | Handled | [1775](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L1775) |
-| `condition` | `!matches!( self.runtime.heap[class_handle.0].kind, ObjectKind::InterCode { context: BytecodeContextType::Class, .. } )` | Local state/value operations | Handled | [1812](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L1812) |
-| `condition` | `let Some(member) = self.runtime.heap[class_handle.0].get_raw(name)` | self.bind_proxy_value | Handled | [1821](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L1821) |
+| `condition` | `!matches!( self.runtime.heap[qualifier.0].kind, ObjectKind::InterCode { context: BytecodeContextType::Class, .. } ) \|\| !self.is_class_in_instance_chain(instance, qualifier)?` | Local state/value operations | Handled | [1774](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L1774) |
+| `condition` | `!matches!( self.runtime.heap[class_handle.0].kind, ObjectKind::InterCode { context: BytecodeContextType::Class, .. } )` | Local state/value operations | Handled | [1811](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L1811) |
+| `condition` | `let Some(member) = self.runtime.heap[class_handle.0].get_raw(name)` | self.bind_proxy_value | Handled | [1820](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L1820) |
 
 ### vm/dispatch.rs / Vm<'bc, 'rt, H>::string_property
 
@@ -3272,7 +3351,7 @@ fn string_property(&self, value: &str, member: MemberKind<'_>) -> Result<Variant
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition; under member=MemberKind::Name(name)` | `name == "length"` | Variant::Integer | Handled | [1056](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L1056) |
+| `condition; under member=MemberKind::Name(name)` | `name == "length"` | Variant::Integer | Handled | [1055](../../crates/crysirror-tjs2/src/vm/dispatch.rs#L1055) |
 
 ### vm/mod.rs / Vm<'bc, 'rt, H>::execute_instruction
 
@@ -3282,13 +3361,23 @@ fn execute_instruction(&mut self, ctx: InstructionContext<'_>) -> Result<Step>
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition; under inst.opcode=18 \| 22` | `inst.opcode == 18` | Local state/value operations | Handled | [887](../../crates/crysirror-tjs2/src/vm/mod.rs#L887) |
-| `condition; under inst.opcode=103 \| 110` | `inst.opcode == 110` | DispatchFlags::ignore_prop | Handled | [1071](../../crates/crysirror-tjs2/src/vm/mod.rs#L1071) |
-| `inst.opcode; under inst.opcode=104..=106 \| 111` | `_` | DispatchFlags::default | Handled | [1086](../../crates/crysirror-tjs2/src/vm/mod.rs#L1086) |
-| `condition; under inst.opcode=107 \| 112` | `inst.opcode == 112` | DispatchFlags::ignore_prop | Handled | [1094](../../crates/crysirror-tjs2/src/vm/mod.rs#L1094) |
-| `inst.opcode; under inst.opcode=108 \| 109 \| 113` | `_` | DispatchFlags::default | Handled | [1108](../../crates/crysirror-tjs2/src/vm/mod.rs#L1108) |
-| `condition; under inst.opcode=125` | `let Ok(getter_handle) = self.resolve_object(info.clone()) && matches!( self.runtime.heap[object_handle.0].kind, ObjectKind::InterCode { context: BytecodeContextType::Class, .. } ) && matches!( self.runtime.heap[getter_handle.0].kind, ObjectKind::InterCode { context: BytecodeContextType::SuperClassGetter, .. } )` | TjsError::runtime, self.apply_class_extender, Step::Next | Handled | [1171](../../crates/crysirror-tjs2/src/vm/mod.rs#L1171) |
-| `inst.opcode` | `_` | TjsError::runtime | Unsupported: opcode {} ({}) is not implemented in the VM | [1223](../../crates/crysirror-tjs2/src/vm/mod.rs#L1223) |
+| `condition; under inst.opcode=18 \| 22` | `inst.opcode == 18` | Local state/value operations | Handled | [902](../../crates/crysirror-tjs2/src/vm/mod.rs#L902) |
+| `condition; under inst.opcode=103 \| 110` | `inst.opcode == 110` | DispatchFlags::ignore_prop | Handled | [1086](../../crates/crysirror-tjs2/src/vm/mod.rs#L1086) |
+| `inst.opcode; under inst.opcode=104..=106 \| 111` | `_` | DispatchFlags::default | Handled | [1101](../../crates/crysirror-tjs2/src/vm/mod.rs#L1101) |
+| `condition; under inst.opcode=107 \| 112` | `inst.opcode == 112` | DispatchFlags::ignore_prop | Handled | [1109](../../crates/crysirror-tjs2/src/vm/mod.rs#L1109) |
+| `inst.opcode; under inst.opcode=108 \| 109 \| 113` | `_` | DispatchFlags::default | Handled | [1123](../../crates/crysirror-tjs2/src/vm/mod.rs#L1123) |
+| `condition; under inst.opcode=125` | `let Ok(getter_handle) = self.resolve_object(info.clone()) && matches!( self.runtime.heap[object_handle.0].kind, ObjectKind::InterCode { context: BytecodeContextType::Class, .. } ) && matches!( self.runtime.heap[getter_handle.0].kind, ObjectKind::InterCode { context: BytecodeContextType::SuperClassGetter, .. } )` | TjsError::runtime, self.apply_class_extender, Step::Next | Handled | [1186](../../crates/crysirror-tjs2/src/vm/mod.rs#L1186) |
+| `inst.opcode` | `_` | TjsError::runtime | Unsupported: opcode {} ({}) is not implemented in the VM | [1238](../../crates/crysirror-tjs2/src/vm/mod.rs#L1238) |
+
+### vm/mod.rs / Vm<'bc, 'rt, H>::merge_nested_suspend
+
+```rust
+fn merge_nested_suspend(&mut self, stack: &mut Vec<CallFrame>, outer: CallFrame, pc: usize) -> ()
+```
+
+| Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
+| --- | --- | --- | --- | --- |
+| `condition` | `forward && matches!(inst.opcode, 99..=101)` | Local state/value operations | Handled | [800](../../crates/crysirror-tjs2/src/vm/mod.rs#L800) |
 
 ### vm/mod.rs / Vm<'bc, 'rt, H>::run_call_stack
 
@@ -3298,8 +3387,8 @@ fn run_call_stack(&mut self, mut stack: Vec<CallFrame>, base_depth: usize) -> Re
 
 | Selector / caller branch | Pattern / condition | Implementation calls | State / restriction | Source |
 | --- | --- | --- | --- | --- |
-| `condition; under self.execute_instruction(InstructionContext { object: &call_frame.object, object_handle: call_frame.object_handle, frame: &mut call_frame.frame, inst: &call_frame.instructions[pc], index: pc, next_pc, jump: &call_frame.jump, })=Ok(Step::Next(next))` | `matches!(inst_opcode, 103 \| 107 \| 115)` | Local state/value operations | Handled | [370](../../crates/crysirror-tjs2/src/vm/mod.rs#L370) |
-| `condition; under self.execute_instruction(InstructionContext { object: &call_frame.object, object_handle: call_frame.object_handle, frame: &mut call_frame.frame, inst: &call_frame.instructions[pc], index: pc, next_pc, jump: &call_frame.jump, })=Err(error)` | `self.runtime.suspended_call.is_some() && matches!(inst_opcode, 99..=102)` | self.merge_nested_suspend | Handled | [417](../../crates/crysirror-tjs2/src/vm/mod.rs#L417) |
+| `condition; under self.execute_instruction(InstructionContext { object: &call_frame.object, object_handle: call_frame.object_handle, frame: &mut call_frame.frame, inst: &call_frame.instructions[pc], index: pc, next_pc, jump: &call_frame.jump, })=Ok(Step::Next(next))` | `matches!(inst_opcode, 103 \| 107 \| 115)` | Local state/value operations | Handled | [374](../../crates/crysirror-tjs2/src/vm/mod.rs#L374) |
+| `condition; under self.execute_instruction(InstructionContext { object: &call_frame.object, object_handle: call_frame.object_handle, frame: &mut call_frame.frame, inst: &call_frame.instructions[pc], index: pc, next_pc, jump: &call_frame.jump, })=Err(error)` | `self.runtime.suspended_call.is_some() && matches!(inst_opcode, 99..=102)` | self.merge_nested_suspend | Handled | [422](../../crates/crysirror-tjs2/src/vm/mod.rs#L422) |
 
 ### vm/opcode.rs / binary_family
 

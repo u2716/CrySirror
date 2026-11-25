@@ -1,10 +1,26 @@
 # API change log
 
+## `3832b7ea7ef5e8ae` (2026-11-25) — KiriKiri text selection
+
+`Ui.setTextSelection` adds UTF-16 caret and range editing. Plain fields
+keep their existing editing behavior. Rust callers matching `UiCommand`
+exhaustively must handle `SetTextSelection`. The previous fingerprint
+was `fea5db2c50352d1d`.
+
 ## `fea5db2c50352d1d` (2026-11-25) — KiriKiri launcher overrides
 
 The combined reference adds the optional KiriKiri `launcher_overlay`
 configuration to the rendering API at `1dc311dc1a85ca09`. Existing projects
 can omit the field and keep their current launcher and archive handling.
+
+## `1c2e078251b5e7a6` (2026-11-22) · Text field selection
+
+`Ui.setTextSelection(id, start, end)` enables caret editing for an owned
+editable field. The two offsets are UTF-16 code units. End `-1` extends
+the selection to the end, and start `-1` collapses it at the caret.
+`Ui.insertText` replaces that range or inserts at the caret. Existing
+fields keep their original editing behavior until selection is requested.
+The corresponding `UiCommand::SetTextSelection` is appended to the enum.
 
 ## `a6235515c431567d` (2026-11-22) · KiriKiri launcher overrides
 
