@@ -33,7 +33,11 @@
 //! forward input over a standable top enters `ledge-climb-up` (→ `-2` by
 //! `auto`, then the `idle`/`run` request picks `climb-onto-1-75m^…`);
 //! the drop input enters `fall`. Falling or jumping with an edge in reach
-//! enters `fall-grab-edge`, then `ledge-grab`.
+//! enters `fall-grab-edge`, then `ledge-grab`. Jumping from the hang to
+//! another edge plays `ledge-jump-begin` → `-mid` → `-end`; the native
+//! controller picks `ledge-jump-up-short`/`-long`/`-right-…` clips by name
+//! (their `apReference` places the target edge 2.43 m or 3.90 m above
+//! the root), the tree here plays its default.
 use crate::anim_state::{Machine, StateTable};
 use crate::anim_tree::{Graph, Inputs};
 use crate::dc::sid;
@@ -85,9 +89,13 @@ pub const STATES: &[&str] = &[
     "climb-onto-1-75m^idle",
     "climb-onto-1-75m^run",
     "fall-grab-edge",
+    "ledge-jump-begin",
+    "ledge-jump-mid",
+    "ledge-jump-end",
 ];
 
 const HANG: &[&str] = &["ledge-grab", "ledge-shimmy-left", "ledge-shimmy-right", "fall-grab-edge"];
+const LEAP: &[&str] = &["ledge-jump-begin", "ledge-jump-mid", "ledge-jump-end"];
 const CLIMB: &[&str] = &["ledge-climb-up", "ledge-climb-up-2", "climb-onto-1-75m^idle", "climb-onto-1-75m^run"];
 
 /// How the adapter places the player for the current state.
@@ -100,6 +108,9 @@ pub enum Mode {
     /// Climbing onto an edge's top: the root follows the clip from the
     /// edge where the climb began.
     Climb,
+    /// Jumping from one edge to another (`ledge-jump-begin` → `-mid` →
+    /// `-end`, `auto`): the adapter moves the root between the grips.
+    Leap,
 }
 
 const AMBIENT: &[&str] = &["ambient-casual", "ambient-stand-a1", "ambient-stand-a2", "ambient-stand-a3"];
@@ -166,10 +177,11 @@ pub struct Frame {
     /// Airborne with an edge in reach of the hands.
     pub grab: bool,
     /// While hanging: sideways input (+1 right), forward input over a
-    /// standable top, and the drop input.
+    /// standable top, the drop input, and a jump to another edge.
     pub lateral: f32,
     pub climb: bool,
     pub drop: bool,
+    pub leap: bool,
     /// Ground rise per metre ahead.
     pub slope: f32,
     pub movement: u32,
@@ -297,6 +309,8 @@ impl Controller {
             Mode::Hang
         } else if CLIMB.contains(&state.as_str()) {
             Mode::Climb
+        } else if LEAP.contains(&state.as_str()) {
+            Mode::Leap
         } else {
             Mode::Ground
         }
@@ -319,6 +333,8 @@ impl Controller {
                     if finished {
                         self.anim.machine.force(sid("ledge-grab"), 0.15);
                     }
+                } else if f.leap {
+                    self.anim.machine.force(sid("ledge-jump-begin"), 0.1);
                 } else if f.climb {
                     self.anim.machine.force(sid("ledge-climb-up"), 0.15);
                 } else if f.lateral > 0.5 {
@@ -327,6 +343,12 @@ impl Controller {
                     self.go(table, "ledge-shimmy-left", None, 0.15);
                 } else if state != "ledge-grab" {
                     self.go(table, "ledge-grab", Some("ledge-grab"), 0.15);
+                }
+                return self.finish(graph, table, clips, f, before, None, 0.);
+            }
+            Mode::Leap => {
+                if state == "ledge-jump-end" && finished {
+                    self.anim.machine.force(sid("ledge-grab"), 0.15);
                 }
                 return self.finish(graph, table, clips, f, before, None, 0.);
             }

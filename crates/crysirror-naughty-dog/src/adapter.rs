@@ -189,6 +189,11 @@ struct Player {
     platform: Option<(u32, glam::Mat4)>,
     /// The edge held while hanging or climbing.
     grip: Option<Grip>,
+    /// A jump between edges in progress: the root it started from, the
+    /// target grip and the seconds elapsed.
+    leap: Option<(glam::Vec3, Grip, f32)>,
+    /// Seconds before an airborne player may grab again (after a drop).
+    regrab: f32,
 }
 
 /// Engine side of the script natives: spawner entities, prints and fades.
@@ -1224,7 +1229,7 @@ impl NaughtyDogVm {
         let anim = session.anim_table.as_ref().filter(|_| entity.is_some()).map(|t| crate::player::Controller::new(t, yaw));
         // The camera starts behind the player (eye offset `(-sin, cos)` of
         // the view yaw opposite the facing `(sin, cos)` of the yaw).
-        let mut player = Player { entity, position, yaw, fall: 0., view_yaw: std::f32::consts::PI - yaw, view_pitch: -0.25, controls: true, anim, air_top: None, view_distance: FOLLOW_DISTANCE, platform: None, grip: None };
+        let mut player = Player { entity, position, yaw, fall: 0., view_yaw: std::f32::consts::PI - yaw, view_pitch: -0.25, controls: true, anim, air_top: None, view_distance: FOLLOW_DISTANCE, platform: None, grip: None, leap: None, regrab: 0. };
         // The continue camera spawner sets the starting view direction
         // (eye offset `(-sin y · cos p, -sin p, cos y · cos p)` from the head).
         if let Some(c) = camera {
@@ -1646,7 +1651,7 @@ impl NaughtyDogVm {
                     None => {}
                 }
             }
-            crate::player::Mode::Ground => return,
+            crate::player::Mode::Ground | crate::player::Mode::Leap => return,
         }
         let f = edge_frame(&edge, grip.s).transform_vector3(glam::Vec3::Z);
         p.yaw = f.x.atan2(f.z);
@@ -1656,6 +1661,37 @@ impl NaughtyDogVm {
         p.fall = 0.;
         p.air_top = None;
         p.grip = Some(grip);
+    }
+
+    /// The edge a hanging player can jump to: above (`toward` up: 0.4–2.5 m
+    /// higher, within 0.8 m sideways) or to a side (0.5–2.5 m along
+    /// `toward`, within 1 m of the height), facing the same way. Distances
+    /// are not native (SATD-nd-retail-runtime).
+    fn leap_target(ground: &Ground, grip: Grip, toward: glam::Vec3) -> Option<Grip> {
+        let edge = ground.edge(grip.body, grip.edge)?;
+        let frame = edge_frame(&edge, grip.s);
+        let at = frame.transform_point3(glam::Vec3::ZERO);
+        let facing = frame.transform_vector3(glam::Vec3::Z);
+        let up = toward.y > 0.5;
+        let probe = at + toward * 1.4;
+        let closest = |e: &crate::collision::Edge| {
+            let d = (e.p1 - e.p0).normalize_or_zero();
+            let s = (at - e.p0).dot(d).clamp(0., (e.p1 - e.p0).length());
+            (e.p0 + d * s, s)
+        };
+        ground
+            .edges_near(probe, 1.6)
+            .into_iter()
+            .filter(|(i, e, body)| !(*body == grip.body && *i == grip.edge) && glam::Vec3::new(-e.n1.x, 0., -e.n1.z).normalize_or_zero().dot(facing) > 0.7)
+            .filter_map(|(i, e, body)| {
+                let (q, s) = closest(&e);
+                let d = q - at;
+                let flat = glam::Vec3::new(d.x, 0., d.z);
+                let ok = if up { (0.4..=2.5).contains(&d.y) && flat.length() < 0.8 } else { d.y.abs() < 1. && (0.5..=2.5).contains(&flat.dot(toward)) };
+                ok.then_some((d.length(), Grip { body, edge: i, s, climb: None }))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, g)| g)
     }
 
     /// Place the spawners parented to `parent` (`SpawnerRecord::parent`)
@@ -1991,17 +2027,25 @@ impl NaughtyDogVm {
             let right = glam::Vec3::new(-facing.z, 0., facing.x);
             let stick = if len > 0. { glam::Vec3::new(mv[0], 0., mv[1]) / len } else { glam::Vec3::ZERO };
             let (mut lateral, mut climb, mut release) = (0., false, false);
+            let mut leap_to = None;
+            p.regrab = (p.regrab - seconds).max(0.);
             if mode == crate::player::Mode::Hang {
                 if let Some(edge) = p.grip.and_then(|g| session.ground.edge(g.body, g.edge).map(|e| (g, e))).map(|(g, e)| edge_frame(&e, g.s)) {
                     let probe = edge.transform_point3(glam::Vec3::new(0., 0., 0.45));
                     let top = session.ground.height(probe.x, probe.z, probe.y + 0.35).filter(|h| (h - probe.y).abs() < 0.35);
                     lateral = stick.dot(right);
                     climb = stick.dot(facing) > 0.7 && top.is_some();
+                    // Jump: to an edge above, or to the side the stick
+                    // points.
+                    if input.buttons_pressed & b::SPACE != 0 {
+                        let toward = if lateral.abs() > 0.5 { right * lateral.signum() } else { glam::Vec3::Y };
+                        leap_to = p.grip.and_then(|g| Self::leap_target(&session.ground, g, toward));
+                    }
                 }
                 release = input.buttons_pressed & b::KEY_C != 0 || p.grip.is_some_and(|g| session.ground.edge(g.body, g.edge).is_none());
             }
             let reach = glam::Vec3::from_array(p.position) + glam::Quat::from_rotation_y(p.yaw) * HANG_REACH;
-            let candidate = if mode == crate::player::Mode::Ground && p.fall > -1. && (p.air_top.is_some() || p.fall > 0.) {
+            let candidate = if mode == crate::player::Mode::Ground && p.regrab <= 0. && p.fall > -1. && (p.air_top.is_some() || p.fall > 0.) {
                 session
                     .ground
                     .edges_near(reach, 0.45)
@@ -2030,6 +2074,7 @@ impl NaughtyDogVm {
                     lateral,
                     climb,
                     drop: release,
+                    leap: leap_to.is_some(),
                     seconds,
                 };
                 match anim.step(graph, table, &session.player_clips, &frame) {
@@ -2051,8 +2096,29 @@ impl NaughtyDogVm {
                     Err(e) => session.stage.log(format!("player animation: {e:#}")),
                 }
             }
+            // A jump between edges eases the root from where it started
+            // to the target edge's hang (over `LEAP_SECONDS`).
+            if step_mode == crate::player::Mode::Leap {
+                if p.leap.is_none() {
+                    p.leap = leap_to.map(|g| (glam::Vec3::from_array(p.position), g, 0.));
+                }
+                if let Some((from, to, t)) = p.leap.as_mut() {
+                    *t += seconds;
+                    if let Some(edge) = session.ground.edge(to.body, to.edge) {
+                        let target = edge_frame(&edge, to.s) * glam::Mat4::from_translation(HANG_REACH).inverse();
+                        let x = (*t / LEAP_SECONDS).clamp(0., 1.);
+                        let ease = x * x * (3. - 2. * x);
+                        p.position = from.lerp(target.to_scale_rotation_translation().2, ease).to_array();
+                    }
+                }
+            } else if let Some((_, to, _)) = p.leap.take() {
+                p.grip = Some(to);
+            }
+            if step_mode == crate::player::Mode::Ground && p.grip.is_some() && mode == crate::player::Mode::Hang {
+                p.regrab = 0.4;
+            }
             // On an edge the root follows the grip, not the ground.
-            if step_mode != crate::player::Mode::Ground {
+            if step_mode != crate::player::Mode::Ground && step_mode != crate::player::Mode::Leap {
                 if p.grip.is_none() {
                     // A grab (or a hang without a grip): the nearest edge
                     // in reach.
@@ -2063,7 +2129,7 @@ impl NaughtyDogVm {
             } else if p.grip.take().is_some() {
                 p.air_top = None;
             }
-            let on_edge = step_mode != crate::player::Mode::Ground && p.grip.is_some();
+            let on_edge = step_mode != crate::player::Mode::Ground && (p.grip.is_some() || p.leap.is_some());
             let speed = match ground_speed {
                 _ if on_edge => 0.,
                 Some(v) => v,
@@ -2588,6 +2654,10 @@ fn edge_frame(e: &crate::collision::Edge, s: f32) -> glam::Mat4 {
     let f = f.normalize_or_zero();
     glam::Mat4::from_rotation_translation(glam::Quat::from_rotation_y(f.x.atan2(f.z)), e.p0 + d * s)
 }
+
+/// Seconds a jump between edges takes to move the root (the
+/// `ledge-jump-up-long` begin, mid and end clips last about 1.2 s).
+const LEAP_SECONDS: f32 = 0.9;
 
 /// The root of the default hang (`ledge-grab-idle-hurt`): the edge 1.53 m
 /// above and 0.5 m ahead.

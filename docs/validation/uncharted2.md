@@ -161,3 +161,4 @@ Collision, edges and hanging (2026-11-25):
 - **Camera animation:** the log shows `camera animation 27f169e6` and `camera clip camera-train-wreck-exterior-small: 1201 frames`.
 - **Snow capture:** a free-camera capture shows snow on cliff tops and rock on the walls, where before the rock was bare and the noblend snow ground was white. The light-blue flat region behind the cliffs (the wide backdrop) is unchanged.
 - **Height-mask layers:** `examples/material_samplers` on `train-wreck-wide`, `ice-cave-temple` and `menu-temple` reports `Mask { sampler: 2, softness: 0.1 }` blends (rock → unit 2, mask → unit 0, snow → unit 3 in `rock-to-snow`). The free-camera backdrop capture shows snow on the mountain faces, where before the rock was bare.
+- **Edge jumps:** from the prologue hang, D with Space logs `ledge-jump-begin`, `-mid`, `-end` and `ledge-grab` 1.1 m to the right along the rail; Space alone finds no edge above; C logs `fall` without an immediate re-grab.
