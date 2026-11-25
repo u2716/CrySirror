@@ -1,5 +1,13 @@
 # API change log
 
+## `1dc311dc1a85ca09` (2026-11-25) — textured toon outlines
+
+`ToonShading.outline_texture` adds an optional raw hull colour texture with
+an independent lighting ramp in lookup row 2. Existing serialized materials
+use the default `null` and require no migration. Rust struct literals that
+enumerate every field need `outline_texture: None`. The previous fingerprint
+was `8206decff09b50e6`.
+
 ## `8206decff09b50e6` (2026-11-25) — filmic tonemap curve
 
 `Environment.filmic_curve` (`FilmicCurve`) sets the `filmic` tonemap's Hable constants (shoulder, linear strength and angle, toe strength, numerator and denominator), white point and exposure bias in stops; omitted, the published curve with its 2× bias applies. Rust struct literals of `Environment` need `filmic_curve: None`. The previous fingerprint was `7a50ef09e7ce0526`.

@@ -79,7 +79,7 @@ pub(super) fn model(
         unity,
         op,
         file,
-        root.with_context(|| format!("scene root {root_name}"))?,
+        root.with_context(|| format!("scene root {root_name}"))?, false,
     )
 }
 
@@ -88,16 +88,18 @@ pub(super) fn prefab(
     op: &mut Opener,
     name: &str,
 ) -> Result<(Vec<u8>, usize)> {
-    let key = unity
-        .resource_of(op, &format!("bg/{name}"), c::GAME_OBJECT)?
-        .with_context(|| format!("background resource {name}"))?;
+    resource(unity,op,&format!("bg/{name}"),false)
+}
+
+pub(super) fn resource(unity:&mut UnityData,op:&mut Opener,path:&str,placed:bool)->Result<(Vec<u8>,usize)>{
+    let key=unity.resource_of(op,path,c::GAME_OBJECT)?.with_context(||format!("missing model resource {path}"))?;
     let (_, data) = unity.bytes(op, &key)?;
     let mut r = Reader::new(&data);
     ensure!(r.count(12)? > 0, "background prefab has no transform");
     let root = unity
         .resolve(op, &key.file, r.pptr64()?)?
         .context("background transform")?;
-    build(unity, op, &root.file, root.path_id)
+    build(unity, op, &root.file, root.path_id,placed)
 }
 
 fn build(
@@ -105,6 +107,7 @@ fn build(
     op: &mut Opener,
     file: &str,
     root: i64,
+    placed:bool,
 ) -> Result<(Vec<u8>, usize)> {
     let sf = unity.file(op, file)?;
     let mut stack = vec![(root, None)];
@@ -139,7 +142,9 @@ fn build(
         if !g.bool()? {
             continue;
         }
-        let index = glb.node(&name, parent, pos, rot, scale)?;
+        let index = if placed && parent.is_none(){
+            glb.node(&name,None,[0.;3],[0.,0.,0.,1.],[1.;3])?
+        }else{glb.node(&name, parent, pos, rot, scale)?};
         for _ in 0..r.count(12)? {
             stack.push((r.pptr64()?.path_id, Some(index)));
         }

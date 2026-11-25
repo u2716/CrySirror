@@ -1701,6 +1701,15 @@ pub trait HostServices: FileSystem {
         }
     }
 
+    /// Capture selected owned geometry with a secondary camera on transparent black.
+    /// The job completes after the presenter renders and reads its independent target.
+    fn begin_world_photo(
+        &mut self,
+        _client: ClientId,
+        _photo: crate::graphics::WorldPhoto,
+    ) -> Result<crate::image_processing::ImageJob> {
+        Err(crate::Error::Unsupported("World photo presenter"))
+    }
     fn begin_frame_capture(
         &mut self,
         _client: ClientId,

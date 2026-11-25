@@ -335,14 +335,67 @@ impl Gaze {
 #[derive(Default)]
 pub(super) struct Tracking {
     chase: Option<Chase>,
+    pub photo_target: Option<(usize, Vec3)>,
     gazes: BTreeMap<usize, Gaze>,
     rigs: BTreeMap<usize, Skeleton>,
 }
 impl Tracking {
+    /// ThumShot uses TransformPoint(localPosition + offset) on the posed HeadNub.
+    pub fn photo_transform(
+        &mut self,
+        index: usize,
+        m: &Maid,
+        transform: Mat4,
+        shapes: &[crate::bone_shape::Binding],
+        offset: [f32; 3],
+        files: &GameFiles,
+        op: &Opener,
+        now: u64,
+    ) -> Result<(Vec3, Quat)> {
+        let file = m
+            .slots
+            .get("body")
+            .and_then(|s| s.model.as_ref())
+            .context("missing photograph body")?;
+        if self.rigs.get(&index).is_none_or(|r| &r.file != file) {
+            self.rigs.insert(index, Skeleton::load(file, files, op)?);
+        }
+        let rig = self.rigs.get_mut(&index).unwrap();
+        let head = rig
+            .index("Bip01 HeadNub")
+            .context("missing photograph HeadNub")?;
+        let mut pose = rig.sample(m, files, op, now, transform)?;
+        for (name, q) in &m.tracking_rotations {
+            if let Some(i) = rig.index(name) {
+                pose.local[i].rotation = Quat::from_array(*q);
+            }
+        }
+        let mut nodes = serde_json::Map::new();
+        for shape in shapes {
+            shape.apply(m, &mut nodes);
+        }
+        for (name, node) in nodes {
+            if let Some(i) = rig.index(&name) {
+                if let Some(v) = node.get("scale") {
+                    pose.local[i].scale = Vec3::from_array(serde_json::from_value(v.clone())?);
+                }
+                if let Some(v) = node.get("translation") {
+                    pose.local[i].translation =
+                        Vec3::from_array(serde_json::from_value(v.clone())?);
+                }
+            }
+        }
+        pose.global = anim::global_pose(&rig.model, &pose.local);
+        let world = pose.world(head);
+        let eye =
+            world.transform_point3(mirror(pose.local[head].translation) + Vec3::from_array(offset));
+        Ok((eye, rotation(world) * unity_euler([90., 0., 90.])))
+    }
     pub fn remove(&mut self, i: usize) {
         if self.chase.as_ref().is_some_and(|c| c.actor == i) {
             self.chase = None;
         }
+        if self.photo_target.is_some_and(|(actor, _)| actor == i) { self.photo_target = None; }
         self.rigs.remove(&i);
         self.gazes.remove(&i);
     }
@@ -457,7 +510,8 @@ impl Tracking {
             } else {
                 None
             };
-            g.step(m, &self.rigs[&i], pose, camera, target, dt, files, op)?;
+            let eye_camera = self.photo_target.filter(|(actor, _)| *actor == i).map_or(camera, |(_, p)| p);
+            g.step(m, &self.rigs[&i], pose, eye_camera, target, dt, files, op)?;
         }
         Ok(changed)
     }

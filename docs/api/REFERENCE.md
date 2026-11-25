@@ -6,7 +6,7 @@ Generated from the class registry, the command table, serde defaults and Rust do
 `CRYSIRROR_BLESS=1 cargo test --release -p crysirror-engine --test api_docs`.
 Policy and change log: [README](README.md), [CHANGES](CHANGES.md).
 
-API fingerprint: `8206decff09b50e6`
+API fingerprint: `1dc311dc1a85ca09`
 
 The same classes are exposed to Rust (`EngineContext` calls), to JavaScript/TypeScript (bindings generated from the registry, [crysirror.d.ts](crysirror.d.ts)) and to inspection tools.
 
@@ -6199,6 +6199,7 @@ Cel ("toon") shading, evaluated on display-referred (gamma) values like the forw
 | Field | Rust type | Default | Description |
 |---|---|---|---|
 | `lookup_texture` | `Option<T>` | `null` | — |
+| `outline_texture` | `Option<T>` | `null` | Raw hull colour texture. Lookup row 2 supplies its independent lighting ramp. |
 | `shadow_texture` | `Option<T>` | `null` | — |
 | `highlight_texture` | `Option<T>` | `null` | — |
 | `blend_texture` | `Option<T>` | `null` | Second base texture the colour moves toward by the node's `AnimationState::base_blend` weight (sampled like the base texture). |

@@ -622,6 +622,15 @@ fn fs_outline(i: VertexOut) -> @location(0) vec4<f32> {
     let light = toon_light();
     let ambient = toon_encode(sh_irradiance(n) * frame.env.x / PI);
     let p = material.effect_params;
+    if material.raster.y > 0.5 {
+        let edge = textureSample(t_normal, s_material, material_uv(i.uv)).rgb;
+        let edge_ramp = toon_lookup(2.0, dot(n, l) * 0.495 + 0.5).rgb;
+        var attenuation = 1.0;
+        if frame.sun_color.w > 0.0 {
+            attenuation = mix(1.0, sun_shadow(i.world, max(dot(n, normalize(-frame.sun_dir.xyz)), 0.0), i.clip.xy), frame.sun_color.w);
+        }
+        return vec4<f32>(toon_decode(edge * edge_ramp * light * (2.0 * attenuation)), attenuation);
+    }
     var c = ramp * toon_outline_color().rgb * light * 2.0 + ambient * 2.0;
     if p[3].z > 0.5 {
         // Ramp-shaded (Unity) toon: the outline is shaded like the surface.

@@ -3,6 +3,10 @@
 //! / `Deserialize` with `CharacterMgr`, `Maid` and `ScriptManager` sections
 //! in their `BinaryWriter` encoding. Slot −1 (`SaveData-01.save`) is the
 //! title's return point.
+pub(crate) mod stock_1040;
+pub mod facility_v5;
+pub mod player_1040;
+
 use crate::{
     adapter::{Game, Opener},
     binio::{Reader, Writer},
@@ -47,7 +51,7 @@ pub fn mono_string_hash(s: &str) -> i32 {
     s.encode_utf16().fold(0i32, |h, c| h.wrapping_shl(5).wrapping_sub(h).wrapping_add(i32::from(c)))
 }
 
-fn write_header(w: &mut Writer, h: &Header) {
+pub(crate) fn write_header(w: &mut Writer, h: &Header) {
     w.str(&h.save_time);
     w.i32(h.game_day);
     w.str(&h.player_name);

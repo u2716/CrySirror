@@ -253,6 +253,7 @@ pub fn materialize_canvases(renderer: &mut Renderer, rt: &mut Runtime) -> Result
         renderer.flush_target_writes(&rt.host.scene,&mut rt.assets,canvas,rt.project.background)?;
         rt.prepare_target_images(|target,assets|renderer.render_target_readback(assets,target))?;
     }
+    rt.prepare_world_photos(|scene,size,assets| renderer.world_photo(scene,size,assets));
     rt.prepare_frame_captures(|rt| {
         let canvas = rt.project.canvas;
         renderer.set_engine_frame(rt.host.engine.frame(canvas)?)?;

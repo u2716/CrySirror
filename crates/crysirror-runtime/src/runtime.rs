@@ -537,6 +537,73 @@ impl HostServices for SharedHost {
             &self.image_tasks, self.image_memory.clone(),
         )
     }
+    fn begin_world_photo(
+        &mut self,
+        client: ClientId,
+        photo: crysirror_core::graphics::WorldPhoto,
+    ) -> crysirror_core::Result<crysirror_core::image_processing::ImageJob> {
+        if !self.clients.contains(&client) {
+            return Err(Error::NotFound);
+        }
+        if photo.entities.is_empty()
+            || photo.entities.len() > 4096
+            || photo.size.contains(&0)
+            || u64::from(photo.size[0]) * u64::from(photo.size[1]) > 1024 * 1024
+        {
+            return Err(Error::Limit("World photo size or subject count"));
+        }
+        let camera = crysirror_scene::model::Camera {
+            eye: photo.eye,
+            target: photo.target,
+            up: photo.up,
+            fov_y_degrees: photo.fov_y_degrees,
+            near: photo.near,
+            far: photo.far,
+        };
+        crysirror_scene::model::Scene3d {
+            camera: camera.clone(),
+            meshes: Vec::new(),
+        }
+        .validate()
+        .map_err(|e| Error::Io(e.to_string()))?;
+        let mut scene = self
+            .engine
+            .world
+            .pbr_scene(None)
+            .map_err(|e| Error::Io(e.to_string()))?
+            .ok_or(Error::NotFound)?;
+        if scene.environment_client != client.0 {
+            return Err(Error::Unsupported("World photo requires owned environment"));
+        }
+        let subjects: std::collections::BTreeSet<_> = photo
+            .entities
+            .into_iter()
+            .map(|id| (u64::from(client.0) << 32) | u64::from(id))
+            .collect();
+        scene.instances.retain(|p| subjects.contains(&p.key));
+        if scene.instances.len() != subjects.len() {
+            return Err(Error::NotFound);
+        }
+        scene.camera = camera;
+        scene.environment.show_sky = false;
+        scene.environment.temporal_aa = false;
+        scene.environment.auto_exposure = None;
+        scene.environment.bloom = 0.;
+        scene.environment.reflections = None;
+        scene.vfx = None;
+        scene.vfx_visible = None;
+        scene.emitters.clear();
+        scene.probes.clear();
+        scene.volumes.clear();
+        scene.lights.retain(|l| l.key >> 32 == u64::from(client.0));
+        self.canvas_images.begin_frame(
+            Some(scene),
+            client,
+            photo.size,
+            &self.image_tasks,
+            self.image_memory.clone(),
+        )
+    }
     fn begin_frame_capture(
         &mut self,
         client: ClientId,
@@ -546,7 +613,7 @@ impl HostServices for SharedHost {
         }
         let size = self.capture_canvas;
         self.canvas_images
-            .begin_frame(client, size, &self.image_tasks, self.image_memory.clone())
+            .begin_frame(None, client, size, &self.image_tasks, self.image_memory.clone())
     }
     fn begin_layer_target_image(
         &mut self,

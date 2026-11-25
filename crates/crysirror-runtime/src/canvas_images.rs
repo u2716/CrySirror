@@ -99,6 +99,7 @@ impl Drop for TargetImageCapture {
 }
 
 struct FrameCapture {
+    photo: Option<(crysirror_scene::view::PbrScene, [u32; 2])>,
     response: Weak<Completion>,
 }
 impl Drop for FrameCapture {
@@ -233,6 +234,7 @@ impl Broker {
     }
     pub(crate) fn begin_frame(
         &mut self,
+        photo: Option<crysirror_scene::view::PbrScene>,
         owner: ClientId,
         size: [u32; 2],
         tasks: &TaskPool,
@@ -256,7 +258,9 @@ impl Broker {
             .map_err(|_| Error::Limit("Canvas capture jobs"))?;
         let lease = Admission(self.count.clone());
         let response = Arc::new(Mutex::new(None));
+        self.frames.retain(|f| f.response.strong_count() != 0);
         self.frames.push(FrameCapture {
+            photo: photo.map(|p| (p, size)),
             response: Arc::downgrade(&response),
         });
         Ok(Box::new(Job {
@@ -469,6 +473,31 @@ impl Runtime {
         }
         Ok(())
     }
+    /// Render each frozen owned view separately. Mapping the returned texture runs on an image worker.
+    pub fn prepare_world_photos(
+        &mut self,
+        mut render: impl FnMut(
+            crysirror_scene::view::PbrScene,
+            [u32; 2],
+            &mut Assets,
+        ) -> anyhow::Result<Arc<dyn AssetReader>>,
+    ) {
+        for mut frame in self
+            .host
+            .canvas_images
+            .frames
+            .extract_if(.., |f| f.photo.is_some())
+        {
+            if let Some(response) = frame.response.upgrade() {
+                let (scene, size) = frame.photo.take().expect("selected World photo");
+                let result = render(scene, size, &mut self.assets)
+                    .map_err(|e| format!("World photo: {e:#}"));
+                if let Ok(mut slot) = response.lock() {
+                    *slot = Some(result);
+                }
+            }
+        }
+    }
     /// Complete pending whole-frame captures. `capture` renders the current frame
     /// and returns tightly packed canvas-sized RGBA; it runs only when requested.
     pub fn prepare_frame_captures(
@@ -479,11 +508,11 @@ impl Runtime {
             .canvas_images
             .frames
             .retain(|f| f.response.strong_count() != 0);
-        if self.host.canvas_images.frames.is_empty() {
+        let frames: Vec<_> = self.host.canvas_images.frames.extract_if(.., |f| f.photo.is_none()).collect();
+        if frames.is_empty() {
             return Ok(());
         }
         let result = capture(self);
-        let frames = std::mem::take(&mut self.host.canvas_images.frames);
         let reader: Reply = match result {
             Ok(rgba) => Ok(Arc::new(FrameReader(rgba))),
             Err(reason) => Err(format!("frame capture: {reason:#}")),

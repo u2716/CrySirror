@@ -186,6 +186,49 @@ fn numeric(index: usize, kind: i32, value: i32) -> Prop {
     }
 }
 
+pub(crate) fn read_colors(r: &mut Reader<'_>) -> Result<[PartsColor; 9]> {
+    let cv = r.header("CM3D2_MULTI_COL")?;
+    let count = r.count(37)?;
+    ensure!(
+        count <= 9 && (cv < 200 || count == 9),
+        "invalid retail parts color count {count}"
+    );
+    let mut c = [PartsColor::default(); 9];
+    for p in &mut c[..count] {
+        *p = PartsColor {
+            used: r.bool()?,
+            main_hue: r.i32()?,
+            main_chroma: r.i32()?,
+            main_brightness: r.i32()?,
+            main_contrast: r.i32()?,
+            shadow_rate: r.i32()?,
+            shadow_hue: r.i32()?,
+            shadow_chroma: r.i32()?,
+            shadow_brightness: r.i32()?,
+            shadow_contrast: r.i32()?,
+        };
+    }
+    Ok(c)
+}
+
+/// CharacterMgr.Deserialize passes the outer key to GetProp and reads the
+/// same managed MaidProp payload as a full-capacity preset. Keep slot bytes
+/// available to the save loader, including adjustment dictionaries and flags
+/// that PresetSet intentionally does not apply.
+pub(crate) fn stock_props<'a>(r: &mut Reader<'a>, source: &'a [u8]) -> Result<Vec<(String, &'a [u8])>> {
+    ensure!(r.header("CM3D2_MPROP_LIST")? == 1040, "unsupported stock property list version");
+    let count = r.count(8)?;
+    let mut props = Vec::new();
+    for _ in 0..count {
+        let key = r.string()?;
+        ensure!(character::MPN.iter().any(|name| name.eq_ignore_ascii_case(&key)), "unknown stock property {key}");
+        let start = r.position();
+        read_prop(r).with_context(|| format!("stock property {key}"))?;
+        props.push((key, source.get(start..r.position()).context("invalid stock property bounds")?));
+    }
+    Ok(props)
+}
+
 fn read_preset(bytes: &[u8]) -> Result<(i32, Vec<Prop>, Option<[PartsColor; 9]>)> {
     let mut r = Reader::new(bytes);
     let version = r.header("CM3D2_PRESET")?;
@@ -216,28 +259,7 @@ fn read_preset(bytes: &[u8]) -> Result<(i32, Vec<Prop>, Option<[PartsColor; 9]>)
         }
     }
     let colors = if version >= 2 {
-        let cv = r.header("CM3D2_MULTI_COL")?;
-        let count = r.count(37)?;
-        ensure!(
-            count <= 9 && (cv < 200 || count == 9),
-            "invalid retail parts color count {count}"
-        );
-        let mut c = [PartsColor::default(); 9];
-        for p in &mut c[..count] {
-            *p = PartsColor {
-                used: r.bool()?,
-                main_hue: r.i32()?,
-                main_chroma: r.i32()?,
-                main_brightness: r.i32()?,
-                main_contrast: r.i32()?,
-                shadow_rate: r.i32()?,
-                shadow_hue: r.i32()?,
-                shadow_chroma: r.i32()?,
-                shadow_brightness: r.i32()?,
-                shadow_contrast: r.i32()?,
-            };
-        }
-        Some(c)
+        Some(read_colors(&mut r)?)
     } else {
         None
     };

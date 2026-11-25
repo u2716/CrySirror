@@ -127,6 +127,8 @@ impl ToonLineModel {
 #[serde(default, deny_unknown_fields)]
 pub struct ToonShading<T = String> {
     pub lookup_texture: Option<T>,
+    /// Raw hull colour texture. Lookup row 2 supplies its independent lighting ramp.
+    pub outline_texture: Option<T>,
     pub shadow_texture: Option<T>,
     pub highlight_texture: Option<T>,
     /// Second base texture the colour moves toward by the node's
@@ -207,6 +209,7 @@ impl<T> Default for ToonShading<T> {
     fn default() -> Self {
         Self {
             lookup_texture: None,
+            outline_texture: None,
             shadow_texture: None,
             highlight_texture: None,
             blend_texture: None,
@@ -264,6 +267,7 @@ impl<T> ToonShading<T> {
                 && self.liquid_color.iter().all(|x| range(*x, 0., 16.)),
             "toon shading parameter range"
         );
+        ensure!(self.outline_texture.is_none() || (self.lookup_texture.is_some() && !self.color_table && self.surface_line_texture.is_none()), "textured outline requires an independent lookup row and mask slot");
         self.line_model.validate()?;
         ensure!(matches!(self.line_model, ToonLineModel::Gated) || self.surface_line_texture.is_some(), "toon line model needs a texture");
         ensure!(!self.color_table || self.lookup_texture.is_some(), "toon colour table needs the lookup texture");
@@ -391,7 +395,7 @@ impl<T> Material<T> {
     }
     /// Every texture, the toon textures after the seven material slots.
     pub fn all_textures(&self) -> Vec<&T> {
-        let toon = self.toon.iter().flat_map(|t| t.textures());
+        let toon = self.toon.iter().flat_map(|t| t.textures().into_iter().chain([t.outline_texture.as_ref()]));
         self.textures().into_iter().chain(toon).flatten().collect()
     }
     pub fn validate(&self) -> Result<()> {
@@ -400,7 +404,7 @@ impl<T> Material<T> {
         }
         if let Some(t) = &self.toon {
             t.validate()?;
-            ensure!(t.surface_line_texture.is_none() || self.normal_texture.is_none(), "toon surface lines require the free normal texture slot");
+            ensure!((t.surface_line_texture.is_none() && t.outline_texture.is_none()) || self.normal_texture.is_none(), "toon surface lines require the free normal texture slot");
             ensure!(
                 self.effect.is_none()
                     && !self.unlit

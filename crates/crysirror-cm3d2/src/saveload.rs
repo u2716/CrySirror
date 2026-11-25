@@ -76,7 +76,7 @@ fn header(_game: &Game, opener: &Opener, slot: i32) -> Option<crate::save::Heade
 }
 
 /// `yyyyMMddHHmmss` → `yyyy.MM.dd HH:mm`.
-fn date_text(s: &str) -> String {
+pub(crate) fn date_text(s: &str) -> String {
     if s.len() == 14 && s.bytes().all(|b| b.is_ascii_digit()) {
         format!("{}.{}.{} {}:{}", &s[0..4], &s[4..6], &s[6..8], &s[8..10], &s[10..12])
     } else {

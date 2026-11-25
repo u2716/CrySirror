@@ -85,7 +85,7 @@ pub enum AdvUi {
     /// `CharacterMgr.SetMaidOffsetPos` / `SetMaidOffsetOther` (`multi`).
     MaidOffset { list: Vec<(usize, CharaPer)>, split: i32, multi: bool },
     /// `CharacterMgr.SetManOffsetPos` (character offset only).
-    ManOffset { man: usize, target: (bool, usize), split: i32, per: CharaPer },
+    ManOffset { man: usize, target: (bool, usize), split: i32, per: CharaPer, extra_offsets: bool },
     /// `ScriptManager.is_motion_blend`.
     MotionBlend(bool),
     /// `ScriptManager.StopMotionScript`.
@@ -135,6 +135,8 @@ pub enum AdvUi {
     /// `Maid.ItemChangeTemp`.
     ItemChange { man: bool, slot: usize, category: String, name: String },
     /// `Maid.SetProp(category, item, 0, temp)`.
+    RetailPropSet { man: bool, slot: usize, category: String, value: i32, temporary: bool },
+    RetailPropReset { man: bool, slot: usize, category: String },
     ItemSet { man: bool, slot: usize, category: String, item: String, temp: bool },
     /// `Maid.ResetProp` of each MPN.
     ItemReset { man: bool, slot: usize, props: Vec<String> },
@@ -285,21 +287,22 @@ fn scenario_name(storage: &str) -> String {
 
 /// `ScriptManager.ReplacePersonal`: `?` becomes the `PersonalChar` (C, B,
 /// A for Pure, Cool, Pride) of maid 0.
-fn replace_personal(tjs: &Tjs, name: &str) -> String {
+fn replace_personal(tjs: &mut Tjs, name: &str) -> crysirror_kag::Result<String> {
     if !name.contains('?') {
-        return name.to_owned();
+        return Ok(name.to_owned());
     }
+    let state=&mut tjs.runtime.host_mut().state;
+    if let Some(result)=crate::tjs::retail::replace_script_name(state,name) { return result.map_err(|e|KagError::host(format!("{e:#}"))); }
     let personal = tjs.runtime.host().state.maid(0).map_or(0, |m| m.personal);
     let c = ["C", "B", "A"].get(personal as usize).copied().unwrap_or("");
-    name.replace('?', c)
+    Ok(name.replace('?', c))
 }
 
 impl Ctx<'_> {
-    fn check_target(&self, storage:Option<&str>)->crysirror_kag::Result<bool>{
-        let state=&self.tjs.runtime.host().state.retail;
-        if state.compatibility && let Some(file)=storage.filter(|f|!f.is_empty()) {
-            let name=scenario_name(&replace_personal(&self.tjs,file));
-            if !state.files(self.files).exists(&name){return Err(KagError::host(format!("missing legacy script {name}")));}
+    fn check_target(&mut self, storage:Option<&str>)->crysirror_kag::Result<bool>{
+        if self.tjs.runtime.host().state.retail.compatibility && let Some(file)=storage.filter(|f|!f.is_empty()) {
+            let name=scenario_name(&replace_personal(&mut self.tjs,file)?);
+            if !self.tjs.runtime.host().state.retail.files(self.files).exists(&name){return Err(KagError::host(format!("missing legacy script {name}")));}
         }
         Ok(true)
     }
@@ -321,7 +324,7 @@ impl KagHost for Ctx<'_> {
     }
     fn load_scenario(&mut self, storage: &str) -> crysirror_kag::Result<String> {
         // KagScript.SetReplaceEvent(ReplaceFileNameCallBack).
-        let name = scenario_name(&replace_personal(&self.tjs, storage));
+        let name = scenario_name(&replace_personal(&mut self.tjs, storage)?);
         let bytes = self.tjs.runtime.host().state.retail.files(self.files).read(self.storage, &name).map_err(|e| KagError::host(format!("{e:#}")))?;
         Ok(encoding_rs::SHIFT_JIS.decode(&bytes).0.into_owned())
     }
@@ -351,6 +354,7 @@ pub struct AdvKag {
     /// `SoundMgr` calls of this frame's tags.
     pub sound: Vec<crate::sound::SoundOp>,
     // Preserve the filesystem mode at each retail sound tag, including switches within one Exec.
+    pub(crate) retail_tags: bool,
     pub(crate) retail_sound: Option<Vec<(crate::sound::SoundOp,bool)>>,
     pub ui: Vec<AdvUi>,
     /// `BaseKagManager.fade_wait_`.
@@ -430,6 +434,7 @@ impl AdvKag {
             tag_backup: BTreeMap::new(),
             motion_blend: true,
             sound: Vec::new(),
+            retail_tags: profile == crate::tjs::ScriptProfile::Com3d2,
             retail_sound: (profile == crate::tjs::ScriptProfile::Com3d2).then(Vec::new),
             ui: Vec::new(),
             fade_wait: false,
@@ -507,6 +512,7 @@ impl AdvKag {
             tag_backup: BTreeMap::new(),
             motion_blend: true,
             sound: Vec::new(),
+            retail_tags: false,
             retail_sound: None,
             ui: Vec::new(),
             fade_wait: false,
@@ -698,6 +704,7 @@ impl AdvKag {
         )
     }
 
+    pub(crate) fn current_storage(&self) -> Option<&str> { self.parser.cur_storage() }
     pub fn position(&self) -> String {
         format!(
             "{}:{} {}",
@@ -891,6 +898,13 @@ impl AdvKag {
             return Ok(None);
         }
         Ok(match name {
+            "setdance" if self.retail_sound.is_some() => {
+                if let Some(mode)=a.get("dancetype") {
+                    let mut vm=self.tjs.lock().map_err(|_|anyhow::anyhow!("TJS lock"))?;
+                    crate::tjs::retail::activities::set_mode(&mut vm.runtime.host_mut().state,mode)?;
+                }
+                None
+            }
             // ADVKagManager.TagSceneCall.
             "scenecall" => {
                 let scene = property(a, name, "name")?.to_owned();
@@ -948,14 +962,15 @@ impl AdvKag {
                 let split = crate::text::atoi(property(a, name, "splitnum")?.as_bytes());
                 anyhow::ensure!(split != 0, "splitnum must not be 0");
                 let target = property(a, name, "target")?.to_ascii_lowercase();
-                let target = match target.split_once('=') {
+                let target = match target.split_once([':', '=']) {
                     Some(("man", n)) => (true, crate::text::atoi(n.as_bytes()).max(0) as usize),
                     Some((_, n)) => (false, crate::text::atoi(n.as_bytes()).max(0) as usize),
                     None => (false, crate::text::atoi(target.trim_start_matches(|c: char| !c.is_ascii_digit()).as_bytes()).max(0) as usize),
                 };
                 let per = self.chara_per(a, "")?.unwrap_or_default();
                 // SATD-cm3d2-game-logic: PenisPer (vecChinkoOffset) placement.
-                self.ui.push(AdvUi::ManOffset { man, target, split, per });
+                let extra_offsets = a.keys().any(|key| matches!(key.as_str(), "peniscommonbase" | "penisamend" | "penisdouper" | "penisshincho"));
+                self.ui.push(AdvUi::ManOffset { man, target, split, per, extra_offsets });
                 None
             }
             // BaseKagManager.TagUpdateMaidPoint: kInitMaidPoint (0) + the
@@ -1230,16 +1245,29 @@ impl AdvKag {
                 self.ui.push(AdvUi::ItemChange { man, slot, category: property(a, name, "category")?.to_owned(), name: property(a, name, "name")?.to_owned() });
                 None
             }
+            "propset" | "propreset" if self.retail_tags => {
+                let (man, slot) = who(a);
+                let category = property(a, name, "category")?.to_owned();
+                let effect = if name == "propset" {
+                    AdvUi::RetailPropSet {man, slot, category, value: crate::text::atoi(property(a,name,"val")?.as_bytes()), temporary: a.contains_key("temp")}
+                } else { AdvUi::RetailPropReset {man,slot,category} };
+                self.ui.push(effect);
+                None
+            }
             "itemset" => {
                 let (man, slot) = who(a);
-                self.ui.push(AdvUi::ItemSet { man, slot, category: property(a, name, "category")?.to_owned(), item: property(a, name, "item")?.to_owned(), temp: a.contains_key("temp") });
+                if self.retail_tags && a.contains_key("noscale") {
+                    anyhow::bail!("COM3D2 itemset noscale needs the original world-scale reset");
+                }
+                self.ui.push(AdvUi::ItemSet { man, slot, category: property(a, name, "category")?.to_lowercase(), item: property(a, name, "item")?.to_owned(), temp: a.contains_key("temp") });
                 None
             }
             "itemreset" => {
                 let (man, slot) = who(a);
                 let props: Vec<String> = if a.contains_key("allwear") {
-                    crate::chara::MPN[39..=69].iter().map(|s| s.to_string()).collect()
-                } else if a.contains_key("set") {
+                    let worn = if self.retail_tags { &crate::tjs::retail::RETAIL_MPN[53..=82] } else { &crate::chara::MPN[39..=69] };
+                    worn.iter().map(|s| s.to_string()).collect()
+                } else if !self.retail_tags && a.contains_key("set") {
                     crate::chara::MPN[70..=72].iter().map(|s| s.to_string()).collect()
                 } else if let Some(m) = a.get("multi") {
                     m.split(':').map(str::to_owned).collect()
@@ -1452,13 +1480,13 @@ impl AdvKag {
                 });
                 None
             }
-            "startday" => {
-                self.ui.push(AdvUi::StartDay);
-                None
-            }
-            "endday" => {
-                self.ui.push(AdvUi::EndDay);
-                None
+            "startday" | "endday" => {
+                self.ui.push(if name == "startday" { AdvUi::StartDay } else { AdvUi::EndDay });
+                if self.retail_tags {
+                    // OnStartDay and OnEndDay finish before the next script condition.
+                    self.exec_requested = true;
+                    Some(KagStep::Running)
+                } else { None }
             }
             // ADVKagManager choices.
             "choicesset" | "choicesrandomset" => {

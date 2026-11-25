@@ -85,5 +85,5 @@ fn fs_tonemap(i: FsOut) -> @location(0) vec4<f32> {
         o = filmic(c);
     }
     // The output view is sRGB: write linear values.
-    return vec4<f32>(o, 1.0);
+    return vec4<f32>(o, select(1.0, sample.a, post.params.w > 0.5));
 }

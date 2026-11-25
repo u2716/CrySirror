@@ -24,6 +24,16 @@ pub(crate) fn start_before_hiring(s: &mut TjsState) -> Result<()> {
         .filter(|&r| facilities.exists(0, r) && facilities.string(15, r) == "〇")
         .map(|r| facilities.int(0, r))
         .collect::<BTreeSet<_>>();
+    let businesses = s.retail.table("facility_business_type.nei")?;
+    let fixed_businesses: BTreeSet<_> = (1..facilities.rows)
+        .filter(|&r| facilities.exists(0, r) && fixed.contains(&facilities.int(0, r)))
+        .map(|r| facilities.string(4, r))
+        .collect();
+    let initial_business = (1..businesses.rows)
+        .take_while(|&r| businesses.exists(0, r))
+        .filter(|&r| businesses.int(0, r) != 9999)
+        .map(|r| businesses.string(1, r))
+        .find(|name| fixed_businesses.contains(name));
     let ids = night_ids(&mut s.retail)?;
     let files = s.retail.source()?.files.clone();
     // DayStartManage calls OccurNightWork twice. Its global eligibility
@@ -60,7 +70,9 @@ pub(crate) fn start_before_hiring(s: &mut TjsState) -> Result<()> {
         ensure!(s.maids.contains_key(&i), "missing active maid status");
     }
     // FacilityManager.UpdateNextDay has no pending orders on a new game.
+    s.retail.business_name = initial_business;
     s.retail.peak_facilities = fixed.len();
+    s.retail.facilities = fixed.iter().map(|&type_id| facility::Facility { type_id, ..Default::default() }).collect();
     s.retail.buildings = Some(fixed);
     for (&id, &enabled) in entries.iter() {
         if enabled {

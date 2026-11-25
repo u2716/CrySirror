@@ -220,6 +220,125 @@ target, visibility and transparent clear. The current confirmation reports
 this boundary. Linked/VR branches, populated day advancement, later scene
 controllers and original v1040 slots also remain open.
 
+2026-11-25 — Main-character recruitment now supports the profile panel's
+name inputs and random buttons, body readouts, comment tabs and naming
+dialog. Confirmation runs the installed profile conditions, captures the
+icon and card from the posed head, executes the separate camera/pose script
+and returns to the caller. See `src/com3d2/{stock_profile_ui,photo}.rs` and
+the Metal portrait and UI tests. Main/original creation, facility costume
+editing, VR and existing-character editing use different native branches.
+The installed regression covers main creation. Additional profile selectors,
+colors, editor categories, title and daily controllers, linked modes and
+v1040 save/load still have open acceptance work.
+
+2026-11-25 — Standalone editor lighting, per-texture palette bindings and the
+textured toon forward/hull paths now use the installed 5.6 shader evidence.
+Legacy material-wide tables remain active for Unity 4. The opening now passes
+recruitment and the temporary broom in OP_0002. At frame 12314 the retail
+SceneDaily main menu was the next missing scene (DaytimeMain.ks line 10). Pending native
+save/load and remaining editor controllers still belong to this record.
+
+2026-11-25 — The standalone Daytime and Night menu dispatcher now consumes
+the 20 serialized DailyCtrl references. The scene loads the authored office,
+camera, BGM, status widgets and tutorial pages, routes visible scenario
+buttons and handles the 40-slot morning backup and facility reassignment.
+The installed-data tests for both menus read resources and resolve KAG labels
+without playing a game. See `src/com3d2/daily.rs`,
+`src/tjs/retail/daily.rs` and the [validation note](../../docs/validation/com3d2.md#standalone-daytime-and-night-management-menus).
+Schedule/Save/Load controllers, populated schedule work validation and
+selection on entry, income/work result panels, status-only entry, subsequent
+destination controllers, and gameplay/window acceptance remain open. Club
+name edits update the session. Restoring them from v1040 slots is pending.
+
+2026-11-25 — The standalone basic-training route now crosses the daytime,
+night and income results and returns to day two's daytime menu. Schedule,
+roster selection, communication toggles, result widgets and callbacks live in
+`src/com3d2/business.rs`. Work counts, growth, facility experience and
+day transitions live in `src/tjs/retail/operations.rs`. The ordinary installed
+script fixture runs both `ScheduleProcess` calls and resumes each result
+caller's original label. The eight basic jobs have no pay in this profile.
+Paid facility work and room selection, upgrades and construction, additional
+schedule categories, drag-and-drop reordering, detailed task descriptions,
+result choreography and native v1040 persistence remain open. Windowed input
+and presentation still need separate verification.
+See the [day-two fixture](../../docs/validation/com3d2.md#standalone-basic-training-through-the-second-day).
+
+2026-11-25 — The default work-10000 cancellation returns through the authored
+single-employee selector and script to day two. Ordinary theater work now
+selects a room through the Unity grid and settles both insufficient and
+sufficient staffing. Row dragging updates roster order. Picker, room layout
+and earnings are in `src/com3d2/business/picker.rs`,
+`src/com3d2/widgets/rooms.rs` and `src/tjs/retail/operations/paid.rs`.
+The management fixtures advance scripts and drive authored controls without
+starting the game. See the [installed-data results](../../docs/validation/com3d2.md#standalone-default-night-work-and-paid-facilities).
+
+2026-11-25 — Work 3000 now runs through the employee selector, the installed
+facility upgrade canvas, the room recipe, shift receipt and its original KAG
+return. Material ownership is checked. Buying materials in the standalone
+shop, facility construction, and remaining destination controllers are open.
+The result panel and camera fades use independent clocks. The room selector
+shows the selected shift's operating status, staffing, ratings and thumbnail.
+See `src/com3d2/power.rs`, `src/com3d2/widgets/rooms.rs` and
+`src/tjs/retail/operations/{paid,upgrade}.rs`.
+
+2026-11-25 — Title and daily slot discovery, paging, comment edits and
+confirmed individual slot deletion now use
+`src/com3d2/slots.rs`. Original-assembly writer fixtures cover v1040 player
+status, both backup banks and the facility v5 records. CharacterMgr stock
+decoding shares the standalone preset property reader, retains the male
+metadata and reaches the first employee's status after the nine palettes.
+Whole-slot save, full employee status, script and scene reconstruction, and
+ordinary shop purchases remain open. See the
+[management and slot evidence](../../docs/validation/com3d2.md#standalone-facility-upgrades-and-native-slots).
+
+2026-11-25 — The standalone shop entry, catalog and purchase controllers
+now live in `src/com3d2/shop.rs` and `src/tjs/retail/shop.rs`. The installed
+short fixtures in `src/com3d2/shop/tests.rs` cover both original callers,
+ordinary outfit preview and restoration, material purchase/cancellation,
+item ownership and bundle prices. Work 3000's day-two fixture now purchases
+its material. Scroll dragging, per-hair preview settings and window timing
+remain open alongside construction, the other destination controllers and
+whole-slot persistence. See the [scope and direct scene inventory](../../docs/validation/com3d2.md#standalone-shop-and-management-scene-coverage).
+
+2026-11-25 — Standalone facility construction now dispatches to the
+level 47 panel in `src/com3d2/construction.rs`. Its information and name
+controls live in `src/com3d2/construction/`. The original twelve slots,
+deferred orders, affordability recheck and next-day room installation are
+in `src/tjs/retail/construction.rs`. Installed fixtures cover construction,
+cancellation, protected rooms, replacement, lost funds, demolition, both
+browse tabs, recipe details and live/reserved room renaming. The shared
+facility-canvas reader remains under `src/com3d2/widgets/power.rs`. The
+wardrobe tab/editor return, whole native slots, and ten other direct scene
+destinations are still open. See the [component inventory](../../docs/validation/com3d2.md#standalone-management-component-inventory-and-facility-construction).
+
+2026-11-25 — The fourth level-47 tab now controls live and planned facility
+uniforms. `src/tjs/retail/wardrobe.rs` owns the mode, temporary clothing
+properties and room-specific edit return. The stock editor and existing
+portrait session branch on the original facility mode. Remaining evidence
+includes the physical editor-to-portrait round trip and per-part enable
+settings. See the [wardrobe fixture](../../docs/validation/com3d2.md#standalone-facility-uniforms).
+
+2026-11-25 — Level 5 per-part facility force settings and the level 19
+staff roll have player input and dispatch paths in `com3d2/stock_editor/costume.rs`
+and `com3d2/credits.rs`. Window appearance, credits animator transitions,
+native slot persistence and the nine remaining direct scene destinations
+still require evidence. See the current [component inventory](../../docs/validation/com3d2.md#standalone-management-component-inventory-and-facility-construction).
+
+2026-11-25 — Standalone level 10 now dispatches to `src/com3d2/awards.rs`.
+The collection, help pages, ownership and card viewer use installed level,
+table and prefab data. Eight direct destinations still lack dispatch. Native
+slots, physical window comparison and the outstanding management components
+remain in scope. See [the level 10 fixture](../../docs/validation/com3d2.md#standalone-level-10-trophy-collection).
+
+2026-11-25 — Standalone level 49 event selection, level 7 personnel,
+level 21 free dance selection and level 23 desk decoration now have player
+dispatch and installed input fixtures in `src/com3d2/{events,personnel,dance,desk}.rs`.
+Four direct destinations still lack dispatch (photo, creative room, examination
+and casino). Outstanding branches in the four newly reachable scenes include
+personnel status/classes, dance execution and settings, desk transforms and
+slot data, and broader scenario condition/cast validation. See the
+[per-controller results](../../docs/validation/com3d2.md#standalone-management-destinations-after-level-10).
+
 **Closure.** Exercise the remaining controllers, rendering and resource
 variants through installed original scripts and ordinary input, including
 native save/reload and character assembly. See [validation](../../docs/validation/com3d2.md).

@@ -5,11 +5,14 @@ use crate::params::MaidStatus;
 #[derive(Clone, Default)]
 pub(super) struct Status {
     pub(super) portraits: Option<[String; 2]>,
+    pub(super) thumbnail_icon: Option<Arc<dyn crysirror_core::image_processing::ImageResource>>,
+    pub(super) thumbnail_card_time: String,
     pub(super) relation: i32,
     pub(super) old_skill_ids: BTreeSet<i32>,
     pub(super) sub_name: Option<String>,
     pub(super) sensual: i32,
     pub(super) communication: [bool; 2],
+    pub(super) class_exp: [BTreeMap<i32,i32>;2],
     pub(super) job_levels: BTreeMap<i32, i32>,
     pub(super) skill_class_levels: BTreeMap<i32, i32>,
     pub(super) old: Option<LegacyStatus>,

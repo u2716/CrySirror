@@ -90,13 +90,13 @@ fn slide(m: &mut Maid, n: &str, fraction: f32) -> Result<()> {
     Ok(())
 }
 
-fn named(t: &Table, column: usize, name: &str) -> Result<usize> {
+pub(super) fn named(t: &Table, column: usize, name: &str) -> Result<usize> {
     (1..t.rows)
         .find(|&r| t.string(column, r) == name)
         .with_context(|| format!("unknown stock definition {name}"))
 }
 
-fn names(s: &mut State) -> Result<Arc<[Vec<String>; 2]>> {
+pub(crate) fn names(s: &mut State) -> Result<Arc<[Vec<String>; 2]>> {
     if let Some(values) = &s.stock_names {
         return Ok(values.clone());
     }
@@ -134,7 +134,7 @@ fn class_parameter(m: &MaidStatus, x: &character::Status, key: &str) -> Result<i
     })
 }
 
-fn apply_class_level(m: &mut MaidStatus, x: &mut character::Status, text: &str) -> Result<()> {
+pub(super) fn corrections(text: &str) -> Result<BTreeMap<String, i32>> {
     let mut pack = BTreeMap::<String, i32>::new();
     for term in text.split(',').filter(|v| !v.is_empty()) {
         let term = term
@@ -155,7 +155,11 @@ fn apply_class_level(m: &mut MaidStatus, x: &mut character::Status, text: &str) 
             _ => *field += value,
         }
     }
-    for (key, value) in pack {
+    Ok(pack)
+}
+
+fn apply_class_level(m: &mut MaidStatus, x: &mut character::Status, text: &str) -> Result<()> {
+    for (key, value) in corrections(text)? {
         let field = match key.as_str() {
             "興奮" => &mut x.bonus_excite,
             "官能" => &mut x.bonus_sensual,
@@ -183,11 +187,12 @@ fn apply_class_level(m: &mut MaidStatus, x: &mut character::Status, text: &str) 
     Ok(())
 }
 
-fn initial_classes(
+fn learn_classes(
     s: &mut TjsState,
     m: &mut MaidStatus,
     status: &mut character::Status,
     skills: bool,
+    editing: bool,
 ) -> Result<BTreeMap<String, i32>> {
     let base = if skills {
         "maid_status_yotogiclass"
@@ -196,7 +201,16 @@ fn initial_classes(
     };
     let list = s.retail.table(&format!("{base}_list.nei"))?;
     let conditions = s.retail.table(&format!("{base}_acquired_condition.nei"))?;
-    let bonus = s.retail.table(&format!("{base}_bonus.nei"))?;
+    let personals = s.retail.table("maid_status_personal_list.nei")?;
+    let row = row_id(&personals, m.personal)?;
+    let personal = personals.string(1, row);
+    let old_personal = personals.string(5, row) == "〇";
+    let condition = ["No_No", "Yes_No", "No_Yes", "Yes_Yes"]
+        .get(m.seikeiken as usize)
+        .context("invalid experience")?;
+    let contract = ["Trainee", "Free", "Exclusive"]
+        .get(m.contract_type as usize)
+        .context("invalid contract")?;
     let facilities = s.retail.table("facility.nei")?;
     let mut levels = BTreeMap::new();
     // GetLearnPossibleClassDatas evaluates the entire list before Add updates the bonuses.
@@ -215,11 +229,12 @@ fn initial_classes(
             let v = conditions.string(col, r);
             v.is_empty() || v.split(sep).any(|x: &str| x.trim() == expect)
         };
-        if !accepts(1, ',', "Muku")
-            || (conditions.string(1, r).is_empty() && conditions.string(2, r) == "〇")
-            || !accepts(3, '|', "No_No")
-            || !accepts(4, '|', "Trainee")
-        {
+        let named_personals = conditions.string(1, r);
+        let allow_old = conditions.string(2, r) == "〇";
+        let personal_ok = (named_personals.is_empty() && !allow_old)
+            || (allow_old && old_personal)
+            || named_personals.split(',').any(|n| n.trim() == personal);
+        if !personal_ok || !accepts(3, '|', *condition) || !accepts(4, '|', *contract) {
             continue;
         }
         if conditions.exists(5, r) {
@@ -250,12 +265,34 @@ fn initial_classes(
                 break;
             }
         }
-        if eligible {
+        let open = if skills {
+            &s.player.yotogi_class_open
+        } else {
+            &s.player.maid_class_open
+        };
+        if eligible && (!editing || open.contains(&id)) {
             acquired.push((id, key));
         }
     }
+    let (owned, selected, open) = if skills {
+        (
+            &mut status.skill_class_levels,
+            &mut m.current_yotogi_class,
+            &mut s.player.yotogi_class_open,
+        )
+    } else {
+        (
+            &mut status.job_levels,
+            &mut m.current_maid_class,
+            &mut s.player.maid_class_open,
+        )
+    };
+    let previous = std::mem::take(owned);
+    let totals = &mut status.class_exp[usize::from(skills)];
+    let previous_exp = std::mem::take(totals);
+    let mut new_selection = None::<i32>;
+    let exp = s.retail.table(&format!("{base}_experiences.nei"))?;
     for (id, key) in acquired {
-        let exp = s.retail.table(&format!("{base}_experiences.nei"))?;
         let er = named(&exp, 0, &key)?;
         let mut xp = Exp::default();
         xp.set_list(
@@ -264,31 +301,29 @@ fn initial_classes(
                 .map(|c| exp.int(c, er))
                 .collect(),
         );
-        if !skills {
-            let br = named(&bonus, 0, &key)?;
-            for c in 1..=xp.level as usize {
-                apply_class_level(m, status, &bonus.string(c, br))?;
-            }
-        }
-        let (owned, selected, open) = if skills {
-            (
-                &mut status.skill_class_levels,
-                &mut m.current_yotogi_class,
-                &mut s.player.yotogi_class_open,
-            )
+        let level = if editing && !skills {
+            previous.get(&id).copied().unwrap_or(xp.level)
         } else {
-            (
-                &mut status.job_levels,
-                &mut m.current_maid_class,
-                &mut s.player.maid_class_open,
-            )
+            xp.level
         };
-        if owned.is_empty() {
+        if owned.is_empty() && (!editing || skills) {
             *selected = id;
         }
-        owned.insert(id, xp.level);
-        open.add(id);
-        levels.insert(key, xp.level);
+        if editing && !skills && !previous.contains_key(&id) {
+            new_selection = Some(new_selection.map_or(id, |current| current.max(id)));
+        }
+        let total = if editing && !skills { previous_exp.get(&id).copied().unwrap_or(xp.total) } else { xp.total };
+        totals.insert(id,total);
+        owned.insert(id, level);
+        if !editing {
+            open.add(id);
+        }
+        levels.insert(key, level);
+    }
+    if let Some(id) = new_selection {
+        *selected = id;
+    } else if !owned.contains_key(selected) && let Some((&id, _)) = owned.first_key_value() {
+        *selected = id;
     }
     Ok(levels)
 }
@@ -299,6 +334,8 @@ fn initial_skills(
     jobs: &BTreeMap<String, i32>,
     classes: &BTreeMap<String, i32>,
 ) -> Result<()> {
+    let personal_list = s.table("maid_status_personal_list.nei")?;
+    let personal = personal_list.string(1, row_id(&personal_list, m.personal)?);
     let list = s.table("yotogi_skill_list.nei")?;
     let req = s.table("yotogi_skill_acquisition.nei")?;
     for r in 1..list.rows {
@@ -327,7 +364,7 @@ fn initial_skills(
             continue;
         }
         let personals = req.string(13, r);
-        if !personals.is_empty() && !personals.split(',').any(|n| n.trim() == "Muku") {
+        if !personals.is_empty() && !personals.split(',').any(|n| n.trim() == personal) {
             continue;
         }
         let accepts = if req.int(15, r) > 0 {
@@ -353,6 +390,119 @@ fn initial_skills(
             );
         }
     }
+    Ok(())
+}
+
+pub(super) fn class_bonus(
+    s: &mut State,
+    m: &mut MaidStatus,
+    x: &mut character::Status,
+    jobs: &BTreeMap<String, i32>,
+) -> Result<()> {
+    m.bonus = Default::default();
+    x.bonus_excite = 0;
+    x.bonus_sensual = 0;
+    x.bonus_reason = 0;
+    x.bonus_cooking = 0;
+    x.bonus_vocal = 0;
+    x.bonus_dance = 0;
+    x.bonus_appeal = 0;
+    if x.sub_name.is_none() {
+        let bonus = s.table("maid_status_jobclass_bonus.nei")?;
+        for (name, level) in jobs {
+            let row = named(&bonus, 0, name)?;
+            for col in 1..=usize::try_from(*level)? {
+                apply_class_level(m, x, &bonus.string(col, row))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// ProfileCtrl.UpdateProfileData at exit from main/original character creation.
+pub(crate) fn finish_profile(s: &mut TjsState, main: bool) -> Result<()> {
+    let id = s
+        .active_maids
+        .first()
+        .copied()
+        .flatten()
+        .context("missing profile subject")?;
+    let mut m = s.maids.get(&id).context("missing profile status")?.clone();
+    let mut x = s
+        .retail
+        .characters
+        .get(&m.guid_id)
+        .context("missing profile data")?
+        .clone();
+    let personal_list = s.retail.table("maid_status_personal_list.nei")?;
+    let personal = personal_list.string(1, row_id(&personal_list, m.personal)?);
+    let feature = s.retail.table("maid_status_feature_list.nei")?;
+    let conditions = s
+        .retail
+        .table("maid_status_personal_feature_condition.nei")?;
+    m.feature.clear();
+    if let Some(start) = (1..conditions.rows).find(|&r| conditions.string(0, r) == personal) {
+        for row in (start..conditions.rows).take_while(|&r| conditions.exists(1, r)) {
+            let needed = match conditions.string(2, row).as_str() {
+                "前穴" => Some(1),
+                "後穴" => Some(2),
+                "両穴" => Some(3),
+                _ => None,
+            };
+            if needed.is_some_and(|v| v != m.seikeiken) {
+                continue;
+            }
+            let mut requirements = BTreeMap::<String, i32>::new();
+            for col in (3..conditions.columns)
+                .step_by(2)
+                .take_while(|&c| conditions.exists(c, row))
+            {
+                *requirements.entry(conditions.string(col, row)).or_default() +=
+                    conditions.int(col + 1, row);
+            }
+            let mut possible = true;
+            for (name, threshold) in requirements {
+                possible &= class_parameter(&m, &x, &name)? >= threshold;
+            }
+            let f = feature.int(0, named(&feature, 1, &conditions.string(1, row))?);
+            if possible && s.retail.enabled("maid_status_feature_enabled_list", f)? {
+                m.feature.add(f);
+            }
+        }
+    }
+    let classes = learn_classes(s, &mut m, &mut x, true, true)?;
+    let jobs = learn_classes(s, &mut m, &mut x, false, true)?;
+    class_bonus(&mut s.retail, &mut m, &mut x, &jobs)?;
+    m.skill_data.clear();
+    initial_skills(&mut s.retail, &mut m, &jobs, &classes)?;
+    m.play_number = 0;
+    if m.init_seikeiken != 0 {
+        let table = s.retail.table("init_keiken_num_setting.nei")?;
+        for r in (1..table.rows).take_while(|&r| table.exists(0, r)) {
+            let kind = match table.string(0, r).as_str() {
+                "後穴" => 2,
+                "両穴" => 3,
+                _ => 1,
+            };
+            if kind == m.init_seikeiken
+                && table.int(2, r) <= m.a_inyoku()
+                && table.int(3, r) <= m.a_hentai()
+            {
+                m.play_number = table.int(1, r);
+                break;
+            }
+        }
+    }
+    let model = s.retail.stock_models[&id].clone();
+    measure(&mut m, &model);
+    stock_profile::initialize(&mut s.retail, &mut m, &model)?;
+    if main {
+        s.retail.main_characters.insert(id);
+    } else {
+        s.retail.main_characters.remove(&id);
+    }
+    s.retail.characters.insert(m.guid_id.clone(), x);
+    s.maids.insert(id, m);
     Ok(())
 }
 
@@ -507,7 +657,7 @@ fn apply_sub(
     Ok(())
 }
 
-fn initialize(s: &mut TjsState, key: &str) -> Result<()> {
+pub(super) fn initialize(s: &mut TjsState, key: &str) -> Result<()> {
     let source = s.retail.source()?.clone();
     let personal = s.retail.table("maid_status_personal_list.nei")?;
     let initial = personal.int(0, named(&personal, 1, "Muku")?);
@@ -541,8 +691,9 @@ fn initialize(s: &mut TjsState, key: &str) -> Result<()> {
         ..Default::default()
     };
     let mut x = character::Status::default();
-    let jobs = initial_classes(s, &mut m, &mut x, false)?;
-    let classes = initial_classes(s, &mut m, &mut x, true)?;
+    let jobs = learn_classes(s, &mut m, &mut x, false, false)?;
+    class_bonus(&mut s.retail, &mut m, &mut x, &jobs)?;
+    let classes = learn_classes(s, &mut m, &mut x, true, false)?;
     initial_skills(&mut s.retail, &mut m, &jobs, &classes)?;
     m.hp = 100;
     m.mind = 100;
@@ -668,7 +819,9 @@ pub(crate) fn edit_wear(s: &mut TjsState, id: usize, file: &str) -> Result<()> {
         .context("missing stock model")?)
     .clone();
     let item = crate::menu::MenuFile::parse(&files.read(storage.as_ref(), file)?)?;
-    m.set_prop_file(&item.category, file, false)?;
+    let temporary=s.retail.edit_facility.is_some();
+    if temporary {ensure!(wardrobe::enabled(&mut s.retail)?.iter().any(|n|n.eq_ignore_ascii_case(&item.category)),"disabled facility clothing property");}
+    m.set_prop_file(&item.category, file, temporary)?;
     m.all_proc_prop(&files, storage.as_ref())?;
     let body = mirror(&m);
     s.bodies.insert(id, body);

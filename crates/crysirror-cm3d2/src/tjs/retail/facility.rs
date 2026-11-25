@@ -4,17 +4,13 @@ use super::*;
 #[derive(Clone, Default)]
 pub(super) struct Facility {
     pub type_id: i32,
+    pub slot:Option<usize>,
+    pub name: Option<String>,
     pub assigned: [BTreeSet<String>; 2],
-    pub costume: Costume,
+    pub before_assignment: [BTreeSet<String>; 2],
+    pub costume: wardrobe::Wardrobe,
+    pub recipes: BTreeMap<i32,Vec<i32>>,
 }
-#[derive(Clone, Default)]
-pub(super) enum Costume {
-    Default,
-    Edited(BTreeMap<String, Option<String>>),
-    #[default]
-    Heroine,
-}
-
 pub(super) fn roster(s: &TjsState) -> Vec<usize> {
     s.player
         .schedule_slot
@@ -178,7 +174,7 @@ pub(super) fn random_communication(s: &mut TjsState, _: &[Variant]) -> Result<Va
     Ok(Variant::Void)
 }
 
-fn night_roles(s: &mut State) -> Result<BTreeMap<i32, String>> {
+pub(super) fn night_roles(s: &mut State) -> Result<BTreeMap<i32, String>> {
     let ids = day::night_ids(s)?;
     let mut roles = BTreeMap::new();
     for (name, column) in [
@@ -277,7 +273,7 @@ pub(super) fn costume(s: &mut TjsState, a: &[Variant], reset_all: bool) -> Resul
     let guid = &s.maids.get(&index).context("missing maid")?.guid_id;
     let assigned = assignment(&s.retail, guid, shift(s));
     let (id, mode) = if reset_all {
-        (0, Costume::Heroine)
+        (0, wardrobe::Wardrobe::default())
     } else if let Some(f) = assigned {
         (f.type_id, f.costume.clone())
     } else {
@@ -288,37 +284,14 @@ pub(super) fn costume(s: &mut TjsState, a: &[Variant], reset_all: bool) -> Resul
     for r in (1..enabled.rows).take_while(|&r| enabled.exists(0, r)) {
         edits.insert(character::mpn_name(&enabled.string(0, r))?, None);
     }
-    match mode {
-        Costume::Heroine => {}
-        Costume::Edited(values) => {
+    match mode.mode {
+        wardrobe::Mode::Heroine => {}
+        wardrobe::Mode::Default | wardrobe::Mode::Edited => {
+            let values=if mode.mode==wardrobe::Mode::Edited {match &mode.edits {Some(values)=>values.clone(),None=>wardrobe::defaults(&mut s.retail,id,true)?.0}} else {wardrobe::defaults(&mut s.retail,id,false)?.0};
             edits.clear();
             for (name, file) in values {
-                edits.insert(character::mpn_name(&name)?, file);
-            }
-        }
-        Costume::Default => {
-            let t = s.retail.table("facility_default_costume.nei")?;
-            let Some(col) = (1..t.columns).find(|&col| t.int(col, 3) == id) else {
-                return Ok(Variant::Void);
-            };
-            let enabled = edits;
-            edits = BTreeMap::new();
-            for r in (4..t.rows).take_while(|&r| t.exists(0, r)) {
-                let Ok(name) = character::mpn_name(&t.string(0, r)) else {
-                    break;
-                };
-                if !enabled.contains_key(name) {
-                    continue;
-                }
-                let file = t.string(col, r);
-                let file = if file.is_empty() {
-                    None
-                } else if file.eq_ignore_ascii_case("del") {
-                    Some(preset::delete_menu(name).unwrap_or("").into())
-                } else {
-                    Some(format!("{file}.menu"))
-                };
-                edits.insert(name, file);
+                let reset = mode.mode == wardrobe::Mode::Edited && mode.edits.is_some() && !mode.forced(&name);
+                edits.insert(character::mpn_name(&name)?, if reset { None } else { file });
             }
         }
     }
@@ -359,4 +332,99 @@ pub(super) fn built(s: &mut TjsState, t: &Table, id: i32) -> bool {
             .collect()
     });
     defaults.contains(&id) || s.retail.facilities.iter().any(|f| f.type_id == id)
+}
+
+/// FacilityManager visits facilities in array order, revisiting assignments
+/// excluded on an earlier refresh after filtering each current shift.
+pub(super) fn daily_assignments(s: &mut TjsState) -> Result<Option<Vec<Facility>>> {
+    if s.retail.facilities.iter().all(|f| {
+        f.assigned
+            .iter()
+            .chain(&f.before_assignment)
+            .all(BTreeSet::is_empty)
+    }) {
+        return Ok(None);
+    }
+    let training = s.retail.table("schedule_work_noon.nei")?;
+    let mut types = BTreeMap::new();
+    for r in 1..training.rows {
+        let work = training.int(0, r);
+        if s.retail.enabled("schedule_work_noon_enabled", work)? {
+            if training.string(1, r).is_empty() {
+                break;
+            }
+            types.insert(work, Some(training.int(3, r)));
+        }
+    }
+    for work in night_roles(&mut s.retail)?.into_keys() {
+        types.entry(work).or_insert(None);
+    }
+    let defs = s.retail.table("schedule_define.nei")?;
+    let power = (0..defs.rows)
+        .filter(|&r| defs.string(0, r) == "faclilityPowerUpWorkId")
+        .map(|r| defs.int(1, r))
+        .next_back()
+        .unwrap_or(3000);
+    // Work inherits Training.facilityId = 100, including the synthetic
+    // power-up record. FacilityDefaultData sets Work.facility separately.
+    types.insert(power, (100 != power).then_some(100));
+    let t = s.retail.table("facility.nei")?;
+    for r in (1..t.rows).take_while(|&r| t.exists(0, r)) {
+        let work = t.int(1, r);
+        if work > 0 {
+            types
+                .entry(work)
+                .or_insert((100 != power).then_some(t.int(0, r)));
+        }
+    }
+    let mut facilities = s.retail.facilities.clone();
+    let stock: BTreeSet<_> = s
+        .stock
+        .iter()
+        .filter_map(|i| s.maids.get(i))
+        .map(|m| m.guid_id.as_str())
+        .collect();
+    let roster: BTreeMap<_, _> = roster(s)
+        .into_iter()
+        .map(|i| {
+            let m = &s.maids[&i];
+            (m.guid_id.as_str(), [m.noon_work_id, m.night_work_id])
+        })
+        .collect();
+    for i in 0..facilities.len() {
+        for shift in 0..2 {
+            let ty = facilities[i].type_id;
+            let valid = |guid: &String| {
+                roster
+                    .get(guid.as_str())
+                    .and_then(|w| types.get(&w[shift]))
+                    .copied()
+                    .flatten()
+                    == Some(ty)
+            };
+            let mut active = BTreeSet::new();
+            let mut excluded = BTreeSet::new();
+            for guid in &facilities[i].assigned[shift] {
+                if valid(guid) {
+                    active.insert(guid.clone());
+                } else if stock.contains(guid.as_str()) {
+                    excluded.insert(guid.clone());
+                }
+            }
+            for guid in &facilities[i].before_assignment[shift] {
+                if stock.contains(guid.as_str())
+                    && !facilities.iter().any(|f| f.assigned[shift].contains(guid))
+                {
+                    if valid(guid) {
+                        active.insert(guid.clone());
+                    } else {
+                        excluded.insert(guid.clone());
+                    }
+                }
+            }
+            facilities[i].assigned[shift] = active;
+            facilities[i].before_assignment[shift] = excluded;
+        }
+    }
+    Ok(Some(facilities))
 }

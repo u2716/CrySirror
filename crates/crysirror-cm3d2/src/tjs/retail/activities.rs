@@ -56,6 +56,25 @@ pub(super) fn set_dance(s: &mut TjsState, a: &[Variant]) -> Result<Variant> {
     Ok(Variant::Void)
 }
 
+/// BaseKagManager.TagSetDanceType and the free dance menu.
+pub(crate) fn set_mode(s:&mut TjsState,mode:&str)->Result<()> {
+    let kind=enum_value(DANCE_TYPES,mode).with_context(||format!("unknown dance mode {mode}"))?;
+    ensure!(matches!(mode,"Free"|"View"),"unsupported COM3D2 dance mode {mode}");
+    let d=&mut s.retail.activities;
+    d.dance_type=kind;
+    d.second_dance=false;
+    d.capture_ok=false;
+    Ok(())
+}
+
+pub(crate) fn cast(s:&mut TjsState,slots:&[Option<usize>]){
+    s.active_maids.fill(None);
+    let mut count=0;
+    for (slot,id) in slots.iter().enumerate(){
+        if let Some(id)=id {facility::activate(s,slot,*id,false);count+=1;}
+    }
+    s.tmp_flags.insert("ダンス設定人数".into(),count);
+}
 pub(super) fn check_dance(s: &mut TjsState, a: &[Variant]) -> Result<Variant> {
     ensure!(!a.is_empty(), "expected at least one dance type");
     let mut matched = false;

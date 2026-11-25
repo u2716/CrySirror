@@ -70,6 +70,7 @@ pub struct Slot {
     /// Material → parts colour of its `_MultiColTex` (`ChangeTex` with a
     /// `PARTS_COLOR`).
     pub multicolor: BTreeMap<usize, usize>,
+    pub texture_colors: BTreeMap<(usize, String), usize>,
     /// `additem … アタッチ <slot> <point>` or `ボーンにアタッチ <bone>`.
     pub attach: Option<(String, String)>,
     /// `アタッチポイントの設定` of this slot's model: name → (position, Euler degrees).
@@ -139,6 +140,8 @@ pub struct Prop {
     pub value: i32,
     pub file: String,
     pub temp_file: String,
+    pub temporary_value: Option<i32>,
+    pub processed_value: Option<i32>,
     /// `boDut` / `boTempDut`.
     pub dut: bool,
     pub temp_dut: bool,
@@ -271,6 +274,27 @@ impl Maid {
         self.prop_index(name).and_then(|i| self.props.get(i)).map_or(0, |p| p.value)
     }
 
+    pub fn posed_value(&self, name: &str) -> i32 {
+        self.prop_index(name).map_or(0, |i| self.props[i].processed_value.unwrap_or(self.props[i].value))
+    }
+
+    pub fn set_numeric_prop(&mut self, name: &str, value:i32, temporary:bool) -> Result<()> {
+        if !temporary { return self.set_value(name,value); }
+        let i=self.prop_index(name).context("unknown pose property")?;
+        let p=&mut self.props[i];
+        p.temporary_value=Some(value.clamp(p.min,p.max));
+        p.temp_dut=true;
+        Ok(())
+    }
+
+    pub fn reset_numeric_prop(&mut self,name:&str) -> Result<()> {
+        let i=self.prop_index(name).context("unknown pose property")?;
+        if self.props[i].temporary_value.unwrap_or(0)!=self.props[i].value || !self.props[i].temp_file.is_empty() {
+            self.reset_prop(name)?;
+        }
+        Ok(())
+    }
+
     /// Item menu of a prop (`strFileName`).
     pub fn file(&self, name: &str) -> Option<&str> {
         self.prop_index(name).and_then(|i| self.props.get(i)).map(|p| p.file.as_str()).filter(|f| !f.is_empty())
@@ -281,6 +305,8 @@ impl Maid {
         let i = self.prop_index(name).with_context(|| format!("指定されたプロパティ名がありません。{name}"))?;
         let p = &mut self.props[i];
         p.value = value.clamp(p.min, p.max);
+        p.temp_dut=false;
+        p.processed_value=None;
         p.dut = true;
         Ok(())
     }
@@ -318,6 +344,7 @@ impl Maid {
         let p = &mut self.props[i];
         p.dut = true;
         p.temp_file.clear();
+        p.temporary_value = None;
         p.temp_dut = false;
         Ok(())
     }
@@ -401,7 +428,7 @@ impl Maid {
         if *value == color { return; }
         *value = color;
         for s in self.slots.values_mut() {
-            if s.multicolor.values().any(|v| *v == id) {
+            if s.multicolor.values().chain(s.texture_colors.values()).any(|v| *v == id) {
                 s.dirty = true;
             }
         }
@@ -438,6 +465,9 @@ impl Maid {
             if !self.busy() {
                 for p in &mut self.props {
                     if p.kind == 1 || p.kind == 2 {
+                        if p.dut { p.processed_value = None; }
+                        else if p.temp_dut {p.processed_value = p.temporary_value;}
+                        p.temp_dut = false;
                         p.dut = false;
                     }
                 }
@@ -587,17 +617,24 @@ impl Maid {
                     } else {
                         None
                     };
+                    let per_texture = self.outline_colors.is_some();
                     if let Some(s) = self.slot(arg(1)).filter(|s| s.model.is_some()) {
                         let mat: usize = arg(2).parse().unwrap_or(0);
                         let stem = s.model.as_deref().map(|m| m.rsplit_once('.').map_or(m, |(a, _)| a)).unwrap_or("").to_owned();
                         let file = arg(4).replace('*', &stem);
                         s.edits.layers.retain(|l| !(l.material == mat && l.property == arg(3)));
                         s.edits.textures.push((mat, arg(3).to_owned(), file));
-                        s.edits.multicolor.insert(mat, color.is_some());
-                        match color {
-                            Some(id) => s.multicolor.insert(mat, id),
-                            None => s.multicolor.remove(&mat),
-                        };
+                        if per_texture {
+                            let key = (mat, arg(3).to_owned());
+                            if let Some(id) = color { s.texture_colors.insert(key, id); }
+                            else { s.texture_colors.remove(&key); }
+                        } else {
+                            s.edits.multicolor.insert(mat, color.is_some());
+                            match color {
+                                Some(id) => s.multicolor.insert(mat, id),
+                                None => s.multicolor.remove(&mat),
+                            };
+                        }
                         s.dirty = true;
                     }
                 }
@@ -811,6 +848,12 @@ pub struct View {
 }
 
 impl View {
+    pub(crate) fn photo_parts(&self, index: usize) -> Vec<u32> {
+        self.parts.iter().filter(|((actor, _), _)| *actor == index).map(|(_, part)| part.id).collect()
+    }
+    pub(crate) fn body_shapes(&self, index: usize) -> &[crate::bone_shape::Binding] {
+        self.parts.get(&(index, "body")).map_or(&[], |p| p.bone_shapes.as_slice())
+    }
     /// Recycle one character while retaining the other actors on the stage.
     pub(crate) fn remove_actor(&mut self, index: usize) -> Vec<u32> {
         let mut children = Vec::new();
@@ -909,7 +952,12 @@ impl View {
             }
             let shown: Vec<&Slot> = visible_slots.iter().filter_map(|s| maid.slots.get(s)).collect();
             let node_slots: Vec<Slot> = shown.into_iter().cloned().collect();
-            for (&slot, state) in maid.slots.iter_mut() {
+            // A hand item can be present on the first frame; its bind transform
+            // needs the body even when its slot name sorts ahead of "body".
+            let mut slot_order: Vec<_> = maid.slots.keys().copied().collect();
+            slot_order.sort_by_key(|slot| *slot != "body");
+            for slot in slot_order {
+                let state = maid.slots.get_mut(slot).expect("existing slot");
                 let present = state.model.is_some() && visible_slots.contains(&slot);
                 let key = (index, slot);
                 if !state.dirty && (present == self.parts.contains_key(&key)) {
@@ -968,6 +1016,18 @@ impl View {
                     let color = parts_color.get(*id).or_else(|| outlines.as_ref()?.get(id.checked_sub(parts_color.len())?)).context("missing material color in character profile")?;
                     edits.color_tables.insert(*mat, crate::parts_color::table(color));
                 }
+                for ((mat, property), id) in &state.texture_colors {
+                    let color = parts_color.get(*id).or_else(|| outlines.as_ref()?.get(id.checked_sub(parts_color.len())?)).context("missing texture palette")?;
+                    let r8_slot = match slot {
+                        "head" => *mat == 5,
+                        "body" => *mat == 0,
+                        "hairF" | "hairR" | "hairS" | "hairT" | "hairAho" => true,
+                        _ => false,
+                    };
+                    let opaque_source = r8_slot && matches!(property.as_str(), "_MainTex" | "_OutlineTex" | "_ShadowTex" | "_ToonRamp");
+                    edits.texture_palettes.entry(*mat).or_default().insert(property.clone(),
+                        crysirror_asset::interchange::cm3d2::TexturePalette { colors: crate::parts_color::table(color), opaque_source });
+                }
                 if is_man {
                     // TBodySkin.ManColorUpdate on `CM3D2/Man` materials;
                     // CMSystem.ManAlpha is the man's opacity.
@@ -979,8 +1039,37 @@ impl View {
                         }
                     }
                 }
-                let doc = crysirror_asset::interchange::cm3d2::convert_parsed(mesh, &mut external, &edits)
+                let mut doc = crysirror_asset::interchange::cm3d2::convert_parsed(mesh, &mut external, &edits)
                     .with_context(|| format!("model {model}"))?;
+                if let Some((mode, bone)) = &state.attach
+                    && mode == "ボーンにアタッチ"
+                    && matches!(bone.as_str(), "_IK_handL" | "_IK_handR")
+                    && let Some(body) = self.parts.get(&(index, "body"))
+                {
+                    // The shared attach operation applies pose * inverse(bind).
+                    // A snapped prop starts at the source bone, not at world zero.
+                    let mut bind = glam::Mat4::IDENTITY;
+                    let mut joint = body.bones.iter().position(|b| &b.name == bone);
+                    while let Some(i) = joint {
+                        let b = &body.bones[i];
+                        let [x,y,z,w] = b.rotation;
+                        let [tx,ty,tz] = b.translation;
+                        bind = glam::Mat4::from_scale_rotation_translation(
+                            glam::Vec3::from_array(b.scale),
+                            glam::Quat::from_xyzw(x,-y,-z,w),
+                            glam::Vec3::new(-tx,ty,tz),
+                        ) * bind;
+                        joint = b.parent;
+                    }
+                    let (scale, rotation, translation) = bind.to_scale_rotation_translation();
+                    let node = crysirror_asset::interchange::glb::Node {
+                        translation: translation.to_array(), rotation: rotation.to_array(), scale: scale.to_array(),
+                        children: std::mem::take(&mut doc.roots),
+                        ..crysirror_asset::interchange::glb::Node::named("CrySirror attachment root")
+                    };
+                    doc.roots.push(doc.nodes.len());
+                    doc.nodes.push(node);
+                }
                 self.next_model += 1;
                 let glb = doc.to_glb()?;
                 uploaded += glb.len();
@@ -1047,13 +1136,16 @@ impl View {
                     anim.insert("follow".into(), json!(body_id));
                     // TBodySkin.Load: the part root is parented to the slot's
                     // bone (`Bip01` → `ManBip` for men) at its rest offset.
-                    if let Some((_, bone)) = SLOTS.iter().find(|(n, _)| n == slot).filter(|(_, b)| *b != "_ROOT_") {
-                        let bone = if maid.man { bone.replace("Bip01", "ManBip") } else { (*bone).to_owned() };
+                    let explicit = maid.slots.get(slot).and_then(|s| s.attach.as_ref())
+                        .filter(|(mode,_)| mode == "ボーンにアタッチ").map(|(_,bone)| bone.as_str());
+                    let default = SLOTS.iter().find(|(n, _)| n == slot).map(|(_,bone)| *bone).filter(|&bone| bone != "_ROOT_");
+                    if let Some(bone) = explicit.or(default) {
+                        let bone = if maid.man && explicit.is_none() { bone.replace("Bip01", "ManBip") } else { bone.to_owned() };
                         anim.insert("attach".into(), json!(bone));
                     }
                 }
                 let mut weights: BTreeMap<_, _> = part.numeric_morphs.iter()
-                    .map(|(mpn, name)| (name.clone(), maid.props[*mpn].value as f32 / 100.))
+                    .map(|(mpn, name)| (name.clone(), maid.props[*mpn].processed_value.unwrap_or(maid.props[*mpn].value) as f32 / 100.))
                     .collect();
                 if *slot == "body" { weights.extend(maid.body_morphs.clone()); }
                 if *slot == "head" { weights.extend(morphs.clone()); }

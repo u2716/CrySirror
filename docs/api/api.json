@@ -22779,6 +22779,12 @@
         },
         {
           "default": null,
+          "doc": "Raw hull colour texture. Lookup row 2 supplies its independent lighting ramp.",
+          "name": "outline_texture",
+          "rust_type": "Option<T>"
+        },
+        {
+          "default": null,
           "doc": "",
           "name": "shadow_texture",
           "rust_type": "Option<T>"
@@ -30514,7 +30520,7 @@
       "used_by": "UiEvent.widget client/local identity"
     }
   ],
-  "fingerprint": "8206decff09b50e6",
+  "fingerprint": "1dc311dc1a85ca09",
   "generated_by": "crysirror-engine api_doc (tests/api_docs.rs)",
   "globals": [
     {

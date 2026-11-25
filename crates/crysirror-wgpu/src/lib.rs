@@ -2318,6 +2318,68 @@ impl Renderer {
         }
         self.read_texture(&texture, width, height)
     }
+    /// Render an isolated World view. Its color/depth and animation history are independent
+    /// of the main camera. The returned reader holds the GPU target until its worker fence.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn world_photo(
+        &self,
+        scene: crysirror_scene::view::PbrScene,
+        size: [u32; 2],
+        assets: &mut Assets,
+    ) -> Result<Arc<dyn crysirror_core::service::AssetReader>> {
+        ensure!(
+            !size.contains(&0) && u64::from(size[0]) * u64::from(size[1]) <= 1024 * 1024,
+            "World photo size"
+        );
+        ensure!(
+            size.iter()
+                .all(|&s| s <= self.gpu.device.limits().max_texture_dimension_2d),
+            "World photo exceeds device dimensions"
+        );
+        let mut photo = Self::new(self.gpu.clone(), wgpu::TextureFormat::Rgba8UnormSrgb);
+        photo.set_pbr_scene(Some(scene))?;
+        photo
+            .pbr
+            .as_mut()
+            .expect("installed photo scene")
+            .photo_alpha = true;
+        let target = self.gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("World photo"),
+            size: wgpu::Extent3d {
+                width: size[0],
+                height: size[1],
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&Default::default());
+        let nonblocking = assets.is_nonblocking();
+        assets.set_nonblocking(false);
+        let result = photo.render(
+            &SceneState::default(),
+            assets,
+            RenderTarget { view: &view, size },
+            size,
+            [0; 4],
+        );
+        assets.set_nonblocking(nonblocking);
+        result?;
+        Ok(self.texture_readback_reader(target, size))
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub fn world_photo(
+        &self,
+        _: crysirror_scene::view::PbrScene,
+        _: [u32; 2],
+        _: &mut Assets,
+    ) -> Result<Arc<dyn crysirror_core::service::AssetReader>> {
+        anyhow::bail!("World photo requires native GPU readback")
+    }
     /// Read back an RGBA8/BGRA8 sRGB texture with COPY_SRC usage (captures;
     /// a window surface configured with COPY_SRC for diagnostics).
     pub fn read_texture(
