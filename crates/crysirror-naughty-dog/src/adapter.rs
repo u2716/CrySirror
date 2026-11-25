@@ -1146,6 +1146,16 @@ impl NaughtyDogVm {
                 let compensation = (t.manual_exposure.max(1e-4) / 0.18).log2() + EXPOSURE_CALIBRATION;
                 env["environment"]["auto_exposure"] = json!({"min_log2": -8.0, "max_log2": 8.0, "speed_up": 3.0, "speed_down": 1.0, "compensation": compensation});
                 env["environment"]["grading"] = json!({"color_filter": s.tint.map(|v| v.clamp(0., 4.))});
+                // The record's fog: opacity `density` reached over
+                // `distance-range` past `distance-start`, thinning over
+                // `height-range` above `height-start` (the native curve is
+                // not recovered; mapped to the shared exponential fog).
+                let f = s.fog;
+                if f.density > 0. && f.distance_range > 0. {
+                    let cap = f.density.clamp(0., 0.99);
+                    let colour = f.colour.map(|c| c.clamp(0., 1.).powf(2.2) * f.multiplier.clamp(0., 1.));
+                    env["environment"]["fog"] = json!({"color": colour, "density": -(1. - cap).ln() / f.distance_range, "height_falloff": if f.height_range > 0. { 1. / f.height_range } else { 0. }, "base_height": f.height_start, "start_distance": f.distance_start.max(0.), "max_opacity": cap, "sun_scattering": 0.0});
+                }
             }
             None => {
                 env["environment"]["auto_exposure"] = json!({"min_log2": -6.0, "max_log2": 2.0, "speed_up": 3.0, "speed_down": 1.0, "compensation": 0.5});

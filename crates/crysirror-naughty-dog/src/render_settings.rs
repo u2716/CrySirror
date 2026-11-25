@@ -11,7 +11,10 @@
 //! step, min, max}` per group) and the group bases from the EBOOT's
 //! settings writer (`sub_123C1C`): lighting at 0 (`:ambient-scale` +0xcc),
 //! post at 0x440 (tint, ambient, light-scale and shadow-colour RGBI), the
-//! tonemap at 0x4b0. Other groups (shadow, fog, wind, sky, skydome,
+//! tonemap at 0x4b0; the `:fog` group at 0x3d0 is the only offset where
+//! every record's fog fields fall in their menu ranges (the menu temple's
+//! warm (0.33, 0.31, 0.25) over 150 m, train-wreck's blue (0.17, 0.31,
+//! 0.52) over 800 m above 260 m). Other groups (shadow, sky-fog, wind, sky, skydome,
 //! particles, rain, environment) are not mapped.
 use crate::dc::Dc;
 use anyhow::Result;
@@ -32,6 +35,18 @@ pub struct Tonemap {
     pub exposure_bias: f32,
 }
 
+/// The `:fog` group (record +0x3d0).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Fog {
+    pub colour: [f32; 3],
+    pub multiplier: f32,
+    pub distance_start: f32,
+    pub distance_range: f32,
+    pub height_start: f32,
+    pub height_range: f32,
+    pub density: f32,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RenderSettings {
     pub ambient_scale: f32,
@@ -40,12 +55,14 @@ pub struct RenderSettings {
     pub ambient: [f32; 3],
     pub light_scale: [f32; 3],
     pub shadow_colour: [f32; 3],
+    pub fog: Fog,
     pub tonemap: Tonemap,
 }
 
 const LIGHTING_AMBIENT_SCALE: u32 = 0xcc;
 const POST: u32 = 0x440;
 const TONEMAP: u32 = 0x4b0;
+const FOG: u32 = 0x3d0;
 
 /// The record named `name` (a `StringId`) of the loaded `render-settings`
 /// module.
@@ -68,6 +85,15 @@ pub fn read(dc: &Dc, name: u32) -> Result<Option<RenderSettings>> {
         ambient: rgbi(POST + 0x20)?,
         light_scale: rgbi(POST + 0x30)?,
         shadow_colour: rgbi(POST + 0x40)?,
+        fog: Fog {
+            colour: [f(FOG)?, f(FOG + 4)?, f(FOG + 8)?],
+            multiplier: f(FOG + 0xc)?,
+            distance_start: f(FOG + 0x10)?,
+            distance_range: f(FOG + 0x14)?,
+            height_start: f(FOG + 0x18)?,
+            height_range: f(FOG + 0x1c)?,
+            density: f(FOG + 0x20)?,
+        },
         tonemap: Tonemap {
             light_range: [t(4)?, t(8)?],
             manual_exposure: t(0xc)?,
