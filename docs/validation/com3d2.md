@@ -713,3 +713,49 @@ The final release library suite passed 79 tests with zero failed and zero
 ignored using the installed assets. The crate also passed its default-feature
 release check. The release desktop executable linked and `play --detect-only`
 identified the standalone installation as `COM3D2`.
+
+### Standalone title Config and static UI coverage
+
+For the installed standalone 1.0.4, the six ordinary title choices in
+`TitleMgr.OnClick` and the management script destinations are separate
+inventories. Before this fix, Start, Continue, End and Shop had dispatch.
+Config and Guest both reached the generic unsupported-title callback.
+`TitleCtrl.OnConfig` opens the persistent `ConfigMgr` system panel over
+the title. Guest calls `SaveAndLoadMgr.OpenLoadPanelKasiduki`, a distinct
+load mode which still lacks standalone title dispatch.
+
+The original `ConfigCtrl.Init` registers 32 callbacks, counting the two
+directions of a toggle separately. The title adapter wires eight of these:
+OK, master/BGM/system/voice/SE/environment volume, and message background
+transparency. Changes affect the current session. The other 24 bindings
+include screen settings, text and auto speeds, the dance channel and
+spatial-audio options. Native settings persistence remains open.
+
+For a wider static count, enumerate the 5,824 indexed `.ks` filenames in
+the installed base `GameData/script.arc`. Inspect line-command and bracket
+forms of `SceneCall` outside comment/label lines, accepting literal
+`name=Scene…` arguments. Of 29 unique literal targets, 17 match the
+standalone KAG scene dispatcher. The other 12 are:
+
+| Family | Literal targets without standalone dispatch |
+| --- | --- |
+| Management and editors | `SceneCompetitiveShow`, `SceneCreativeRoom`, `ScenePhotoMode` |
+| Casino | `SceneCasino`, `SceneCasinoShop`, `SceneCasinoSlot`, `SceneBlackJack` |
+| Other destinations | `SceneFreeModeSelect`, `SceneKasizukiMainMenu`, `SceneToTitle`, `SceneYotogi`, `SceneYotogiOld` |
+
+Eleven indexed scripts contain a nonliteral scene name. The count excludes
+`script_old_2.arc`, indirect calls from managed components and controls
+inside a dispatched scene. It does not establish reachability in any one
+playthrough. The four unresolved direct day/night management destinations
+are included in the 12. In addition, level 7 explicitly rejects its status
+and class panels. No exhaustive count of all nested controls is available.
+
+The release library suite passed all 80 tests, including
+`installed_title_config_modal_sound_and_return`. That fixture clicks the
+title Config button, checks the changed mixer value, attempts a click on
+the underlying Start button, and closes and reopens the panel to check
+the thumb position. In two muted headless desktop runs from the normal
+`play` entry, frame 810 showed SceneTitle with Config open (157 widgets).
+After clicking the master slider and native OK, frame 852 showed SceneTitle
+with Config closed (13 widgets) and focus on Config. Both runs used isolated
+writable data and the installed 1.0.4 game files.

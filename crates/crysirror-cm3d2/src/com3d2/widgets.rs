@@ -465,7 +465,7 @@ impl Assets {
         } else { None };
         let file = match &prefab {
             Some(key)=>key.file.to_string(),
-            None=>self.scene_file(if matches!(scene, "SystemDialog" | "YesNoDialog") || scene.starts_with("Trophy/") { "_cm3d21" } else if scene=="StandaloneLoadPanel" { "SceneTitle" } else if matches!(scene,"DailySlotPanel"|"SchedulePanel"|"ResultWorkPanel"|"ResultIncomePanel") { "SceneDaily" } else { scene })?,
+            None=>self.scene_file(if matches!(scene, "SystemDialog" | "YesNoDialog" | "StandaloneConfig") || scene.starts_with("Trophy/") { "_cm3d21" } else if scene=="StandaloneLoadPanel" { "SceneTitle" } else if matches!(scene,"DailySlotPanel"|"SchedulePanel"|"ResultWorkPanel"|"ResultIncomePanel") { "SceneDaily" } else { scene })?,
         };
         let sf = self.unity.file(op, &file)?;
         let mut pending:Vec<_>=match &prefab {
@@ -554,6 +554,7 @@ impl Assets {
                         )
                     }),
                 name if name.starts_with("Trophy/")=>path.starts_with("SystemUI Root/TrophyAchieveEffect"),
+                "StandaloneConfig" => path.starts_with("SystemUI Root/ConfigPanel/") && !path.contains("/Title/PopupList") && !path.contains("/Device/"),
                 "SystemDialog" | "YesNoDialog" => path == "SystemUI Root/SystemDialog/Base" || path.starts_with("SystemUI Root/SystemDialog/Base/"),
                 "SceneLogo" => path == "UI Root/Logo" || path == "UI Root/Back",
                 "SceneWarning" => path == "UI Root/Warning",
@@ -708,7 +709,7 @@ impl Assets {
                 if class == "UIButton" {
                     button = Some(k);
                 }
-                let hit_only=matches!(scene,"StaffPlate"|"PickerPlate") && name=="Button" && class=="UIWidget";
+                let hit_only=class=="UIWidget" && ((matches!(scene,"StaffPlate"|"PickerPlate") && name=="Button") || (scene=="StandaloneConfig" && path.ends_with("/Slider/Foreground")));
                 let dynamic_texture = (scene=="SceneDanceSelect" && class=="UI2DSprite" && path.ends_with("/MujicInfo/BG/Image")) || (scene=="ScenarioPlate" && class=="UI2DSprite" && name=="Icon") || (class=="UI2DSprite" && ((scene.starts_with("TrophyInfo/") && name=="Tex") || (scene=="SceneTrophy" && name=="CartSprite"))) || (scene=="SceneStaffRoll" && class=="UITexture") || (scene=="SceneEdit" && class=="UITexture" && super::stock_editor::costume::wanted(&path)) || (scene=="SceneShop" && path.ends_with("/Window-ItemInfo/Base/Icon") && class=="UI2DSprite") || (scene=="ShopItem" && name=="ItemIcon" && class=="UI2DSprite") || (class=="UITexture" && matches!(scene,"SchedulePanel"|"ResultMaidUnit"|"ResultStamp"|"WorkUnit"|"TrainingUnit")) || hit_only || (matches!(scene,"StaffPlate"|"PickerPlate") && name=="Thum" && class=="UI2DSprite");
                 if !dynamic_texture && !matches!(class.as_str(), "UISprite" | "UI2DSprite" | "UILabel") {
                     continue;

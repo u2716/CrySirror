@@ -43,6 +43,16 @@ impl Menu {
             game,
         })
     }
+    pub fn title(&mut self) -> Result<()> {
+        self.game.enter(
+            Scene::Title,
+            &mut self.op,
+            &mut self.rt.host,
+            self.client,
+            0,
+        )?;
+        self.tick(3100)
+    }
     pub fn open(&mut self, night: bool, label: &str, scene: Scene) -> Result<()> {
         let file = if night {
             "nightmain.ks"

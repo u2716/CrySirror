@@ -15,6 +15,7 @@ pub(crate) mod actors;
 mod tracking;
 mod choices;
 mod quit_dialog;
+mod config_panel;
 mod trophy;
 mod awards;
 mod events;
@@ -208,6 +209,8 @@ struct Game {
     pointer: Option<[i32; 2]>,
     pressed: Option<usize>,
     focus: usize,
+    config_panel: Option<config_panel::Panel>,
+    message_transparency: f32,
     quit_dialog: Option<quit_dialog::QuitDialog>,
     choices: Option<choices::Choices>,
     quit_confirmed: bool,
@@ -258,6 +261,7 @@ impl Game {
             self.widgets.extend(self.assets.scene(op, host, client, "_cm3d21")?);
         }
         if scene!=Scene::Desk {self.desk.leave();}
+        if scene!=Scene::Title {self.config_panel=None;}
         if scene!=Scene::Dance {self.dance=None;}
         if scene!=Scene::Personnel {self.personnel=None;}
         if scene!=Scene::Events {self.events=None;}
@@ -1084,7 +1088,9 @@ impl Game {
                 }
             }
             Scene::Title => {
-                if self.slot_viewer.is_some() {
+                if self.config_panel.is_some(){
+                    self.update_config(host,client,input,released,now)?;
+                } else if self.slot_viewer.is_some() {
                     self.update_slots(op,host,client,input,released,now)?;
                 } else if let Some(dialog) = &mut self.quit_dialog {
                     match dialog.update(&self.widgets, input, released, now) {
@@ -1140,6 +1146,8 @@ impl Game {
                             self.leaving = Some(now);
                         } else if name == "Continue" {
                             self.open_slots(slots::Mode::TitleLoad,op,host,client,now)?;
+                        } else if name == "Config" {
+                            self.open_config(op,host,client,now)?;
                         } else if name == "Shop" {
                             // CMSystem.ShopURL for the standalone, unlinked installation profile.
                             self.shop_requests.push(host.begin_desktop_request(client, DesktopRequest::OpenUrl {
@@ -1340,7 +1348,11 @@ impl Game {
             } else {
                 overlay || (editor_visible && sprites.get(&w.component).copied().unwrap_or(true))
             };
-            let opacity = if !overlay && let Some(a) = &self.awards {
+            let opacity = if !overlay && let Some(alpha)=self.config_panel.as_ref().and_then(|panel|panel.opacity(i,now)){
+                alpha
+            } else if !overlay && self.scene==Scene::Script && w.path.ends_with("/MessageBox") {
+                (opacity as f32*(1.-self.message_transparency/100.)).round() as u8
+            } else if !overlay && let Some(a) = &self.awards {
                 if w.path.starts_with("trophy-row/") {clip=Some(a.layout.list.clip);}
                 a.opacity_and_rect(&w.path,&mut rect,now,opacity)
             } else { opacity };
@@ -1454,6 +1466,8 @@ impl Vm {
                 pointer: None,
                 pressed: None,
                 focus: 0,
+                config_panel: None,
+                message_transparency: 0.,
                 quit_dialog: None,
                 choices: None,
                 quit_confirmed: false,
@@ -1514,7 +1528,7 @@ impl VmAdapter for Vm {
                     "night_work_states":state.player.night_works_state.len()})
             });
             let selected:Vec<_>=game.widgets.iter().filter(|w|w.toggle.is_some_and(|t|t.selected)).map(|w|&w.path).collect();
-            json!({"scene":game.scene.name(),"day":day,"quit_dialog":game.quit_dialog.is_some(),"choices":game.choices.as_ref().map(|c|c.labels()),"widgets":game.widgets.len(),"stock_editor":if game.scene==Scene::StockEditor {game.script.tjs.lock().ok().map(|t|game.stock_editor.diagnostics(&t.runtime.host().state))}else{None},"player_editor":game.editor.diagnostics(),"dialogue":game.dialogue,"npc_slots":game.actors.slots.iter().map(|((man,slot),i)|json!([man,slot,i])).collect::<Vec<_>>(),"club_meshes":game.club_meshes,
+            json!({"scene":game.scene.name(),"day":day,"quit_dialog":game.quit_dialog.is_some(),"config_open":game.config_panel.is_some(),"choices":game.choices.as_ref().map(|c|c.labels()),"widgets":game.widgets.len(),"stock_editor":if game.scene==Scene::StockEditor {game.script.tjs.lock().ok().map(|t|game.stock_editor.diagnostics(&t.runtime.host().state))}else{None},"player_editor":game.editor.diagnostics(),"dialogue":game.dialogue,"npc_slots":game.actors.slots.iter().map(|((man,slot),i)|json!([man,slot,i])).collect::<Vec<_>>(),"club_meshes":game.club_meshes,
                 "preferences":preferences,"selected":selected,"focus":BUTTONS[game.focus],
                 "script":game.script.position(),"bgm":game.sound.current_bgm})
         });

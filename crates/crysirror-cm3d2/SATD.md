@@ -339,6 +339,11 @@ personnel status/classes, dance execution and settings, desk transforms and
 slot data, and broader scenario condition/cast validation. See the
 [per-controller results](../../docs/validation/com3d2.md#standalone-management-destinations-after-level-10).
 
+2026-11-25 — Standalone title Config now opens its system panel in
+`src/com3d2/config_panel.rs`. Eight of 32 native panel callbacks have
+handlers. The other 24 bindings, original settings persistence, and the
+title Guest load mode remain open. See the [title and corpus inventory](../../docs/validation/com3d2.md#standalone-title-config-and-static-ui-coverage).
+
 **Closure.** Exercise the remaining controllers, rendering and resource
 variants through installed original scripts and ordinary input, including
 native save/reload and character assembly. See [validation](../../docs/validation/com3d2.md).
