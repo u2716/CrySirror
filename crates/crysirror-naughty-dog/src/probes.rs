@@ -177,8 +177,9 @@ pub struct Layer {
     pub mask: Option<(Option<usize>, f32)>,
 }
 
-/// Scale of the probe irradiance in the renderer (uncalibrated).
-pub const INTENSITY: f32 = 1.;
+/// Scale of the probe irradiance in the renderer, calibrated with the
+/// render-settings exposure against the original title screen.
+pub const INTENSITY: f32 = 2.;
 
 /// Per-vertex irradiance (`_AUX`: RGB, 1) of a fragment placed by the
 /// row-major metre matrix `m`. Vertices without

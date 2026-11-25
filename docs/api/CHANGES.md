@@ -1,5 +1,9 @@
 # API change log
 
+## `8206decff09b50e6` (2026-11-25) — filmic tonemap curve
+
+`Environment.filmic_curve` (`FilmicCurve`) sets the `filmic` tonemap's Hable constants (shoulder, linear strength and angle, toe strength, numerator and denominator), white point and exposure bias in stops; omitted, the published curve with its 2× bias applies. Rust struct literals of `Environment` need `filmic_curve: None`. The previous fingerprint was `7a50ef09e7ce0526`.
+
 ## `7a50ef09e7ce0526` (2026-11-25) — height-mask layers
 
 `baked_vertex_irradiance` takes an optional `mask_layer` (`MaskLayer { tint, softness }`): the emissive-slot texture × `tint` covers the base where the vertex mask in `_AUX` w rises above the occlusion-slot texture's green channel, with the base weighted `saturate((mask − (1 + s)·m + 2s) / 2s)`. The occlusion slot then gives no occlusion. Omitted, materials are unchanged; struct literals of `BakedVertexIrradiance` need `mask_layer: None`. The previous fingerprint was `653c879dbcdae8ea`.

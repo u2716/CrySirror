@@ -268,6 +268,7 @@ fn weight_of(w: &Affine) -> Option<Weight> {
 fn blend_units(code: &[Instruction]) -> Option<LayerBlend> {
     let mut regs: std::collections::HashMap<(bool, u8), [Value; 4]> = std::collections::HashMap::new();
     let mut found = None;
+    let mut found_colour: Option<LayerBlend> = None;
     for ins in code {
         // The component a source supplies to result component `k`, and
         // whether it is negated.
@@ -353,8 +354,17 @@ fn blend_units(code: &[Instruction]) -> Option<LayerBlend> {
                     x.saturated = true;
                 }
             }
+            // A colour blend (written to x, y and z) wins over the
+            // single-channel ones (the gold programs also blend their
+            // specular mask).
             if let Value::Blend(s) = slot {
-                found = Some(*s);
+                let colour = ins.mask[..3].iter().all(|m| *m);
+                if found.is_none() || colour && found_colour.is_none() {
+                    found = Some(*s);
+                }
+                if colour {
+                    found_colour.get_or_insert(*s);
+                }
             }
         }
         let entry = regs.entry((ins.half, ins.dst)).or_insert_with(|| std::array::from_fn(|_| Value::Unknown));
@@ -364,7 +374,34 @@ fn blend_units(code: &[Instruction]) -> Option<LayerBlend> {
             }
         }
     }
-    found
+    found_colour.or(found)
+}
+
+/// A pass's named fragment-program constants (binding class 0x0102) from
+/// its constant block (pass data +0x1c): `g_fSpecularScale_fSpecularExponentMax_fMetalness`,
+/// `g_fBlendSoftness_fBlendOffset`, `g_cDiffuseIn`, … The names are
+/// offsets into the package page holding the binding table.
+pub fn pass_parameters(p: &Loaded, data: usize) -> Result<Vec<(String, [f32; 4])>> {
+    let n = (p.u32(data + 8)? & 0xffff) as usize;
+    ensure!(n <= 256, "ND parameter binding count");
+    let table = p.ptr(data + 0x14)?;
+    let Ok(constants) = p.ptr(data + 0x1c) else { return Ok(Vec::new()) };
+    let pages: Vec<usize> = (0..p.directory.page_count).filter_map(|i| p.u32(44 + 12 * i).ok().map(|v| v as usize)).collect();
+    let page = pages.iter().copied().filter(|s| *s <= table).max().context("ND binding table page")?;
+    let mut out = Vec::new();
+    for r in 0..n {
+        let at = table + 16 * r;
+        if p.u32(at + 4)? & 0xffff != 0x0102 {
+            continue;
+        }
+        let (value, name) = (p.u32(at + 8)? as usize, p.u32(at + 12)? as usize);
+        let bytes = p.data.get(page + name..).unwrap_or_default();
+        let end = bytes.iter().take(128).position(|b| *b == 0).unwrap_or(0);
+        let name = String::from_utf8_lossy(&bytes[..end]).into_owned();
+        let v: Vec<f32> = (0..4).map(|k| p.f32(constants + value + 4 * k)).collect::<Result<_>>()?;
+        out.push((name, [v[0], v[1], v[2], v[3]]));
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

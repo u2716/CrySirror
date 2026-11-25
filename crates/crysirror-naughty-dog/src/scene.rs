@@ -402,10 +402,14 @@ pub fn document_lit(name: &str, meshes: &[Mesh], source: &dyn AssetReader, direc
                 Some(l) => {
                     let (top, tint) = match l.top {
                         crate::rsx::Top::Sampler(i) => (image_of(sampler(i))?, [1.; 3]),
-                        crate::rsx::Top::Computed => (None, [COMPUTED_SNOW; 3]),
+                        // `g_cDiffuseIn`, the computed snow's colour (gamma
+                        // space), when the material sets it.
+                        crate::rsx::Top::Computed => (None, group.material.parameter("g_cDiffuseIn").map_or([COMPUTED_SNOW; 3], |c| [c[0], c[1], c[2]].map(|v| v.clamp(0., 1.).powf(2.2)))),
                     };
                     let mask = match l.weight {
-                        crate::rsx::Weight::Mask { sampler: m, softness } => Some((image_of(group.material.samplers.get(usize::from(m)).copied())?, softness)),
+                        // The material's `g_fBlendSoftness` replaces the
+                        // program's inline default.
+                        crate::rsx::Weight::Mask { sampler: m, softness } => Some((image_of(group.material.samplers.get(usize::from(m)).copied())?, group.material.parameter("g_fBlendSoftness_fBlendOffset").map_or(softness, |v| v[0].max(1e-3)))),
                         crate::rsx::Weight::Slope => None,
                     };
                     Some(crate::probes::Layer { top, tint, mask })
@@ -450,9 +454,25 @@ pub fn document_lit(name: &str, meshes: &[Mesh], source: &dyn AssetReader, direc
             let normal = named("-normal");
             let spec = named("spec");
             let reflective = named("env-reflection").is_some();
-            engine.metallic_factor = 0.;
-            engine.roughness_factor = if reflective { 0.12 } else if spec.is_some() { 0.55 } else { 1. };
-            engine.specular_factor = if spec.is_some() || reflective { 1. } else { 0. };
+            // `g_fSpecularScale_fSpecularExponentMax_fMetalness` scales the
+            // spec-mask highlight; the Blinn exponent maps to roughness
+            // `√(2 / (n + 2))` (kept above 0.25: the mask modulates it).
+            let specular = group.material.parameter("g_fSpecularScale_fSpecularExponentMax_fMetalness");
+            engine.metallic_factor = specular.map_or(0., |v| v[2].clamp(0., 1.));
+            engine.roughness_factor = if reflective {
+                0.12
+            } else {
+                match (spec, specular) {
+                    (Some(_), Some(v)) => (2. / (v[1].max(1.) + 2.)).sqrt().max(0.25),
+                    (Some(_), None) => 0.55,
+                    _ => 1.,
+                }
+            };
+            engine.specular_factor = match (spec.is_some() || reflective, specular) {
+                (true, Some(v)) => v[0].clamp(0., 1.),
+                (true, None) => 1.,
+                _ => 0.,
+            };
             engine.specular_texture = image_of(spec)?;
             if let Some(id) = normal {
                 engine.normal_encoding = if textures.get(&id).is_some_and(|d| d.format == crate::texture::Format::Dxt5) { crysirror_scene::material::NormalEncoding::Ag } else { crysirror_scene::material::NormalEncoding::Rgb };

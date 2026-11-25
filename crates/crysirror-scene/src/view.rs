@@ -362,6 +362,69 @@ pub enum Tonemap {
     Filmic,
 }
 
+/// Hable's filmic curve `f(x) = (x(Ax + CB) + DE) / (x(Ax + B) + DF) − E/F`
+/// (A shoulder, B linear strength, C linear angle, D toe strength, E toe
+/// numerator, F toe denominator), applied as `f(2^bias · x) / f(white)`.
+/// The defaults are the published constants of [`Tonemap::Filmic`].
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FilmicCurve {
+    #[serde(default = "filmic_shoulder")]
+    pub shoulder: f32,
+    #[serde(default = "filmic_linear")]
+    pub linear: f32,
+    #[serde(default = "filmic_angle")]
+    pub angle: f32,
+    #[serde(default = "filmic_toe")]
+    pub toe: f32,
+    #[serde(default = "filmic_toe_numerator")]
+    pub toe_numerator: f32,
+    #[serde(default = "filmic_toe_denominator")]
+    pub toe_denominator: f32,
+    #[serde(default = "filmic_white")]
+    pub white: f32,
+    /// Stops of exposure before the curve.
+    #[serde(default = "one")]
+    pub exposure_bias: f32,
+}
+impl Default for FilmicCurve {
+    fn default() -> Self {
+        Self { shoulder: 0.15, linear: 0.5, angle: 0.1, toe: 0.2, toe_numerator: 0.02, toe_denominator: 0.3, white: 11.2, exposure_bias: 1. }
+    }
+}
+impl FilmicCurve {
+    /// Uniform values: `[A, B, C, D]`, `[E, F, white, 2^bias]`.
+    pub fn uniforms(&self) -> [[f32; 4]; 2] {
+        let ok = |v: f32, d: f32| if v.is_finite() { v } else { d };
+        let d = Self::default();
+        [
+            [ok(self.shoulder, d.shoulder), ok(self.linear, d.linear), ok(self.angle, d.angle), ok(self.toe, d.toe)],
+            [ok(self.toe_numerator, d.toe_numerator), ok(self.toe_denominator, d.toe_denominator).max(1e-4), ok(self.white, d.white).max(1e-3), 2f32.powf(ok(self.exposure_bias, 1.).clamp(-16., 16.))],
+        ]
+    }
+}
+fn filmic_shoulder() -> f32 {
+    0.15
+}
+fn filmic_linear() -> f32 {
+    0.5
+}
+fn filmic_angle() -> f32 {
+    0.1
+}
+fn filmic_toe() -> f32 {
+    0.2
+}
+fn filmic_toe_numerator() -> f32 {
+    0.02
+}
+fn filmic_toe_denominator() -> f32 {
+    0.3
+}
+fn filmic_white() -> f32 {
+    11.2
+}
+
 /// Colour adjustments before tonemapping (URP `ColorAdjustments`-style):
 /// a linear colour filter, contrast around middle grey (0.18) and
 /// saturation around Rec. 709 luminance. Neutral values are 1.
@@ -456,6 +519,9 @@ pub struct Environment {
     /// Colour adjustments before tonemapping; `null` is neutral.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grading: Option<ColorGrading>,
+    /// Curve of the `filmic` tonemap; `null` keeps the published one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filmic_curve: Option<FilmicCurve>,
 }
 fn ao() -> f32 {
     1.
@@ -490,6 +556,7 @@ impl Default for Environment {
             geometry_lod: None,
             virtual_shadows: None,
             grading: None,
+            filmic_curve: None,
         }
     }
 }

@@ -9,6 +9,9 @@ struct Post {
     tint: vec4<f32>,
     // x: contrast, y: saturation (1 neutral)
     grade: vec4<f32>,
+    // Filmic curve: A shoulder, B linear, C angle, D toe; E, F, white, 2^bias.
+    curve: vec4<f32>,
+    curve2: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> post: Post;
 @group(0) @binding(1) var hdr: texture_2d<f32>;
@@ -36,23 +39,28 @@ fn pbr_neutral(c_in: vec3<f32>) -> vec3<f32> {
 fn aces(x: vec3<f32>) -> vec3<f32> {
     return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), vec3<f32>(0.0), vec3<f32>(1.0));
 }
-// Hable's filmic operator (Uncharted 2), normalised by its white point.
+// Hable's filmic operator (Uncharted 2) with the environment's curve,
+// normalised by its white point.
 fn hable(x: vec3<f32>) -> vec3<f32> {
-    let a = 0.15;
-    let b = 0.50;
-    let c = 0.10;
-    let d = 0.20;
-    let e = 0.02;
-    let f = 0.30;
+    let a = post.curve.x;
+    let b = post.curve.y;
+    let c = post.curve.z;
+    let d = post.curve.w;
+    let e = post.curve2.x;
+    let f = post.curve2.y;
     return ((x * (a * x + c * b) + d * e) / (x * (a * x + b) + d * f)) - e / f;
 }
 fn filmic(x: vec3<f32>) -> vec3<f32> {
-    return clamp(hable(2.0 * x) / hable(vec3<f32>(11.2)), vec3<f32>(0.0), vec3<f32>(1.0));
+    return clamp(hable(post.curve2.w * x) / hable(vec3<f32>(post.curve2.z)), vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
 @fragment
 fn fs_tonemap(i: FsOut) -> @location(0) vec4<f32> {
-    var c = textureSampleLevel(hdr, hdr_sampler, i.uv, 0.0).rgb;
+    let sample = textureSampleLevel(hdr, hdr_sampler, i.uv, 0.0);
+    var c = sample.rgb;
+    if post.params.w > 0.5 && sample.a > 0.0 {
+        c /= sample.a;
+    }
     c = mix(c, textureSampleLevel(bloom, hdr_sampler, i.uv, 0.0).rgb, post.params.z);
     c = select(c, vec3<f32>(0.0), c != c);
     c = c * post.params.x;

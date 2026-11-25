@@ -171,3 +171,8 @@ Trigger regions (2026-11-25):
 Materials (2026-11-25):
 
 - **Captures:** after the change the prologue capture shows the car metal matte with normal-map relief and the rock faces without the white grazing-angle sheen they had before. Painting the river material red in a test build left the pale flat region seen from 25–30 m above the cliffs unchanged: it is sky beyond the authored canyon geometry, not the river (`trnwrk-wide-river-water`, 509 × 1505 m at y −125), and does not appear from the player's position.
+
+Render settings (2026-11-25):
+
+- **Title screen:** the main menu capture against a capture of the original title screen gives mean RGB (68, 58, 33) against (57, 60, 32) and luminance p10/p50/p90 17/44/121 against 21/43/104; before the change the capture measured (141, 135, 90) and 74/125/203. The gold statue shows its gold `color-01` layer over `colordrk` by the mask, where before it rendered white.
+- **Prologue:** no render-settings region holds the start, so the default adaptation applies and the hanging-car capture keeps its earlier exposure.

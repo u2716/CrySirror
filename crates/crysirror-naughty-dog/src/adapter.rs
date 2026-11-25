@@ -1105,19 +1105,52 @@ impl NaughtyDogVm {
     /// sky image the environment is black and its light scaled to the
     /// probes' brightness (the procedural daylight sky would otherwise
     /// light night and cave levels).
+    /// The render settings in force: those of the render-settings region
+    /// holding the player, or without a player the first a level region
+    /// names (`menu-temple-ingame10`: `*menu-temple-render-settings-01*`).
+    /// Regions choosing their record by script lambda (`train-wreck`) are
+    /// not evaluated.
+    fn render_settings(session: &Session) -> Option<crate::render_settings::RenderSettings> {
+        let dc = &session.game.as_ref()?.rt.dc;
+        let regions = &session.stage.regions;
+        let held = regions.iter().filter(|(r, _, _)| r.render_settings.is_some()).find(|(r, _, _)| session.player.is_some() && session.stage.holds(r, sid("player")));
+        // Without a player (the menu) the level's first record applies;
+        // with one, only a region holding it selects a record.
+        let region = held.or_else(|| if session.player.is_none() { regions.iter().find(|(r, _, _)| r.render_settings.is_some()) } else { None })?;
+        let name = region.0.render_settings?;
+        let settings = crate::render_settings::read(dc, name).ok().flatten();
+        settings
+    }
+
     fn level_environment(session: &Session) -> Option<serde_json::Value> {
         if session.probes.is_empty() {
             return None;
         }
+        let settings = Self::render_settings(session);
         let e = session.probes.mean_irradiance();
         let lum = 0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2];
-        let sun = session.light.as_ref().map_or(json!(null), |l| json!({"direction": l.direction, "color": l.color.map(|c| c.clamp(0., 4.)), "intensity": l.intensity.clamp(0.2, 4.0), "shadow_strength": 0.6}));
-        let mut env = json!({"op": "set_environment", "environment": {"show_sky": session.sky.is_some(), "intensity": if session.sky.is_some() { 1. } else { (lum * 4.).clamp(0.02, 1.) }, "ambient": e.map(|v| v.clamp(0., 2.)), "sun": sun,
-            // Hable's filmic curve, published for this game; the camera
-            // adapts to the scene (the native exposure constants are set at
-            // runtime and not recovered).
-            "tonemap": "filmic",
-            "auto_exposure": {"min_log2": -6.0, "max_log2": 2.0, "speed_up": 3.0, "speed_down": 1.0, "compensation": 0.5}}});
+        let scale = settings.map_or(1., |s| s.light_scale.iter().sum::<f32>() / 3.);
+        let sun = session.light.as_ref().map_or(json!(null), |l| json!({"direction": l.direction, "color": l.color.map(|c| c.clamp(0., 4.)), "intensity": (l.intensity * scale).clamp(0.05, 4.0), "shadow_strength": 1.0}));
+        let ambient_scale = settings.map_or(1., |s| s.ambient_scale) * UNBAKED_AMBIENT;
+        let mut env = json!({"op": "set_environment", "environment": {"show_sky": session.sky.is_some(), "intensity": if session.sky.is_some() { 1. } else { (lum * 4.).clamp(0.02, 1.) }, "ambient": e.map(|v| (v * ambient_scale).clamp(0., 16.)), "sun": sun, "tonemap": "filmic"}});
+        match settings {
+            // The area's tonemap: Hable's curve with its constants and
+            // bias. The camera adapts (`tonemap-adaption-time`, light
+            // range ±4 stops) toward the record's key (`tonemap-manual-
+            // exposure-value`: 0.05 in the menu temple, 0.4–0.7 outdoors)
+            // instead of middle grey: compensation `log2(key / 0.18) + K`,
+            // `K` calibrated once against the original title screen.
+            Some(s) => {
+                let t = s.tonemap;
+                env["environment"]["filmic_curve"] = json!({"shoulder": t.shoulder, "linear": t.linear, "angle": t.angle, "toe": t.toe, "toe_numerator": t.toe_numerator, "toe_denominator": t.toe_denominator, "white": t.white, "exposure_bias": t.exposure_bias});
+                let compensation = (t.manual_exposure.max(1e-4) / 0.18).log2() + EXPOSURE_CALIBRATION;
+                env["environment"]["auto_exposure"] = json!({"min_log2": -8.0, "max_log2": 8.0, "speed_up": 3.0, "speed_down": 1.0, "compensation": compensation});
+                env["environment"]["grading"] = json!({"color_filter": s.tint.map(|v| v.clamp(0., 4.))});
+            }
+            None => {
+                env["environment"]["auto_exposure"] = json!({"min_log2": -6.0, "max_log2": 2.0, "speed_up": 3.0, "speed_down": 1.0, "compensation": 0.5});
+            }
+        }
         if let Some(sky) = &session.sky {
             env["environment"]["hdr"] = json!(sky.relative());
         }
@@ -1252,8 +1285,13 @@ impl NaughtyDogVm {
     /// Place the player and start the level's state-script processes.
     fn start_task(&self, session: &mut Session, world: &mut Vec<serde_json::Value>) -> Result<()> {
         session.ground.prepare();
-        if let Some(env) = Self::level_environment(session) {
-            world.push(env);
+        // The environment follows the player's render-settings region, so
+        // it is set once the player stands (the menu has none).
+        session.player = None;
+        if session.plan.as_ref().is_some_and(|p| p.menu) {
+            if let Some(env) = Self::level_environment(session) {
+                world.push(env);
+            }
         }
         let plan = session.plan.as_ref().context("task plan")?;
         if plan.menu {
@@ -1319,7 +1357,11 @@ impl NaughtyDogVm {
                 }
             }
         }
+        session.stage.player_locator = Some((player.position, glam::Quat::from_rotation_y(player.yaw).to_array()));
         session.player = Some(player);
+        if let Some(env) = Self::level_environment(session) {
+            world.push(env);
+        }
         session.stage.log(format!("task {} level {}: player at {:?}", plan.name, plan.level, position));
         let (Some(game), Some(modules)) = (session.game.as_mut(), session.modules.as_ref()) else { return Ok(()) };
         match game.start(modules, &mut session.stage, &session.records) {
@@ -2308,7 +2350,15 @@ impl NaughtyDogVm {
                 let (r, _, exit) = &session.stage.regions[*i];
                 runs.push((format!("exit {}", r.name), *exit));
             }
+            // Entering or leaving a render-settings region changes the
+            // environment.
+            let lighting = runs.iter().any(|(what, _)| session.stage.regions.iter().any(|(r, _, _)| r.render_settings.is_some() && what.ends_with(&format!(" {}", r.name))));
             session.stage.player_regions = now;
+            if lighting {
+                if let Some(env) = Self::level_environment(session) {
+                    world.push(env);
+                }
+            }
             if let Some(game) = session.game.as_mut() {
                 for (what, lambda) in runs {
                     session.stage.log(format!("region {what}"));
@@ -2748,6 +2798,16 @@ fn edge_frame(e: &crate::collision::Edge, s: f32) -> glam::Mat4 {
     let f = f.normalize_or_zero();
     glam::Mat4::from_rotation_translation(glam::Quat::from_rotation_y(f.x.atan2(f.z)), e.p0 + d * s)
 }
+
+/// Stops added to `log2` of a render-settings record's manual exposure
+/// (calibrated against the original title screen; the native scale of the
+/// renderer's radiance is not recovered).
+const EXPOSURE_CALIBRATION: f32 = 2.25;
+
+/// Scale of the environment ambient for meshes without baked probes
+/// (instanced meshes, characters), relative to the record's
+/// `ambient-scale` (calibrated with [`EXPOSURE_CALIBRATION`]).
+const UNBAKED_AMBIENT: f32 = 0.25;
 
 /// Seconds a jump between edges takes to move the root (the
 /// `ledge-jump-up-long` begin, mid and end clips last about 1.2 s).

@@ -146,9 +146,16 @@ pub struct Material {
     pub passes: Vec<Vec<u32>>,
     /// The two-layer blend pass 0's fragment program computes, if any.
     pub layers: Option<crate::rsx::LayerBlend>,
+    /// Pass 0's named fragment-program constants.
+    pub parameters: Vec<(String, [f32; 4])>,
 }
 
 impl Material {
+    /// A named fragment-program constant.
+    pub fn parameter(&self, name: &str) -> Option<[f32; 4]> {
+        self.parameters.iter().find(|(n, _)| n == name).map(|(_, v)| *v)
+    }
+
     /// Base-colour texture: the first sampler that is not a placeholder
     /// (`skip`: single-colour textures and lightmaps). Background materials
     /// bind a shared placeholder at sampler 0 and the albedo at 1, prop
@@ -408,7 +415,8 @@ fn material(p: &Loaded, m: usize) -> Result<Material> {
         .ok()
         .and_then(|(code, units)| crate::rsx::layer_blend(&code, &units));
     let passes = (0..passes as usize).map(|i| p.ptr(list + 4 * i).and_then(pass_samplers)).collect::<Result<Vec<_>>>().unwrap_or_else(|_| vec![samplers.clone()]);
-    Ok(Material { name, samplers, passes, layers })
+    let parameters = p.ptr(p.ptr(list)? + 0x10).and_then(|data| crate::rsx::pass_parameters(p, data)).unwrap_or_default();
+    Ok(Material { name, samplers, passes, layers, parameters })
 }
 
 /// First word of the collision-mesh collections in actor packages (the

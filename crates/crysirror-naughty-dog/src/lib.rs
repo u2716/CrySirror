@@ -25,6 +25,7 @@ pub mod package;
 pub mod player;
 pub mod probes;
 pub mod region;
+pub mod render_settings;
 pub mod rsx;
 pub mod scene;
 pub mod skeleton;

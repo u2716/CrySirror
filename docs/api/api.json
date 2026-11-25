@@ -22090,6 +22090,12 @@
           "doc": "Colour adjustments before tonemapping; `null` is neutral.",
           "name": "grading",
           "rust_type": "Option<ColorGrading>"
+        },
+        {
+          "default": null,
+          "doc": "Curve of the `filmic` tonemap; `null` keeps the published one.",
+          "name": "filmic_curve",
+          "rust_type": "Option<FilmicCurve>"
         }
       ],
       "name": "Environment",
@@ -30508,7 +30514,7 @@
       "used_by": "UiEvent.widget client/local identity"
     }
   ],
-  "fingerprint": "7a50ef09e7ce0526",
+  "fingerprint": "8206decff09b50e6",
   "generated_by": "crysirror-engine api_doc (tests/api_docs.rs)",
   "globals": [
     {

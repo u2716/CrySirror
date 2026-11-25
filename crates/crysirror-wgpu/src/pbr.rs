@@ -1887,7 +1887,7 @@ impl PbrRenderer {
         let cascade_bufs: Vec<wgpu::Buffer> = (0..CASCADES)
             .map(|_| uniform("cascade light", std::mem::size_of::<ShadowUniform>() as u64))
             .collect();
-        let post_buf = uniform("post", 64);
+        let post_buf = uniform("post", 96);
         let object_capacity = 256;
         let object_buf = uniform("pbr objects", OBJECT_STRIDE * object_capacity);
         let particles = crate::particles::Particles::new(d, HDR, MSAA)?;
@@ -4625,6 +4625,7 @@ impl PbrRenderer {
             screen: fu.screen,
         };
         let grading = env.grading.clone().unwrap_or_default();
+        let curve = env.filmic_curve.unwrap_or_default().uniforms();
         let tonemap = match env.tonemap {
             Tonemap::PbrNeutral => 0.,
             Tonemap::Aces => 1.,
@@ -4651,6 +4652,14 @@ impl PbrRenderer {
                 grading.saturation,
                 0.,
                 0.,
+                curve[0][0],
+                curve[0][1],
+                curve[0][2],
+                curve[0][3],
+                curve[1][0],
+                curve[1][1],
+                curve[1][2],
+                curve[1][3],
             ]),
         );
 
