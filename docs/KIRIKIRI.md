@@ -137,6 +137,20 @@ media labelled with the executable's stem. `Storages.searchCD` can find this
 label; its returned drive routes back into that scoped game directory. This
 mapping does not require an optical drive. Unregistered labels remain absent.
 
+For desktop launches from a named EXE, detection keeps that selection. When a
+KiriKiri wrapper references an adjacent `KrkrPatch.json`, the adapter reads
+the declared `gameExecutableFile` within the game directory and reports both
+names. The launch plan also mounts the listed plain XP3 overlays. For
+`arc://`, `archive://` and `psb://` requests enabled in the manifest, the first
+archive containing the full member name supplies the read. `patchNoProtocol`
+enables the same lookup for relative names. A missing member falls through to
+the game's normal lookup. The player logs the first selected override, and
+`CRYSIRROR_KRKR_TRACE_STORAGE=1` logs each selection.
+
+This applies to EXEs recognized as manifest launchers. The current scope is
+XP3 sources and exact member paths. Folder overlays and additional media
+types require their own compatibility work.
+
 Fonts, save locations, window behaviour and SMB/NFS game paths are described in
 the [desktop guide](DESKTOP_API.md). See [all supported engines](NATIVE_ADAPTERS.md)
 for other game formats.

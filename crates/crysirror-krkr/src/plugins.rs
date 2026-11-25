@@ -108,7 +108,10 @@ const FACADES: &[Facade] = &[
     facade!("wumultitrack.dll", ".mtrk/.mchx multi-track music over the shared multi-track voice; mask, delayed mask, rebind and gain-callback members", |rt, _| crate::multitrack::install(rt)),
     facade!("glitcheffect.dll", "Layer.glitchCopy/doGlitch over the shared GlitchCopy image pair; glitch/fadeglitch/loopglitch transitions", |rt, _| { crate::layer_ex::install_glitch(rt); Ok(()) }),
     facade!("wvdecoder.dll", "WaveSoundData.F32/S16 sample buffers through the shared audio resource and source-sample services", |rt, _| { crate::wv_decoder::install(rt); Ok(()) }),
-    facade!("packinone.dll", "bundled layer/system/storage members (installed at startup) and the SliceLayer class", |rt, _| crate::system_ex::install_slice_layer(rt)),
+    facade!("packinone.dll", "bundled layer/system/storage members, fstat directory queries and the SliceLayer class", |rt, _| {
+        crate::storage_plugins::install_fstat(rt);
+        crate::system_ex::install_slice_layer(rt)
+    }),
     facade!("psd.dll", "PSD class and psd:// layer media over the shared crysirror_image::psd decoder", |rt, _| crate::psd_plugin::install(rt)),
     facade!("httprequest.dll", "HttpRequest over the engine's owner-authorized HTTP service", |rt, _| { crate::http_plugin::install(rt); Ok(()) }),
     facade!("kaichotrans.dll", "shared GPU subtree byte-domain blur and grayscale/blur/negative rule dim transitions"),

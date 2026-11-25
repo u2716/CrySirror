@@ -1,5 +1,19 @@
 # API change log
 
+## `fea5db2c50352d1d` (2026-11-25) — KiriKiri launcher overrides
+
+The combined reference adds the optional KiriKiri `launcher_overlay`
+configuration to the rendering API at `1dc311dc1a85ca09`. Existing projects
+can omit the field and keep their current launcher and archive handling.
+
+## `a6235515c431567d` (2026-11-22) · KiriKiri launcher overrides
+
+KiriKiri project configuration gains an optional `launcher_overlay`. Explicit
+launcher selection supplies an ordered set of mounted XP3 archives and the
+accepted protocols from the launcher's manifest. Existing project files omit
+the field. Rust callers can use `detect_source_with_entry` to preserve the
+selected executable. Directory callers continue to use `detect_source`.
+
 ## `1dc311dc1a85ca09` (2026-11-25) — textured toon outlines
 
 `ToonShading.outline_texture` adds an optional raw hull colour texture with

@@ -96,7 +96,7 @@ pub(super) fn open(
         }
     }
     let mut filters = BTreeMap::new();
-    let mut lookups = BTreeMap::new();
+    let mut lookups = BTreeMap::<_, BTreeMap<_, _>>::new();
     let mut protected_ids = std::collections::BTreeSet::new();
     for entry in &mut base.entries {
         let fake = fake_id(&entry.path);
@@ -114,8 +114,8 @@ pub(super) fn open(
                 filters.insert(entry.id, (r.entry_key, r.filter_flag));
             }
             ensure!(
-                lookups
-                    .insert((r.path_hash, r.name_hash), entry.id)
+                lookups.entry(r.path_hash).or_default()
+                    .insert(r.name_hash, entry.id)
                     .is_none(),
                 "duplicate HXV4 hashed path"
             );
@@ -247,7 +247,7 @@ struct HxArchive {
     protected_ids: std::collections::BTreeSet<u32>,
     base: ParsedArchive,
     filters: BTreeMap<u32, (u64, u16)>,
-    lookups: BTreeMap<([u8; 8], [u8; 32]), u32>,
+    lookups: BTreeMap<[u8; 8], BTreeMap<[u8; 32], u32>>,
     manager: native::Hxv4NativeFilterManager,
 }
 impl Archive for HxArchive {
@@ -269,14 +269,16 @@ impl Archive for HxArchive {
         // Directory spelling keeps its trailing delimiter; the root is "".
         let cut = path.rfind('/').map_or(0, |i| i + 1);
         let (dir, name) = path.split_at(cut);
-        for dir in [dir.to_owned(), dir.to_lowercase()] {
-            for name in [name.to_owned(), name.to_lowercase()] {
-                if let Some(id) = self
-                    .lookups
-                    .get(&(hxv4_path_hash(&dir), hxv4_filename_hash(&name)))
-                {
-                    return Some(*id);
-                }
+        let folded_dir = dir.to_lowercase();
+        let mut exact_name = None;
+        for spelling in std::iter::once(dir).chain((folded_dir != dir).then_some(folded_dir.as_str())) {
+            let Some(files) = self.lookups.get(&hxv4_path_hash(spelling)) else { continue };
+            if let Some(id) = files.get(exact_name.get_or_insert_with(|| hxv4_filename_hash(name))) {
+                return Some(*id);
+            }
+            let folded = name.to_lowercase();
+            if folded != name {
+                if let Some(id) = files.get(&hxv4_filename_hash(&folded)) { return Some(*id); }
             }
         }
         None

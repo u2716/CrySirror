@@ -707,6 +707,8 @@ fn slice_layer_color_tables_and_wave_data_extras() {
                 "startup.tjs",
                 br#"
                 Plugins.link("PackinOne.dll");
+                var entries = Storages.dirlist("file://./");
+                if (entries.find("pic.tlg") < 0) throw "PackinOne directory listing";
                 Plugins.link("msdfrender.dll");
                 Plugins.link("wvdecoder.dll");
                 Plugins.link("win32dialog.dll");
