@@ -218,6 +218,8 @@ impl KrkrVm {
             if h.audio_codec_supported(self.client,codec).map_err(err)? { host.audio_codecs.insert(codec.into()); }
         }
         host.input = input;
+        host.held_buttons = input.buttons_down;
+        host.pressed_since_query = input.buttons_down | input.buttons_pressed;
         host.locale = self.config.locale.clone();
         host.plugin_shells = self
             .config
@@ -486,111 +488,103 @@ impl KrkrVm {
         Ok(())
     }
 
-    /// Existing native hit policy over engine Layer/Canvas resources.
-    fn pointer_hit(&mut self, x:i64, y:i64) -> Result<Option<(usize,i64,i64)>> {
-        let rt=self.rt.as_mut().context("KiriKiri runtime absent")?;
-        let candidates=rt.host().hits(x,y);
-        let mut hit = None;
-        for (id, lx, ly) in candidates {
-            let target = ObjectHandle(id);
-            // Outside the current modal layer counts as disabled (krkrz
-            // GetMostFrontChildAt: `IsDisabledByMode` blocks the hit).
-            let mut enabled = !rt.host().disabled_by_mode(id);
-            let mut node = Some(id);
-            let mut depth = 0;
-            while let Some(id) = node {
-                if !rt.object_member(ObjectHandle(id), "__lp_enabled").is_truthy() {
-                    enabled = false;
-                    break;
-                }
-                node = rt.host().layer(ObjectHandle(id))?.parent;
-                depth += 1;
-                ensure!(depth <= 64, "native enabled ancestry limit");
+    /// An accepted disabled hit blocks the layers behind it.
+    fn hit_candidate(&mut self, id: usize, lx: i64, ly: i64) -> Result<Option<bool>> {
+        let rt = self.rt.as_mut().context("KiriKiri runtime absent")?;
+        let target = ObjectHandle(id);
+        // Outside the current modal layer counts as disabled (krkrz
+        // GetMostFrontChildAt: `IsDisabledByMode` blocks the hit).
+        let mut enabled = !rt.host().disabled_by_mode(id);
+        let mut node = Some(id);
+        let mut depth = 0;
+        while let Some(id) = node {
+            if !rt.object_member(ObjectHandle(id), "__lp_enabled").is_truthy() {
+                enabled = false;
+                break;
             }
-            let layer = rt.host().layer(target)?;
-            let kind = rt
-                .object_member(target, "__lp_hitType")
-                .to_integer()
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
-            let threshold = rt
-                .object_member(target, "__lp_hitThreshold")
-                .to_integer()
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
-            let yes = if kind == 1 {
-                layer
-                    .regions
-                    .get(self.client.0, [lx - layer.image_left, ly - layer.image_top])?
-                    != 0
-            } else if kind == 0 {
-                let px = lx - layer.image_left;
-                let py = ly - layer.image_top;
-                if layer.has_image
-                    && (px < 0 || py < 0 || px >= layer.image_width || py >= layer.image_height)
-                {
-                    false
-                } else if threshold <= 0 {
-                    true
-                } else if threshold >= 256 || !layer.has_image {
-                    false
-                } else if layer.kind
-                    == 1
-                {
-                    true
-                } else {
-                    let alpha=if let Some(alpha)=layer.full_alpha {alpha}
-                    else if let Some(crysirror_core::image_processing::ImageInput::Resource(image))=&layer.image_source {
-                        ensure!(image.client()==self.client,"foreign native hit image resource");
-                        image.alpha_at([px as u32,py as u32]).context("native hit point outside shared image resource")?
-                    } else {
-                        let source=match &layer.image_source {
-                            Some(crysirror_core::image_processing::ImageInput::Asset{path,..})=>format!("asset {path}"),
-                            Some(crysirror_core::image_processing::ImageInput::Encoded{name,..})=>format!("encoded {name}"),
-                            Some(crysirror_core::image_processing::ImageInput::Solid{..})=>"solid".into(),
-                            Some(crysirror_core::image_processing::ImageInput::Composite{..})=>"composite".into(),
-                            Some(crysirror_core::image_processing::ImageInput::Raster{..})=>"raster".into(),
-                            Some(crysirror_core::image_processing::ImageInput::Ternary{..})=>"three-input image".into(),
-                            Some(crysirror_core::image_processing::ImageInput::Transition{..})=>"transition".into(),
-                            Some(crysirror_core::image_processing::ImageInput::Resource(_))=>"resource".into(),
-                            Some(_)=>"shared image operation graph".into(),
-                            None=>"composed canvas".into(),
-                        };
-                        bail!("alpha-mask hit for native layer {id} canvas {} at {px},{py} requires a prepared shared image or composed-canvas query; source={source}",layer.slot);
-                    };
-                    i64::from(alpha)>=threshold
-                }
+            node = rt.host().layer(ObjectHandle(id))?.parent;
+            depth += 1;
+            ensure!(depth <= 64, "native enabled ancestry limit");
+        }
+        let layer = rt.host().layer(target)?;
+        let kind = rt
+            .object_member(target, "__lp_hitType")
+            .to_integer()
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let threshold = rt
+            .object_member(target, "__lp_hitThreshold")
+            .to_integer()
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let yes = if kind == 1 {
+            layer
+                .regions
+                .get(self.client.0, [lx - layer.image_left, ly - layer.image_top])?
+                != 0
+        } else if kind == 0 {
+            let px = lx - layer.image_left;
+            let py = ly - layer.image_top;
+            if layer.has_image
+                && (px < 0 || py < 0 || px >= layer.image_width || py >= layer.image_height)
+            {
+                false
+            } else if threshold <= 0 {
+                true
+            } else if threshold >= 256 || !layer.has_image {
+                false
+            } else if layer.kind
+                == 1
+            {
+                true
             } else {
-                bail!("unknown native hitType")
-            };
-            if yes {
-                // Native onHitTest changes a work flag through super.onHitTest;
-                // its TJS return value is not the native hit result.
-                rt.set_object_member(target, "__hit_test_work", Variant::Integer(1));
-                *self.events.entry("onHitTest").or_default() += 1;
-                rt.call_object_method(
-                    target,
-                    "onHitTest",
-                    vec![
-                        Variant::Integer(lx),
-                        Variant::Integer(ly),
-                        Variant::Integer(1),
-                    ],
-                )
-                .map_err(|e| anyhow::anyhow!("TJS onHitTest: {e}"))?;
-                if rt.object_member(target, "__hit_test_work").is_truthy() {
-                    // A hit disabled layer blocks layers behind it; it does
-                    // not make the pointer fall through the disabled subtree.
-                    if !enabled {
-                        break;
-                    }
-                    hit = Some((id, lx, ly));
-                    break;
-                }
+                let alpha=if let Some(alpha)=layer.full_alpha {alpha}
+                else if let Some(crysirror_core::image_processing::ImageInput::Resource(image))=&layer.image_source {
+                    ensure!(image.client()==self.client,"foreign native hit image resource");
+                    image.alpha_at([px as u32,py as u32]).context("native hit point outside shared image resource")?
+                } else {
+                    let source=match &layer.image_source {
+                        Some(crysirror_core::image_processing::ImageInput::Asset{path,..})=>format!("asset {path}"),
+                        Some(crysirror_core::image_processing::ImageInput::Encoded{name,..})=>format!("encoded {name}"),
+                        Some(crysirror_core::image_processing::ImageInput::Solid{..})=>"solid".into(),
+                        Some(crysirror_core::image_processing::ImageInput::Composite{..})=>"composite".into(),
+                        Some(crysirror_core::image_processing::ImageInput::Raster{..})=>"raster".into(),
+                        Some(crysirror_core::image_processing::ImageInput::Ternary{..})=>"three-input image".into(),
+                        Some(crysirror_core::image_processing::ImageInput::Transition{..})=>"transition".into(),
+                        Some(crysirror_core::image_processing::ImageInput::Resource(_))=>"resource".into(),
+                        Some(_)=>"shared image operation graph".into(),
+                        None=>"composed canvas".into(),
+                    };
+                    bail!("alpha-mask hit for native layer {id} canvas {} at {px},{py} requires a prepared shared image or composed-canvas query; source={source}",layer.slot);
+                };
+                i64::from(alpha)>=threshold
+            }
+        } else {
+            bail!("unknown native hitType")
+        };
+        if yes {
+            // Native onHitTest changes a work flag through super.onHitTest;
+            // its TJS return value is not the native hit result.
+            rt.set_object_member(target, "__hit_test_work", Variant::Integer(1));
+            *self.events.entry("onHitTest").or_default() += 1;
+            rt.call_object_method(
+                target,
+                "onHitTest",
+                vec![
+                    Variant::Integer(lx),
+                    Variant::Integer(ly),
+                    Variant::Integer(1),
+                ],
+            )
+            .map_err(|e| anyhow::anyhow!("TJS onHitTest: {e}"))?;
+            if rt.object_member(target, "__hit_test_work").is_truthy() {
+                // A hit disabled layer blocks layers behind it; it does
+                // not make the pointer fall through the disabled subtree.
+                return Ok(Some(enabled));
             }
         }
-        Ok(hit)
+        Ok(None)
     }
 
-    fn mouse_target(&mut self, x:i64, y:i64) -> Result<Option<(usize,i64,i64)>> {
+    fn captured_mouse_target(&mut self, x:i64, y:i64) -> Result<Option<(usize,i64,i64)>> {
         let capture=self.rt.as_ref().unwrap().host().mouse.capture;
         if let Some(id)=capture {
             let rt=self.rt.as_ref().unwrap();
@@ -607,7 +601,7 @@ impl KrkrVm {
             }
             crate::native_mouse::release(self.rt.as_mut().unwrap());
         }
-        self.pointer_hit(x,y)
+        Ok(None)
     }
 
     fn enqueue_timers(&mut self, now: u64) -> Result<()> {
@@ -728,7 +722,8 @@ impl KrkrVm {
             return Ok(VmYield::Halted);
         }
         let now = h.now_ms();
-        if self.rt.is_none() {
+        let booting = self.rt.is_none();
+        if booting {
             self.boot(h, input)?;
         }
         if let Some(rt) = self.rt.as_mut() {
@@ -738,6 +733,10 @@ impl KrkrVm {
         self.rt.as_mut().unwrap().host_mut().display = h.display_info();
         let input=self.modal_input(h,input)?;
         let input=crate::native_pad::filter_input(self.rt.as_ref().unwrap(),input);
+        let host = self.rt.as_mut().unwrap().host_mut();
+        host.pressed_since_query |= input.buttons_down & !host.held_buttons;
+        if !booting { host.pressed_since_query |= input.buttons_pressed; }
+        host.held_buttons = input.buttons_down;
         self.inbox.push(self.client.0,now,input)?;
         if !self.drive_sound(h)? {
             return Ok(VmYield::BudgetExhausted);

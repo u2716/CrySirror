@@ -1196,6 +1196,16 @@ fn install_window(rt: &mut Rt) {
     rt.add_object_class_info(device, "BasicDrawDevice");
     draw_device_members(rt, device);
     rt.set_object_member(class, "BasicDrawDevice", Variant::Object(device));
+    // WindowImpl.cpp exposes the read-only GetWindowHandleForPlugin result.
+    // A managed Window has no handle for a native plug-in on any host.
+    rt.register_object_native_property(
+        class, "HWND",
+        |rt, t| {
+            window_of(rt, t)?;
+            Ok(Variant::Integer(0))
+        },
+        read_only,
+    );
     rt.register_object_native_property(
         class,
         "drawDevice",
