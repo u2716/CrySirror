@@ -231,6 +231,8 @@ struct Stage {
     poses: HashMap<u32, glam::Mat4>,
     /// The body (entity) the player stands on or hangs from.
     player_support: Option<u32>,
+    /// The eye of the camera last presented (world).
+    camera_eye: Option<[f32; 3]>,
     /// Trigger regions of the loaded level packages, with their enter
     /// and exit lambdas' script addresses.
     regions: Vec<(crate::trigger::Region, Option<u32>, Option<u32>)>,
@@ -286,11 +288,16 @@ impl Stage {
     /// never while the parent is not spawned.
     fn holds(&self, r: &crate::trigger::Region, object: u32) -> bool {
         let Some((at, _)) = World::locator(self, object) else { return false };
-        let at = glam::Vec3::from_array(at);
         let player = sid("player");
         if object == player && !r.categories.is_empty() && !r.categories.contains(&player) {
             return false;
         }
+        self.holds_point(r, at)
+    }
+
+    /// Whether region `r` holds world point `at` (its category unchecked).
+    fn holds_point(&self, r: &crate::trigger::Region, at: [f32; 3]) -> bool {
+        let at = glam::Vec3::from_array(at);
         let local = match r.parent {
             Some(parent) => {
                 if self.entities.contains_key(&parent) && !self.visible.contains(&parent) {
@@ -1106,14 +1113,22 @@ impl NaughtyDogVm {
     /// probes' brightness (the procedural daylight sky would otherwise
     /// light night and cave levels).
     /// The render settings in force: those of the render-settings region
-    /// holding the player, or without a player the first a level region
+    /// holding the camera, or without a player the first a level region
     /// names (`menu-temple-ingame10`: `*menu-temple-render-settings-01*`).
     /// Regions choosing their record by script lambda (`train-wreck`) are
     /// not evaluated.
+    fn render_settings_name(session: &Session) -> Option<u32> {
+        let regions = &session.stage.regions;
+        let eye = session.stage.camera_eye?;
+        regions.iter().find(|(r, _, _)| r.render_settings.is_some() && session.stage.holds_point(r, eye)).and_then(|(r, _, _)| r.render_settings)
+    }
+
     fn render_settings(session: &Session) -> Option<crate::render_settings::RenderSettings> {
         let dc = &session.game.as_ref()?.rt.dc;
         let regions = &session.stage.regions;
-        let held = regions.iter().filter(|(r, _, _)| r.render_settings.is_some()).find(|(r, _, _)| session.player.is_some() && session.stage.holds(r, sid("player")));
+        // Render-settings regions are `camera` regions: tested at the
+        // camera (the eye of the last presented camera).
+        let held = regions.iter().filter(|(r, _, _)| r.render_settings.is_some()).find(|(r, _, _)| session.player.is_some() && session.stage.camera_eye.is_some_and(|eye| session.stage.holds_point(r, eye)));
         // Without a player (the menu) the level's first record applies;
         // with one, only a region holding it selects a record.
         let region = held.or_else(|| if session.player.is_none() { regions.iter().find(|(r, _, _)| r.render_settings.is_some()) } else { None })?;
@@ -1135,16 +1150,15 @@ impl NaughtyDogVm {
         let mut env = json!({"op": "set_environment", "environment": {"show_sky": session.sky.is_some(), "intensity": if session.sky.is_some() { 1. } else { (lum * 4.).clamp(0.02, 1.) }, "ambient": e.map(|v| (v * ambient_scale).clamp(0., 16.)), "sun": sun, "tonemap": "filmic"}});
         match settings {
             // The area's tonemap: Hable's curve with its constants and
-            // bias. The camera adapts (`tonemap-adaption-time`, light
-            // range ±4 stops) toward the record's key (`tonemap-manual-
-            // exposure-value`: 0.05 in the menu temple, 0.4–0.7 outdoors)
-            // instead of middle grey: compensation `log2(key / 0.18) + K`,
-            // `K` calibrated once against the original title screen.
+            // bias; the camera adapts (`tonemap-adaption-time`, light range
+            // ±4 stops) with a constant compensation calibrated against the
+            // original title screen. The record's key (`tonemap-manual-
+            // exposure-value`) and the native exposure modes (`sub_ABB33C`
+            // caller) are not applied.
             Some(s) => {
                 let t = s.tonemap;
                 env["environment"]["filmic_curve"] = json!({"shoulder": t.shoulder, "linear": t.linear, "angle": t.angle, "toe": t.toe, "toe_numerator": t.toe_numerator, "toe_denominator": t.toe_denominator, "white": t.white, "exposure_bias": t.exposure_bias});
-                let compensation = (t.manual_exposure.max(1e-4) / 0.18).log2() + EXPOSURE_CALIBRATION;
-                env["environment"]["auto_exposure"] = json!({"min_log2": -8.0, "max_log2": 8.0, "speed_up": 3.0, "speed_down": 1.0, "compensation": compensation});
+                env["environment"]["auto_exposure"] = json!({"min_log2": -8.0, "max_log2": 8.0, "speed_up": 3.0, "speed_down": 1.0, "compensation": EXPOSURE_CALIBRATION});
                 env["environment"]["grading"] = json!({"color_filter": s.tint.map(|v| v.clamp(0., 4.))});
                 // The record's fog: opacity `density` reached over
                 // `distance-range` past `distance-start`, thinning over
@@ -1368,6 +1382,7 @@ impl NaughtyDogVm {
             }
         }
         session.stage.player_locator = Some((player.position, glam::Quat::from_rotation_y(player.yaw).to_array()));
+        session.stage.camera_eye = Some([player.position[0], player.position[1] + 1.5, player.position[2]]);
         session.player = Some(player);
         if let Some(env) = Self::level_environment(session) {
             world.push(env);
@@ -2327,6 +2342,16 @@ impl NaughtyDogVm {
                 None => Self::follow(p, &session.ground, seconds),
             };
             Self::animate_camera(session, &mut camera);
+            let eye = camera["camera"]["eye"].as_array().map(|a| [0, 1, 2].map(|k| a.get(k).and_then(|v| v.as_f64()).unwrap_or(0.) as f32));
+            // Crossing into another render-settings region changes the
+            // environment.
+            let before = Self::render_settings_name(session);
+            session.stage.camera_eye = eye;
+            if Self::render_settings_name(session) != before {
+                if let Some(env) = Self::level_environment(session) {
+                    world.push(env);
+                }
+            }
             world.push(camera);
         }
         session.stage.player_locator = session.player.as_ref().map(|p| (p.position, glam::Quat::from_rotation_y(p.yaw).to_array()));
@@ -2360,15 +2385,7 @@ impl NaughtyDogVm {
                 let (r, _, exit) = &session.stage.regions[*i];
                 runs.push((format!("exit {}", r.name), *exit));
             }
-            // Entering or leaving a render-settings region changes the
-            // environment.
-            let lighting = runs.iter().any(|(what, _)| session.stage.regions.iter().any(|(r, _, _)| r.render_settings.is_some() && what.ends_with(&format!(" {}", r.name))));
             session.stage.player_regions = now;
-            if lighting {
-                if let Some(env) = Self::level_environment(session) {
-                    world.push(env);
-                }
-            }
             if let Some(game) = session.game.as_mut() {
                 for (what, lambda) in runs {
                     session.stage.log(format!("region {what}"));
@@ -2809,10 +2826,10 @@ fn edge_frame(e: &crate::collision::Edge, s: f32) -> glam::Mat4 {
     glam::Mat4::from_rotation_translation(glam::Quat::from_rotation_y(f.x.atan2(f.z)), e.p0 + d * s)
 }
 
-/// Stops added to `log2` of a render-settings record's manual exposure
-/// (calibrated against the original title screen; the native scale of the
-/// renderer's radiance is not recovered).
-const EXPOSURE_CALIBRATION: f32 = 2.25;
+/// Auto-exposure compensation (stops) under a render-settings record:
+/// the menu temple matches the original title screen at 0.46 and the
+/// prologue's earlier adaptation used 0.5.
+const EXPOSURE_CALIBRATION: f32 = 0.5;
 
 /// Scale of the environment ambient for meshes without baked probes
 /// (instanced meshes, characters), relative to the record's
