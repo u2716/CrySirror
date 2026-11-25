@@ -125,6 +125,10 @@ Every opcode of `idle`, `walk`, `move` and `walk-hurt` decodes.
 
 ## Player animation state machine
 
+State records are 0x48 bytes: +0 name, +4 id, +0x10 tree, +0x14 logical animation, +0x30 transitions, and +0x38/+0x3c script lambdas. The +0x3c lambda returns non-zero for mirrored states (`ledge-shimmy-left` 1, `-right` 0; both trees name `ledge-grab-shuffle-r-hurt`). Mirrored clips are built from the bind pose: each joint takes its `l_`/`r_` partner's pose reflected across the YZ plane, `W′ⱼ = R·W_p·R·(R·B_p·R)⁻¹·Bⱼ`. `SKELETON_FLIPDATA` holds 39 joint pairs, each with a 32-bit component code (`0x0ed8bed8`, `0x0ed8fa9c`, `0x0a9889ef`), and is not decoded.
+
+### States
+
 `dc1.psarc/anim-player.bin` `anim-actor` `anim-player`: state count +0x30, inline 0x48-byte states +0x34, initial state +0x38 (`idle`); layout in `src/anim_state.rs`. 988 states; transitions `{request, flags, blend record, target, 0, 0, fade, -1, 0}` with `auto` taken at the end of the state's animation. Blend trees are nested blend nodes (type `0xb249ac72`), layer/select nodes (`0x1c3f471c`) and `anim-node-animation` leaves; the `run` tree's select node lists clips by movement type (`run-tense`, `walk-balance`, `walk-hurt`, `run-hurt-long`, …), the options of the `move` `player-overlay-info` that `set-walk-type`/`set-run-type` choose. Hurt clips live in `actor27.psarc/anim-proto-hurt.pak`. The `align` raw channel gives root motion (`move` 2.8 m/s, `walk` 1.5, `walk-hurt` 0.8, `run-hurt-long` 3.9).
 
 Blend-tree nodes (`src/anim_tree.rs`):

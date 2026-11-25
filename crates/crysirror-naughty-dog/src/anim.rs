@@ -494,7 +494,136 @@ pub fn raw_samples(p: &Loaded, payload: usize, name: u32) -> Vec<Vec<f32>> {
     found().unwrap_or_default()
 }
 
+/// The clip name of a clip mirrored by [`mirror`].
+pub const MIRROR_SUFFIX: &str = "@mirror";
+
+/// The left/right partner of each joint by name (`l_…`/`r_…`, `…_l`/`…_r`);
+/// central joints are their own partners.
+pub fn joint_partners(names: &[String]) -> Vec<usize> {
+    let swap = |n: &str| -> Option<String> {
+        if let Some(rest) = n.strip_prefix("l_") {
+            Some(format!("r_{rest}"))
+        } else if let Some(rest) = n.strip_prefix("r_") {
+            Some(format!("l_{rest}"))
+        } else if let Some(stem) = n.strip_suffix("_l") {
+            Some(format!("{stem}_r"))
+        } else {
+            n.strip_suffix("_r").map(|stem| format!("{stem}_l"))
+        }
+    };
+    names.iter().enumerate().map(|(j, n)| swap(n).and_then(|m| names.iter().position(|x| *x == m)).unwrap_or(j)).collect()
+}
+
+/// A clip mirrored across the character's YZ plane (x is left): each
+/// joint takes its partner's pose reflected, `W′ⱼ = R·W_p·R·Cⱼ` with `R`
+/// the x reflection and `Cⱼ = (R·B_p·R)⁻¹·Bⱼ` from the bind pose, so the
+/// bind pose maps onto itself whatever the joints' local axes. `align`
+/// and `apReference` are reflected the same way. The mirrored states'
+/// clips (`ledge-shimmy-left` plays `ledge-grab-shuffle-r-hurt`) are
+/// built this way; the native `SKELETON_FLIPDATA` joint-pair programs are
+/// not decoded (SATD-nd-retail-runtime).
+pub fn mirror(clip: &Clip, skel: &crate::skeleton::Skeleton) -> Clip {
+    use glam::Mat4;
+    let n = skel.names.len();
+    let partner = joint_partners(&skel.names);
+    let order = skel.order();
+    let r = Mat4::from_scale(Vec3::new(-1., 1., 1.));
+    let world_of = |local: &dyn Fn(usize) -> (Vec3, Quat, Vec3)| {
+        let mut w = vec![Mat4::IDENTITY; n];
+        for &j in &order {
+            let (t, q, sc) = local(j);
+            let l = Mat4::from_scale_rotation_translation(sc, q, t);
+            w[j] = skel.parents[j].map_or(l, |p| w[p] * l);
+        }
+        w
+    };
+    let bind = world_of(&|j| skel.rest[j]);
+    let correction: Vec<Mat4> = (0..n).map(|j| (r * bind[partner[j]] * r).inverse() * bind[j]).collect();
+    let frames = clip.frames.max(1);
+    let track = |j: usize| clip.joints.get(j);
+    let animated: Vec<bool> = (0..n).map(|j| [j, partner[j]].iter().any(|&k| track(k).is_some_and(|t| t.translation.is_some() || t.rotation.is_some() || t.scale.is_some()))).collect();
+    let mut joints: Vec<JointTrack> = (0..clip.joints.len().max(n)).map(|_| JointTrack::default()).collect();
+    for f in 0..frames {
+        let local = |j: usize| {
+            let (mut t, mut q, mut sc) = skel.rest[j];
+            if let Some(tr) = track(j) {
+                t = tr.translation.as_ref().and_then(|v| v.get(f.min(v.len().saturating_sub(1)))).copied().unwrap_or(t);
+                q = tr.rotation.as_ref().and_then(|v| v.get(f.min(v.len().saturating_sub(1)))).copied().unwrap_or(q);
+                sc = tr.scale.as_ref().and_then(|v| v.get(f.min(v.len().saturating_sub(1)))).copied().unwrap_or(sc);
+            }
+            (t, q, sc)
+        };
+        let world = world_of(&local);
+        let mirrored: Vec<Mat4> = (0..n).map(|j| r * world[partner[j]] * r * correction[j]).collect();
+        for j in (0..n).filter(|j| animated[*j]) {
+            let l = skel.parents[j].map_or(mirrored[j], |p| mirrored[p].inverse() * mirrored[j]);
+            let (sc, q, t) = l.to_scale_rotation_translation();
+            let jt = &mut joints[j];
+            jt.translation.get_or_insert_with(Vec::new).push(t);
+            jt.rotation.get_or_insert_with(Vec::new).push(q.normalize());
+            if track(j).is_some_and(|t| t.scale.is_some()) || track(partner[j]).is_some_and(|t| t.scale.is_some()) {
+                jt.scale.get_or_insert_with(Vec::new).push(sc);
+            }
+        }
+    }
+    let reflect = |(t, q): (Vec3, Quat)| (Vec3::new(-t.x, t.y, t.z), Quat::from_xyzw(q.x, -q.y, -q.z, q.w));
+    Clip {
+        name: format!("{}{MIRROR_SUFFIX}", clip.name),
+        joints,
+        align: clip.align.iter().copied().map(reflect).collect(),
+        ap_reference: clip.ap_reference.iter().copied().map(reflect).collect(),
+        ..clip.clone()
+    }
+}
+
 /// Every `ANIM` item of a relocated package, by name.
 pub fn items(p: &Loaded) -> impl Iterator<Item = (&str, usize)> {
     p.directory.items.iter().filter(|i| i.kind == "ANIM").map(|i| (i.name.as_str(), i.payload_offset as usize))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::skeleton::Skeleton;
+
+    fn rig() -> Skeleton {
+        // A root and two arms whose local axes are not mirror images.
+        let rest = vec![
+            (Vec3::ZERO, Quat::IDENTITY, Vec3::ONE),
+            (Vec3::new(0.3, 1.4, 0.), Quat::from_rotation_z(0.4), Vec3::ONE),
+            (Vec3::new(-0.3, 1.4, 0.), Quat::from_rotation_z(-0.4) * Quat::from_rotation_x(std::f32::consts::PI), Vec3::ONE),
+        ];
+        Skeleton { hash: 1, names: vec!["root".into(), "l_arm".into(), "r_arm".into()], parents: vec![None, Some(0), Some(0)], animated: 3, inverse_bind: vec![[0.; 16]; 3], rest }
+    }
+
+    fn clip(rotations: [Quat; 2]) -> Clip {
+        Clip {
+            name: "lift".into(),
+            hierarchy: 1,
+            frames: 2,
+            fps: 30.,
+            joints: vec![JointTrack::default(), JointTrack { rotation: Some(rotations.to_vec()), ..Default::default() }, JointTrack::default()],
+            root_speed: 0.,
+            align: vec![(Vec3::new(0.2, 0., 0.), Quat::from_rotation_y(0.3)); 2],
+            ap_reference: Vec::new(),
+            unsupported: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn mirroring_keeps_the_bind_pose_and_inverts_itself() {
+        let skel = rig();
+        let lift = Quat::from_rotation_z(0.4) * Quat::from_rotation_y(0.8);
+        let c = clip([skel.rest[1].1, lift]);
+        let m = mirror(&c, &skel);
+        assert_eq!(m.name, "lift@mirror");
+        // Frame 0 is the bind pose: the right arm keeps its rest rotation.
+        let r = m.joints[2].rotation.as_ref().expect("right arm track")[0];
+        assert!(r.dot(skel.rest[2].1).abs() > 0.9999);
+        // The left arm's motion moves to the right arm, and back again.
+        assert!(m.joints[2].rotation.as_ref().unwrap()[1].dot(skel.rest[2].1).abs() < 0.999);
+        let back = mirror(&Clip { name: "lift".into(), ..m.clone() }, &skel);
+        assert!(back.joints[1].rotation.as_ref().unwrap()[1].dot(lift).abs() > 0.9999);
+        assert!((m.align[0].0.x + 0.2).abs() < 1e-6);
+    }
 }

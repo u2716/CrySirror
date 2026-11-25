@@ -1804,7 +1804,7 @@ impl NaughtyDogVm {
 
     /// The player skeleton from `actor27.psarc/proto.pak` and the clips
     /// named `wanted` (the controller states' blend-tree clips).
-    fn player_rig(actors: &ArchiveMount, wanted: &HashSet<u32>) -> Result<Option<(crate::skeleton::Skeleton, Vec<crate::anim::Clip>)>> {
+    fn player_rig(actors: &ArchiveMount, wanted: &HashSet<u32>, mirrored: &HashSet<u32>) -> Result<Option<(crate::skeleton::Skeleton, Vec<crate::anim::Clip>)>> {
         if !actors.exists("proto.pak") {
             return Ok(None);
         }
@@ -1825,6 +1825,9 @@ impl NaughtyDogVm {
                 }
                 let clip = crate::anim::decode(&loaded, at, n, skeleton.animated)?;
                 if clip.hierarchy == skeleton.hash {
+                    if mirrored.contains(&sid(n)) {
+                        clips.push(crate::anim::mirror(&clip, &skeleton));
+                    }
                     clips.push(clip);
                 }
             }
@@ -2372,14 +2375,20 @@ impl NaughtyDogVm {
         let binding = if skinned && own.is_none() { crate::characters::rig_of(&session.characters, art) } else { None };
         if matches!(binding, Some((None, _))) && session.player_rig.is_none() {
             let mut wanted: HashSet<u32> = [sid("idle")].into();
-            if let (Some(graph), Some(table)) = (session.anim_graph.as_ref(), session.anim_table.as_ref()) {
+            // Clips of states whose mirror lambda holds are also built
+            // mirrored.
+            let mut mirrored: HashSet<u32> = HashSet::new();
+            if let (Some(graph), Some(table)) = (session.anim_graph.as_mut(), session.anim_table.as_ref()) {
                 for state in crate::player::STATES {
                     if let Some(s) = table.get(sid(state)) {
                         wanted.extend(graph.clips(s.tree));
+                        if graph.mirrored(s.mirror) {
+                            mirrored.extend(graph.clips(s.tree));
+                        }
                     }
                 }
             }
-            session.player_rig = Some(Self::player_rig(&session.actors, &wanted).unwrap_or_else(|e| {
+            session.player_rig = Some(Self::player_rig(&session.actors, &wanted, &mirrored).unwrap_or_else(|e| {
                 session.stage.log(format!("player rig: {e:#}"));
                 None
             }));

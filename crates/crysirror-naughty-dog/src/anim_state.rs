@@ -34,6 +34,9 @@ pub struct State {
     /// Blend-tree node address in the module (see [`crate::anim_tree`]).
     pub tree: u32,
     pub transitions: Vec<Transition>,
+    /// The lambda (state +0x3c) whose non-zero result plays the state
+    /// mirrored (`ledge-shimmy-left` returns 1, `-right` 0); 0 for none.
+    pub mirror: u32,
 }
 
 impl State {
@@ -95,7 +98,8 @@ pub fn parse_module(dc: &Dc, name: u32) -> Result<StateTable> {
                 transitions.push(Transition { request: m.u32(e)?, target: m.u32(e + 0xc)?, fade: m.f32(e + 0x18)? });
             }
         }
-        states.push(State { name, id: m.u32(s + 4)?, animation: m.u32(s + 0x14)?, tree: m.u32(s + 0x10)?, transitions });
+        let mirror = m.u32(s + 0x3c).ok().filter(|p| *p != 0 && m.type_of(*p).ok() == Some(sid("script-lambda"))).unwrap_or(0);
+        states.push(State { name, id: m.u32(s + 4)?, animation: m.u32(s + 0x14)?, tree: m.u32(s + 0x10)?, transitions, mirror });
     }
     Ok(StateTable { states, initial })
 }

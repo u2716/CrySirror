@@ -243,6 +243,10 @@ impl Animator {
         inputs.phase = if duration > 0. { (self.machine.time / duration).min(1.) } else { 0. };
         let tree = table.get(self.machine.state).map_or(0, |s| s.tree);
         let leaves = graph.evaluate(tree, &inputs, &|c| clips.get(&map(c)).is_some_and(|i| i.additive))?;
+        // Mirrored states play the mirrored clips where they were built.
+        let mirrored = table.get(self.machine.state).is_some_and(|s| graph.mirrored(s.mirror));
+        let mirror = |c: u32| clips.get(&c).map(|i| sid(&format!("{}{}", i.name, crate::anim::MIRROR_SUFFIX))).filter(|m| clips.contains_key(m)).unwrap_or(c);
+        let map = |c: u32| if mirrored { mirror(map(c)) } else { map(c) };
         let present: Vec<_> = leaves.into_iter().filter_map(|l| clips.get(&map(l.clip)).map(|i| (l, i))).collect();
         let base: f32 = present.iter().filter(|(l, _)| !l.additive).map(|(l, _)| l.weight).sum();
         let heaviest = present.iter().filter(|(l, _)| !l.additive).max_by(|a, b| a.0.weight.total_cmp(&b.0.weight));

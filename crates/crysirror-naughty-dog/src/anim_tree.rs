@@ -227,6 +227,12 @@ impl Graph {
         Ok(out)
     }
 
+    /// Whether a state's mirror lambda (`State::mirror`) asks for the
+    /// mirrored clips, with the inputs of the last evaluation.
+    pub fn mirrored(&mut self, lambda: u32) -> bool {
+        lambda != 0 && self.call(lambda, &[0, self.info, self.instance]).is_ok_and(|v| v != 0)
+    }
+
     fn call(&mut self, lambda: u32, args: &[u32]) -> Result<u32> {
         let mut natives = TreeNatives { errors: Vec::new() };
         let mut thread = Thread::new(&self.dc, lambda, args)?;
