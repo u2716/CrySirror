@@ -504,6 +504,17 @@ impl<'bc, 'rt, H: TjsHost + 'static> Vm<'bc, 'rt, H> {
         // them (including errors from nested calls) are converted into
         // exception objects and execution resumes at the catch address.
         loop {
+            // An INV caller is parked at the instruction while its finalizer
+            // executes. Undo the guard on a failed finalizer. Window-owned
+            // items log the error and continue with the remaining siblings.
+            if let Some(pending) = call_frame.frame.invalidations.pop() {
+                self.runtime.heap[pending.object.0].invalidating = false;
+                if !call_frame.frame.invalidations.is_empty() {
+                    self.runtime.host_mut().log(&error.message);
+                    stack.push(call_frame);
+                    return Ok(());
+                }
+            }
             if let Some(entry) = call_frame.frame.entries.pop() {
                 // A script `throw` that crossed a frame boundary (or a native
                 // boundary such as a `missing` hook) still carries the thrown
@@ -921,11 +932,7 @@ impl<'bc, 'rt, H: TjsHost + 'static> Vm<'bc, 'rt, H> {
                 frame.set(inst.operands[0], value)?;
             }
             93 => {
-                let value = match self.resolve_object(frame.get(inst.operands[0])?) {
-                    Ok(handle) => Variant::Integer(i64::from(self.invalidate_object(handle)?)),
-                    Err(_) => Variant::Integer(0),
-                };
-                frame.set(inst.operands[0], value)?;
+                return self.invalidate_instruction(frame, inst.operands[0], inst_index, next_pc);
             }
             94 => {
                 let value = match self.resolve_object(frame.get(inst.operands[0])?) {
@@ -1855,6 +1862,64 @@ mod tests {
         let resumed = runtime.resume_suspended().expect("resume");
         assert_eq!(resumed, Some(Variant::Integer(42)));
         assert!(!runtime.is_suspended());
+    }
+
+    #[test]
+    fn invalidation_waits_for_finalizer_before_notifying_object_death() {
+        static CALLS: AtomicUsize = AtomicUsize::new(0);
+        fn wait(_: &mut Runtime, _: Option<ObjectHandle>, _: Vec<Variant>) -> Result<Variant> {
+            if CALLS.fetch_add(1, Ordering::SeqCst) == 0 {
+                Err(TjsError::resource_pending("draw while closing panel"))
+            } else {
+                Ok(Variant::Void)
+            }
+        }
+        let mut rt = Runtime::new();
+        rt.register_global_native("waitForPaint", wait);
+        let file = compile_source_to_bytecode("panel.tjs", r#"
+            global.count = 0;
+            class Panel {
+                function setInputReady() { global.count++; }
+                function finalize() { global.waitForPaint(); global.owner.notify(); }
+            }
+            class Owner { var panel; function notify() { panel.setInputReady(); } }
+            global.owner = new Owner();
+            owner.panel = new Panel();
+            var closing = owner.panel;
+            var result = invalidate closing;
+            owner.panel = void;
+            return result && !(isvalid closing) && count == 1;
+        "#).unwrap();
+        let id = rt.install_script_file(Arc::new(file));
+        Vm::new(id, &mut rt).unwrap().execute_top_level().unwrap();
+        assert!(rt.is_suspended());
+        assert_eq!(rt.resume_suspended().unwrap(), Some(Variant::Integer(1)));
+    }
+
+    #[test]
+    fn failed_resumed_finalizer_leaves_object_valid_and_can_be_retried() {
+        fn pause(rt: &mut Runtime, _: Option<ObjectHandle>, _: Vec<Variant>) -> Result<Variant> {
+            rt.request_suspend();
+            Ok(Variant::Void)
+        }
+        let mut rt = Runtime::new();
+        rt.register_global_native("pause", pause);
+        let file = compile_source_to_bytecode("retry-finalize.tjs", r#"
+            class Panel {
+                var attempts = 0;
+                function finalize() {
+                    attempts++;
+                    if (attempts == 1) { global.pause(); throw "test"; }
+                }
+            }
+            var panel = new Panel(), caught = 0;
+            try { invalidate panel; } catch(e) { caught = isvalid panel; }
+            var retry = invalidate panel;
+            return caught && retry && !(isvalid panel);
+        "#).unwrap();
+        rt.execute_file(&file).unwrap();
+        assert!(rt.is_suspended());
+        assert_eq!(rt.resume_suspended().unwrap(), Some(Variant::Integer(1)));
     }
 
     fn file_with_code(

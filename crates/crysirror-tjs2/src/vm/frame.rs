@@ -51,6 +51,12 @@ impl SuspendedCallStack {
             frame.code_handles.iter().for_each(|h| handle(*h));
             handle(frame.object_handle);
             let f = &frame.frame;
+            for pending in &f.invalidations {
+                handle(pending.object);
+                if let InvalidationPhase::Children(children) = &pending.phase {
+                    children.as_slice().iter().copied().for_each(&mut *handle);
+                }
+            }
             f.regs.iter().chain(&f.negative).chain(&f.caller_args).for_each(&mut *value);
             value(&f.result);
             if let Some(h) = f.this_obj {
@@ -85,7 +91,19 @@ pub(super) enum Continuation {
     },
 }
 
+pub(super) enum InvalidationPhase {
+    CallFinalizer,
+    TakeRegistered,
+    Children(std::vec::IntoIter<ObjectHandle>),
+}
+
+pub(super) struct PendingInvalidation {
+    pub object: ObjectHandle,
+    pub phase: InvalidationPhase,
+}
+
 pub(crate) struct Frame {
+    pub(super) invalidations: Vec<PendingInvalidation>,
     pub(super) regs: Vec<Variant>,
     pub(super) negative: Vec<Variant>,
     pub(super) caller_args: Vec<Variant>,
@@ -119,6 +137,7 @@ impl Frame {
             *slot = args.get(index).cloned().unwrap_or_default();
         }
         Ok(Self {
+            invalidations: Vec::new(),
             regs,
             negative,
             caller_args: args,
