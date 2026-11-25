@@ -2001,6 +2001,12 @@ pub trait HostServices: FileSystem {
     fn begin_audio_samples(&mut self,_client:ClientId,_resource:AudioResourceHandle,_request:AudioSampleRequest)->Result<alloc::boxed::Box<dyn AudioSampleQuery>>{
         Err(crate::Error::Unsupported("source-layout audio samples"))
     }
+    /// Read integer PCM at the play cursor for visualization. Encoded sources
+    /// can be decoded at their native rate. Source-layout inspection remains
+    /// available separately to callers that need the original PCM format.
+    fn begin_audio_visual_samples(&mut self,client:ClientId,resource:AudioResourceHandle,request:AudioSampleRequest)->Result<alloc::boxed::Box<dyn AudioSampleQuery>>{
+        self.begin_audio_samples(client,resource,request)
+    }
     fn audio_resource_info(
         &self,
         _client: ClientId,

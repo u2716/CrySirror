@@ -496,6 +496,27 @@ fn authored_wave() -> Vec<u8> {
     b
 }
 #[test]
+fn discarded_scripts_eval_runs_the_whole_voice_replay_command() {
+    let (dir, mut runtime) = fixture(r#"
+        var steps = []; var w = new Window(); var voice = new WaveSoundBuffer(w);
+        function mark(n) { steps.add(n); }
+        Scripts.eval("mark(1);voice.open('line.wav');voice.play() if true;mark(2);");
+        Scripts.evalStorage("actions.tjs");
+        Scripts.eval("mark(5) // no final semicolon");
+        if (steps.join(",") != "1,2,3,4,5") throw new Exception("truncated replay: " + steps.join(","));
+        if (Scripts.eval("20+22") != 42) throw new Exception("expression result missing");
+        Debug.message("replay-complete");
+    "#, &[]);
+    std::fs::write(dir.path().join("assets/game/line.wav"), authored_wave()).unwrap();
+    std::fs::write(dir.path().join("assets/game/actions.tjs"), "mark(3);mark(4);").unwrap();
+    for _ in 0..240 {
+        runtime.tick(16, InputFrame::default()).unwrap();
+        if runtime.inspect()["sessions"][0]["native"]["log_tail"].to_string().contains("replay-complete") { return; }
+    }
+    panic!("voice replay did not complete");
+}
+
+#[test]
 fn native_sound_parks_the_original_caller_until_shared_resources_and_voice_are_ready() {
     let (d, mut r) = fixture(
         r#"

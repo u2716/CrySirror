@@ -348,7 +348,13 @@ pub fn has_member(rt: &Rt, h: ObjectHandle, name: &str) -> bool {
 /// tTJSLexicalAnalyzer prepends `return` and appends `;` without
 /// parentheses (`tjsLex.cpp:1061-1066,1753`), so text ending in `;` is valid.
 pub(crate) fn expression_source(text: &str) -> String {
-    format!("return {text};")
+    format!("return {text}\n;")
+}
+
+// Eval accepts a bare expression at EOF, including one ending in a line comment.
+// With no result register the subsequent statements must still execute.
+fn eval_source(text: &str, need_result: bool) -> String {
+    if need_result { expression_source(text) } else { format!("{text}\n;") }
 }
 
 pub fn run_source(
@@ -376,7 +382,7 @@ fn storage_non_text(rt: &mut Rt, name: &str, mode:&str, context:Option<ObjectHan
     Ok(None)
 }
 
-pub fn exec_storage(rt: &mut Rt, name: &str) -> Result<Variant> { exec_storage_with_context(rt,name,"",None,false) }
+pub fn exec_storage(rt: &mut Rt, name: &str) -> Result<Variant> { exec_storage_with_context(rt,name,"",None,None) }
 
 // Original Scripts.execStorage/evalStorage take context as argument THREE,
 // unlike the string variants whose name/line arguments put it at FOUR.
@@ -386,11 +392,14 @@ fn script_storage_context(args:&[Variant])->Result<(String,Option<ObjectHandle>)
     let context=match args.get(2) {None|Some(Variant::Void|Variant::Null)=>None,Some(v)=>Some(object_arg(v).ok_or_else(||TjsError::runtime("Scripts storage context must be an object or null"))?)};
     Ok((mode,context))
 }
-fn exec_storage_with_context(rt:&mut Rt,name:&str,mode:&str,context:Option<ObjectHandle>,expression:bool)->Result<Variant> {
+fn exec_storage_with_context(rt:&mut Rt,name:&str,mode:&str,context:Option<ObjectHandle>,eval_result:Option<bool>)->Result<Variant> {
     if let Some(value)=storage_non_text(rt,name,mode,context)? {return Ok(value);}
     let source=rt.read_storage_text(name,mode)?;
-    if expression && source.trim().is_empty() {return Ok(Variant::Void);}
-    run_source(rt,name,&if expression {expression_source(&source)} else {source},context)
+    if let Some(need_result) = eval_result {
+        if source.trim().is_empty() { return Ok(Variant::Void); }
+        return run_source(rt,name,&eval_source(&source,need_result),context);
+    }
+    run_source(rt,name,&source,context)
 }
 
 // ----------------------------------------------------------------- System
@@ -929,12 +938,12 @@ fn install_scripts(rt: &mut Rt) {
             ("execStorage", |rt, _, a| {
                 let name = string(&a, 0, "Scripts.execStorage")?;
                 let (mode,context)=script_storage_context(&a)?;
-                exec_storage_with_context(rt,&name,&mode,context,false)
+                exec_storage_with_context(rt,&name,&mode,context,None)
             }),
             ("evalStorage", |rt, _, a| {
                 let name = string(&a, 0, "Scripts.evalStorage")?;
                 let (mode,context)=script_storage_context(&a)?;
-                exec_storage_with_context(rt,&name,&mode,context,true)
+                exec_storage_with_context(rt,&name,&mode,context,Some(rt.native_result_needed()))
             }),
             ("exec", |rt, _, a| {
                 let source = string(&a, 0, "Scripts.exec")?;
@@ -947,7 +956,8 @@ fn install_scripts(rt: &mut Rt) {
                     return Ok(Variant::Void);
                 }
                 let ctx = a.get(3).and_then(object_arg);
-                run_source(rt, "Scripts.eval", &expression_source(&source), ctx)
+                let source = eval_source(&source, rt.native_result_needed());
+                run_source(rt, "Scripts.eval", &source, ctx)
             }),
         ],
     );
