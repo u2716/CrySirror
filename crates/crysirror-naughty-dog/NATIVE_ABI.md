@@ -99,9 +99,9 @@ Other opcodes report "Unknown opcode". After a native call the interpreter reads
 
 Texture descriptors carry the source file name (`…/name-color.tga/….ndb`); materials are matched to their colour map by that name.
 
-## Trigger regions (in progress)
+## Trigger regions
 
-`player-in-region?` (0x674a04) and `object-in-region?` (0x140b58) ask `sub_F7D94` whether an object is in a region; that calls `sub_115EE0(region manager, region, position)`, which tests each region of that name with `sub_114D60`. A region record holds its name (+0), `StringId` (+4), a parent spawner (+0x10, so the volume moves with that spawner, for example `train-wreck-car-b-1`), a shape list (+0x18), entry and tag counts (+0x1c/+0x1e), tags (+0x20, including script lambdas that send events) and entries (+0x24). `sub_114D60` walks the runtime region's shape list (`next` at +0, a `u16` type at +0xc with types 0, 1 and 3, a `u16` count at +0xe, and for type 1 112-byte face records from +0x50) and runs AltiVec plane tests. Those runtime objects are built at login from the package record, whose +0x18 block does not have this layout, so the login conversion still has to be decoded.
+`src/trigger.rs` documents the layout. A region is tested in its parent spawner's live frame, and holds nothing while that parent is not spawned; a region without a parent is tested in level space. It is the union of its shape nodes: six-face plane sets (`max(n·p + d) < 0`), spheres and cylinders, while quads never hold a point. Flag bit 0 disables a region. The player is tested only against regions of the `player` category (the grid bucket, equal to the `apply-to` entry). `player-in-region?` and `object-in-region?` (`(object, region)`) use this test with threshold 0. Each frame the player's region set is compared with the last: an entered region runs its tag-0x1157c38c lambda and a left region its tag-0x5b4bfb24 lambda (`sub_115828`), with the package mapped into the script VM. 48 of the 69 `train-wreck-climb-fg` regions have enter scripts, including the `rs-task-…-complete` regions. The level origin is taken as zero, and region events to a region's own process (+0xc) and the object enter/exit cache (+0x12c) are not modelled.
 
 ## Vertex dequantization and skinning
 

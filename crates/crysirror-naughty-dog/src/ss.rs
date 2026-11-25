@@ -78,6 +78,11 @@ pub trait World {
     fn animation_phase(&self, _object: u32) -> Option<f32> {
         None
     }
+    /// Whether `object` (`player`, a spawner) stands in trigger region
+    /// `region` (a region name `StringId`).
+    fn in_region(&self, _object: u32, _region: u32) -> bool {
+        false
+    }
     /// Show or hide a spawned object's entities. False when unknown.
     fn set_visible(&mut self, _object: u32, _visible: bool) -> bool {
         false
@@ -656,6 +661,13 @@ impl Natives for Ctx<'_> {
                     self.inner.procs[p].dead = true;
                 }
                 Ok((0, Status::Abort))
+            }
+            // (player-in-region? region) / (object-in-region? object region):
+            // `sub_F7D94`, see `crate::trigger`.
+            "player-in-region?" if n > 0 => b(self.world.in_region(sid("player"), a[0])),
+            "object-in-region?" if n > 1 => {
+                let object = if a[0] == sid("player") { a[0] } else { self.inner.process(a[0]).and_then(|p| self.inner.procs[p].spawner).unwrap_or(a[0]) };
+                b(self.world.in_region(object, a[1]))
             }
             // (symbol-eq? a b).
             "symbol-eq?" => b(n > 1 && a[0] == a[1]),

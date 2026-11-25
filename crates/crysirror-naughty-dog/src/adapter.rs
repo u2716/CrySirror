@@ -231,6 +231,11 @@ struct Stage {
     poses: HashMap<u32, glam::Mat4>,
     /// The body (entity) the player stands on or hangs from.
     player_support: Option<u32>,
+    /// Trigger regions of the loaded level packages, with their enter
+    /// and exit lambdas' script addresses.
+    regions: Vec<(crate::trigger::Region, Option<u32>, Option<u32>)>,
+    /// The regions the player is in (indices into `regions`).
+    player_regions: HashSet<usize>,
 }
 
 struct CameraAnimation {
@@ -276,6 +281,29 @@ struct ScriptAnimation {
 const SCRIPT_BLEND: f32 = 0.2;
 
 impl Stage {
+    /// Whether trigger region `r` holds `object`: the player only in
+    /// `player` regions; a parented region in its parent's live frame and
+    /// never while the parent is not spawned.
+    fn holds(&self, r: &crate::trigger::Region, object: u32) -> bool {
+        let Some((at, _)) = World::locator(self, object) else { return false };
+        let at = glam::Vec3::from_array(at);
+        let player = sid("player");
+        if object == player && !r.categories.is_empty() && !r.categories.contains(&player) {
+            return false;
+        }
+        let local = match r.parent {
+            Some(parent) => {
+                if self.entities.contains_key(&parent) && !self.visible.contains(&parent) {
+                    return false;
+                }
+                let Some((t, q)) = World::locator(self, parent) else { return false };
+                glam::Quat::from_array(q).normalize().inverse() * (at - glam::Vec3::from_array(t))
+            }
+            None => at,
+        };
+        r.contains_local(local)
+    }
+
     fn set_visible(&mut self, name: u32, visible: bool) -> bool {
         let Some(ids) = self.entities.get(&name) else { return false };
         for id in ids {
@@ -346,6 +374,9 @@ impl World for Stage {
     }
     fn set_visible(&mut self, object: u32, visible: bool) -> bool {
         Stage::set_visible(self, object, visible)
+    }
+    fn in_region(&self, object: u32, region: u32) -> bool {
+        self.regions.iter().any(|(r, _, _)| r.id == region && self.holds(r, object))
     }
     fn object_on_object(&self, object: u32, support: u32) -> bool {
         object == sid("player") && self.player_support.is_some_and(|body| self.entities.get(&support).is_some_and(|ids| ids.contains(&body)))
@@ -867,6 +898,8 @@ impl NaughtyDogVm {
         session.stage.camera = None;
         session.stage.camera_animations.clear();
         session.stage.poses.clear();
+        session.stage.regions.clear();
+        session.stage.player_regions.clear();
         session.entity_rigs.clear();
         session.stage.visible.clear();
         session.stage.ops.clear();
@@ -976,6 +1009,24 @@ impl NaughtyDogVm {
                     session.ground.add_collision(&native.triangles);
                 }
                 session.ground.add_edges(&native.features.edges);
+                for item in directory.items.iter().filter(|i| i.kind == "REGION_TREE") {
+                    match crate::trigger::regions(&loaded, item.payload_offset as usize) {
+                        Ok(regions) => {
+                            // Their enter/exit lambdas run in the script VM
+                            // with the package mapped.
+                            let base = match session.game.as_mut() {
+                                Some(game) if regions.iter().any(|r| r.enter.is_some() || r.exit.is_some()) => game.rt.dc.map_package(sid(&package_name), &loaded.data, loaded.pointers()).ok(),
+                                _ => None,
+                            };
+                            let at = |o: Option<usize>| base.zip(o).and_then(|(b, o)| u32::try_from(o).ok().map(|o| b + o));
+                            session.stage.regions.extend(regions.into_iter().map(|r| {
+                                let (enter, exit) = (at(r.enter), at(r.exit));
+                                (r, enter, exit)
+                            }));
+                        }
+                        Err(e) => session.stage.log(format!("{package_name}: trigger regions: {e:#}")),
+                    }
+                }
                 if let Some(item) = directory.items.iter().find(|i| i.kind == "REGION_TREE") {
                     let regions = crate::region::load_regions(&loaded, item.payload_offset as usize)?;
                     if !regions.is_empty() {
@@ -2241,6 +2292,31 @@ impl NaughtyDogVm {
                         world.push(json!({"op": "set_animation", "id": npc.entity, "animation": {"layers": layers}}));
                     }
                     Err(e) => session.stage.log(format!("npc animation: {e:#}")),
+                }
+            }
+        }
+        // Region enter/exit scripts for the player (`sub_115828`).
+        if session.player.is_some() {
+            let player = sid("player");
+            let now: HashSet<usize> = (0..session.stage.regions.len()).filter(|i| session.stage.holds(&session.stage.regions[*i].0, player)).collect();
+            let mut runs = Vec::new();
+            for i in now.difference(&session.stage.player_regions) {
+                let (r, enter, _) = &session.stage.regions[*i];
+                runs.push((format!("enter {}", r.name), *enter));
+            }
+            for i in session.stage.player_regions.difference(&now) {
+                let (r, _, exit) = &session.stage.regions[*i];
+                runs.push((format!("exit {}", r.name), *exit));
+            }
+            session.stage.player_regions = now;
+            if let Some(game) = session.game.as_mut() {
+                for (what, lambda) in runs {
+                    session.stage.log(format!("region {what}"));
+                    if let Some(lambda) = lambda {
+                        if let Err(e) = game.rt.run_lambda(&mut session.stage, lambda, &[]) {
+                            session.stage.log(format!("region {what}: {e:#}"));
+                        }
+                    }
                 }
             }
         }

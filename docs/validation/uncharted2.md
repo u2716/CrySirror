@@ -162,3 +162,8 @@ Collision, edges and hanging (2026-11-25):
 - **Snow capture:** a free-camera capture shows snow on cliff tops and rock on the walls, where before the rock was bare and the noblend snow ground was white. The light-blue flat region behind the cliffs (the wide backdrop) is unchanged.
 - **Height-mask layers:** `examples/material_samplers` on `train-wreck-wide`, `ice-cave-temple` and `menu-temple` reports `Mask { sampler: 2, softness: 0.1 }` blends (rock → unit 2, mask → unit 0, snow → unit 3 in `rock-to-snow`). The free-camera backdrop capture shows snow on the mountain faces, where before the rock was bare.
 - **Edge jumps:** from the prologue hang, D with Space logs `ledge-jump-begin`, `-mid`, `-end` and `ledge-grab` 1.1 m to the right along the rail; Space alone finds no edge above; C logs `fall` without an immediate re-grab.
+
+Trigger regions (2026-11-25):
+
+- **Offline:** `examples/trigger_regions train-wreck-climb-fg-ingame10.pak continue-player car-b-seat cam-car-b-interior` reads 69 regions; every seat and interior camera spawner lies in `climb-car-1` (parent `train-wreck-car-b-1`), `continue-player-climb-1` in `rs-stick-to-move-drake-1`, and `continue-player-treadmill-1` in `rs-task-bench-climb-complete-1`, as the static analysis of the EBOOT tests predicts.
+- **Prologue run:** on the climb track the log shows `region enter` for `rs-stick-to-move-drake-1`, `rs-disable-circle-1`, `rs-camera-cut-compensate-1`, `rgn-fall-to-death-treadmill-1`, `rs-kill-journal-2` and `rs-cam-railing-center-1` at the start and `region exit rs-cam-railing-center-1` after climbing onto the platform, with no script errors.
