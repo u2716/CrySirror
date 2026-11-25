@@ -65,6 +65,11 @@ Other opcodes report "Unknown opcode". After a native call the interpreter reads
 | `fade-to-black` / `fade-to-white` | 0x13d3f4 / 0x13d3ac | `(alpha, seconds)` screen fade |
 | `set-black-fade` / `set-white-fade` | 0x13d344 / 0x14aee4 | `(seconds, on)` |
 | `player-disable-controls` | — | a control mask; `player-controls-all`/`-none` (`script-funcs.bin`) return 0xffff / 0 |
+| `symbol-eq?` / `lerp-scale` / `random-float` | 0x2dbf60 / 0x1416cc / 0x141654 | equality; `clamp((x − a)/(b − a))` mapped onto `c…d`; uniform [0, 1) |
+| `get-locator-distance` | 0x14f7b0 | distance between two locator records |
+| `set-visible` | 0x13ae98 | `(object, on)`, any non-zero shows |
+| `object-on-object?` | 0x143c54 | `(object, support)`: the object stands on the support's rigid body (here the player's platform or grip body) |
+| `get-object-id` / `get-object-state` | 0x144838 / 0x1429e8 | the process id word (+76; here the name) / its state |
 
 `camera-fade-out` (0x13b210) fades a named camera object, not the screen.
 

@@ -78,6 +78,15 @@ pub trait World {
     fn animation_phase(&self, _object: u32) -> Option<f32> {
         None
     }
+    /// Show or hide a spawned object's entities. False when unknown.
+    fn set_visible(&mut self, _object: u32, _visible: bool) -> bool {
+        false
+    }
+    /// Whether `object` (`player`, a character) stands on `support`'s
+    /// collision body.
+    fn object_on_object(&self, _object: u32, _support: u32) -> bool {
+        false
+    }
 }
 
 /// Options of `(animate object clip key value …)`. The keys seen in the
@@ -153,6 +162,8 @@ pub struct Inner {
     /// Player movement types from `set-walk-type`/`set-run-type`.
     pub movement: [u32; 2],
     pub prints: Vec<String>,
+    /// State of the scripts' random numbers (xorshift).
+    rng: u32,
 }
 
 pub struct Runtime {
@@ -225,6 +236,7 @@ impl Runtime {
                 prints: Vec::new(),
                 pads: HashMap::new(),
                 movement: [0; 2],
+                rng: 0x2545_f491,
             },
         }
     }
@@ -645,6 +657,51 @@ impl Natives for Ctx<'_> {
                 }
                 Ok((0, Status::Abort))
             }
+            // (symbol-eq? a b).
+            "symbol-eq?" => b(n > 1 && a[0] == a[1]),
+            // (lerp-scale a b c d x): `t = clamp((x − a) / (b − a), 0, 1)`,
+            // `c (1 − t) + d t` (`sub_1416CC`, shared with the trees).
+            "lerp-scale" if n == 5 => {
+                let f = |i: usize| Self::arg_f(a, i);
+                let t = ((f(4) - f(0)) / (f(1) - f(0))).max(0.);
+                let t = if t.is_nan() { 0. } else { t.min(1.) };
+                ok(((1. - t) * f(2) + t * f(3)).to_bits())
+            }
+            // (random-float): uniform in [0, 1) (`sub_90A9F0`).
+            "random-float" => {
+                let r = &mut self.inner.rng;
+                *r ^= *r << 13;
+                *r ^= *r >> 17;
+                *r ^= *r << 5;
+                ok(((*r >> 8) as f32 / (1u32 << 24) as f32).to_bits())
+            }
+            // (get-locator-distance a b): distance between two locator
+            // records `{x, y, z, 1, …}`.
+            "get-locator-distance" => {
+                if n < 2 || a[0] == 0 || a[1] == 0 {
+                    return ok(0f32.to_bits());
+                }
+                let v = |at: u32| -> Result<[f32; 3]> { Ok([f32::from_bits(dc.mem.u32(at)?), f32::from_bits(dc.mem.u32(at + 4)?), f32::from_bits(dc.mem.u32(at + 8)?)]) };
+                let (p, q) = (v(a[0])?, v(a[1])?);
+                ok(((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) + (p[2] - q[2]).powi(2)).sqrt().to_bits())
+            }
+            // (set-visible object on?) (`sub_13AE98`: any non-zero shows).
+            "set-visible" if n == 2 => {
+                let object = self.inner.process(a[0]).and_then(|p| self.inner.procs[p].spawner).unwrap_or(a[0]);
+                b(self.world.set_visible(object, a[1] != 0))
+            }
+            // (object-on-object? object support): the object stands on the
+            // support's rigid body (`sub_143C54`).
+            "object-on-object?" if n == 2 => {
+                let object = |x: u32| self.inner.process(x).and_then(|p| self.inner.procs[p].spawner).unwrap_or(x);
+                b(self.world.object_on_object(object(a[0]), object(a[1])))
+            }
+            // (get-object-id object): the process's id word (+76); here the
+            // object's name.
+            "get-object-id" => ok(if n > 0 { a[0] } else { self.proc.map_or(0, |p| self.inner.procs[p].name) }),
+            // (get-object-state object): its state-script state, like
+            // `get-script-state` (`sub_1429E8`).
+            "get-object-state" => ok(self.target(a, argc, 0).and_then(|p| self.inner.procs[p].state).map(|s| dc.mem.u32(s)).transpose()?.unwrap_or(0)),
             "get-script-state" => ok(self.target(a, argc, 0).and_then(|p| self.inner.procs[p].state).map(|s| dc.mem.u32(s)).transpose()?.unwrap_or(0)),
             "get-current-time" => ok((now as f32).to_bits()),
             // (pad-get-info pad) → `{held, pressed, released, left x, y,

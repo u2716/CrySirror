@@ -229,6 +229,8 @@ struct Stage {
     /// Current world transforms of spawned objects moved away from their
     /// spawner (script root motion, or a moved parent spawner).
     poses: HashMap<u32, glam::Mat4>,
+    /// The body (entity) the player stands on or hangs from.
+    player_support: Option<u32>,
 }
 
 struct CameraAnimation {
@@ -341,6 +343,12 @@ impl World for Stage {
         if name.is_none() || name == self.camera {
             self.camera = None;
         }
+    }
+    fn set_visible(&mut self, object: u32, visible: bool) -> bool {
+        Stage::set_visible(self, object, visible)
+    }
+    fn object_on_object(&self, object: u32, support: u32) -> bool {
+        object == sid("player") && self.player_support.is_some_and(|body| self.entities.get(&support).is_some_and(|ids| ids.contains(&body)))
     }
     fn camera_animation(&mut self, name: u32, clip: u32, seconds: f32) {
         if let Some(c) = self.camera_animations.iter_mut().find(|c| c.name == name) {
@@ -2216,6 +2224,7 @@ impl NaughtyDogVm {
             world.push(camera);
         }
         session.stage.player_locator = session.player.as_ref().map(|p| (p.position, glam::Quat::from_rotation_y(p.yaw).to_array()));
+        session.stage.player_support = session.player.as_ref().and_then(|p| p.platform.map(|(b, _)| b).or(p.grip.and_then(|g| g.body)));
         if let Some((graph, table)) = session.npc_anim.as_mut() {
             for npc in &mut session.npcs {
                 let Some(clips) = session.npc_clips.get(&npc.rig) else { continue };
