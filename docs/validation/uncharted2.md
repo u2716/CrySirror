@@ -152,3 +152,11 @@ Cameras and prop collision (2026-11-25):
 - **Prologue capture:** the final capture still shows the camera against the player inside the hanging car.
 - **Museum and treadmill:** the museum run is unchanged, and the bench and treadmill runs complete with exit code 0.
 
+Collision, edges and hanging (2026-11-25):
+
+- **Offline collision:** `examples/collision_census train-wreck-car-b.pak wrk-passenger-car-02.pak train-wreck-b.pak train-wreck-b-ingame10.pak` reads car-b as 372 hull + 2,325 mesh triangles with 438 edges and 132 corners, the passenger car as 16 objects, and the `train-wreck-b` level as 1,236 triangles from (13.64, −64.09, −96.97), equal to its MOPP offset, with 35 edges in its `-ingame10` feature database.
+- **Material programs:** `examples/material_samplers train-wreck-b.pak` reports slope layering for `snow-mod-cliff-cheap` (side 1, top sampler 2), `cliffwall-snow`, `cliffwall-snow-cheap` and `snow-boulder-med` (computed top) and `tree-bark-cheap` (side 1, top 2); `examples/normal_check` gives a mean cosine of 0.857 between decoded vertex normals and triangle normals. `cargo test -p crysirror-naughty-dog` covers the fragment-program decode and recognizer and the hull triangulation.
+- **Prologue run:** the log shows `player hangs from edge 7 of Some(400)` (`trn-wrk-rail`). The follow camera stays 4 m out for the whole run, where every direction was blocked within 0.8 m before. The frame-3600 capture shows the player hanging from the car's end rail over the cliff.
+- **Input tracks:** holding D logs `ledge-shimmy-right` and then `ledge-grab`, moving the root 0.3 m along the rail. Holding W logs `ledge-climb-up`, `ledge-climb-up-2`, `climb-onto-1-75m^idle` and `idle`, and the capture shows the player over the rail on the car's end platform.
+- **Camera animation:** the log shows `camera animation 27f169e6` and `camera clip camera-train-wreck-exterior-small: 1201 frames`.
+- **Snow capture:** a free-camera capture shows snow on cliff tops and rock on the walls, where before the rock was bare and the noblend snow ground was white. The light-blue flat region behind the cliffs (the wide backdrop) is unchanged.

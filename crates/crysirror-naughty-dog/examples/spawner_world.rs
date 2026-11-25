@@ -16,7 +16,7 @@ fn main() -> Result<()> {
         for item in directory.items.iter().filter(|i| i.kind == "SPAWNER_GROUP") {
             for s in scene::spawner_records(&p, item.payload_offset as usize)? {
                 if words.is_empty() || words.iter().any(|w| s.name.contains(w.as_str())) {
-                    println!("{} art={:?} pos={:?} rot={:?}", s.name, s.art_group, s.position.map(|v| (v * 100.).round() / 100.), s.rotation.map(|v| (v * 1000.).round() / 1000.));
+                    println!("{} art={:?} parent={:?} pos={:?} rot={:?}", s.name, s.art_group, s.parent, s.position.map(|v| (v * 100.).round() / 100.), s.rotation.map(|v| (v * 1000.).round() / 1000.));
                 }
             }
         }

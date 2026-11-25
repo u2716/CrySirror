@@ -51,6 +51,8 @@ pub struct SpawnerRecord {
     pub position: [f32; 3],
     pub rotation: [f32; 4],
     pub properties: Vec<(u32, crate::ss::Property)>,
+    /// The parent spawner (+0x40) whose frame placed this one.
+    pub parent: Option<String>,
 }
 
 fn text_at(p: &mesh::Loaded, at: usize) -> String {
@@ -123,6 +125,7 @@ pub fn spawner_records(p: &mesh::Loaded, payload: usize) -> Result<Vec<SpawnerRe
             position,
             rotation,
             properties,
+            parent: p.ptr(s + 0x40).ok().filter(|a| *a != s).and_then(|a| p.ptr(a + 0x20).ok()).map(|a| text_at(p, a)),
         });
     }
     Ok(out)
@@ -327,6 +330,11 @@ fn texture_role(name: &str) -> u8 {
     }
 }
 
+/// Albedo of the snow the `cliffwall-snow` fragment programs compute:
+/// about 0.75 in the programs' gamma-space arithmetic (0.5 plus three
+/// saturated terms), 0.55 linear (approximated).
+const COMPUTED_SNOW: f32 = 0.55;
+
 /// [`document`] with the level's baked probes: meshes placed once get
 /// per-vertex irradiance in `_AUX` and the `baked_vertex_irradiance` effect.
 pub fn document_lit(name: &str, meshes: &[Mesh], source: &dyn AssetReader, directory: &Directory, max_texture: u32, probes: Option<&crate::probes::ProbeField>, rig: Option<&Rig>) -> Result<Document> {
@@ -361,29 +369,54 @@ pub fn document_lit(name: &str, meshes: &[Mesh], source: &dyn AssetReader, direc
             };
             // A sampler named as a colour map wins; otherwise the first
             // sampler that is neither a non-colour map nor a placeholder.
+            // Pass 0 of some snow materials binds no colour map; their
+            // single-texture pass (5) holds it.
             let role = |id: u32| textures.get(&id).map_or(0, |d: &VramDesc| texture_role(&d.name));
-            let chosen = group.material.samplers.iter().copied().find(|id| role(*id) == 2 && !tiny(*id)).or_else(|| group.material.base_color_with(|id| role(id) == 0 || tiny(id)));
-            let image = match chosen.and_then(|id| textures.get(&id)) {
+            let colour = |samplers: &[u32]| samplers.iter().copied().find(|id| role(*id) == 2 && !tiny(*id));
+            let slope = group.material.slope;
+            let sampler = |i: u8| group.material.samplers.get(usize::from(i)).copied().filter(|id| !tiny(*id));
+            let chosen = match slope {
+                Some(s) => sampler(s.side),
+                None => colour(&group.material.samplers).or_else(|| group.material.base_color_with(|id| role(id) == 0 || tiny(id))),
+            }
+            .or_else(|| group.material.passes.iter().skip(1).find_map(|p| colour(p)));
+            let mut image_of = |id: Option<u32>| -> Result<Option<usize>> {
+                let Some(desc) = id.and_then(|id| textures.get(&id)) else { return Ok(None) };
+                if let Some(&i) = images.get(&desc.id) {
+                    return Ok(Some(i));
+                }
+                let mut surface = desc.decode(source, directory.texture_base)?;
+                while surface.width > max_texture.max(1) || surface.height > max_texture.max(1) {
+                    surface = halve(&surface);
+                }
+                doc.images.push((crysirror_image::encode_png(&surface)?, "image/png"));
+                images.insert(desc.id, doc.images.len() - 1);
+                Ok(Some(doc.images.len() - 1))
+            };
+            let image = image_of(chosen)?;
+            // The upper slope layer: a sampler, or the light grey the
+            // `cliffwall-snow` programs compute (0.5 plus lighting terms;
+            // approximated, SATD-nd-retail-runtime).
+            let top = match slope.map(|s| s.top) {
+                Some(crate::rsx::Top::Sampler(i)) => Some((image_of(sampler(i))?, [1.; 3])),
+                Some(crate::rsx::Top::Computed) => Some((None, [COMPUTED_SNOW; 3])),
                 None => None,
-                Some(desc) => match images.get(&desc.id) {
-                    Some(&i) => Some(i),
-                    None => {
-                        let mut surface = desc.decode(source, directory.texture_base)?;
-                        while surface.width > max_texture.max(1) || surface.height > max_texture.max(1) {
-                            surface = halve(&surface);
-                        }
-                        doc.images.push((crysirror_image::encode_png(&surface)?, "image/png"));
-                        images.insert(desc.id, doc.images.len() - 1);
-                        Some(doc.images.len() - 1)
-                    }
-                },
             };
             // Baked lighting applies to meshes placed once (per-vertex data
             // cannot differ between instances of one glTF mesh).
             let bake = probes.filter(|p| !p.is_empty() && mesh.instances.len() == 1);
             let mut material = Material { name: group.material.name.clone(), base_color_texture: image, ..Default::default() };
             if bake.is_some() {
-                material.engine = Some(crate::probes::baked_material(image));
+                material.engine = Some(crate::probes::baked_material(image, top));
+            } else if let Some((layer, tint)) = top {
+                material.engine = Some(crysirror_asset::pbr::PbrMaterial {
+                    base_color_texture: image,
+                    emissive_texture: layer,
+                    metallic_factor: 0.,
+                    roughness_factor: 1.,
+                    effect: Some(crysirror_scene::effect::ShaderEffect::SlopeLayerBlend { tint }),
+                    ..Default::default()
+                });
             }
             doc.materials.push(material);
             let material = doc.materials.len() - 1;

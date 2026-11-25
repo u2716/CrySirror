@@ -59,6 +59,12 @@ pub trait World {
     fn camera(&mut self, name: u32, seconds: f32);
     /// Release scripted camera `name` (`None`: every scripted camera).
     fn camera_disable(&mut self, _name: Option<u32>) {}
+    /// Keep camera animation `name` (clip `clip`, blended in over
+    /// `seconds`) offsetting the active camera; enabling a running one
+    /// keeps its phase.
+    fn camera_animation(&mut self, _name: u32, _clip: u32, _seconds: f32) {}
+    /// Blend camera animation `name` out (`None`: every one).
+    fn camera_animation_disable(&mut self, _name: Option<u32>) {}
     fn player_controls(&mut self, enabled: bool);
     /// Left and right stick (x, y in −1…1) of a controller.
     fn sticks(&self, pad: u32) -> [f32; 4];
@@ -518,6 +524,12 @@ impl Ctx<'_> {
     }
 }
 
+/// `ND_TRACE_NATIVES=substring` prints matching native calls (diagnostic).
+fn trace_natives() -> Option<&'static String> {
+    static FILTER: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    FILTER.get_or_init(|| std::env::var("ND_TRACE_NATIVES").ok()).as_ref()
+}
+
 impl Natives for Ctx<'_> {
     fn lookup(&self, s: u32) -> Option<u32> {
         self.inner.native_ids.get(&s).copied()
@@ -531,6 +543,10 @@ impl Natives for Ctx<'_> {
         let ok = |v: u32| Ok((v, Status::Continue));
         let b = |v: bool| Ok((u32::from(v), Status::Continue));
         let now = self.world.now();
+        if trace_natives().is_some_and(|f| name.contains(f.as_str())) {
+            let proc = self.proc.map(|p| (self.inner.procs[p].name, self.inner.procs[p].state.unwrap_or(0)));
+            eprintln!("[native {now:.2}] {proc:08x?}: ({name} {:08x?})", &a[..n.min(MAX_ARGS)]);
+        }
         match name {
             // (add-load-module 'name 'script): the host loads the module
             // after the calling lambda (`sub_1545A8` queues it).
@@ -749,6 +765,19 @@ impl Natives for Ctx<'_> {
             }
             "camera-disable-all" => {
                 self.world.camera_disable(None);
+                ok(0)
+            }
+            // (camera-animation-enable name clip blend): `DcCameraAnimationEnable`
+            // (`sub_366730`) keeps up to 10 named camera animations; the
+            // scripts call it every frame while one should run.
+            "camera-animation-enable" => {
+                let clip = if n > 1 && a[1] != 0 { a[1] } else { a[0] };
+                self.world.camera_animation(a[0], clip, if n > 2 { Self::arg_f(a, 2) } else { 0. });
+                ok(0)
+            }
+            // (camera-animation-disable name), `sub_364550`.
+            "camera-animation-disable" => {
+                self.world.camera_animation_disable((n > 0 && a[0] != 0).then_some(a[0]));
                 ok(0)
             }
             // The argument is a control mask (`player-controls-all` returns

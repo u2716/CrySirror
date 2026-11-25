@@ -90,6 +90,18 @@ pub enum ShaderEffect {
     BakedVertexIrradiance {
         #[serde(default = "one")]
         intensity: f32,
+        /// With a tint, also the [`ShaderEffect::SlopeLayerBlend`] layering.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        slope_layer: Option<[f32; 3]>,
+    },
+    /// Two albedo layers by surface slope: the base texture on walls, the
+    /// emissive-slot texture (white when unbound) × `tint` on upward-facing
+    /// surfaces, mixed as `mix(top, base, saturate(1 − n.y))` with `n` the
+    /// interpolated world normal; the emissive slot then contributes no
+    /// emission.
+    SlopeLayerBlend {
+        #[serde(default = "white")]
+        tint: [f32; 3],
     },
     Custom {
         asset: String,
@@ -143,7 +155,11 @@ impl ShaderEffect {
                 scale.iter().chain(offset).all(|v| v.is_finite()), "non-finite lightmap transform"
             ),
             Self::VertexLayerBlend => {}
-            Self::BakedVertexIrradiance { intensity } => ensure!(intensity.is_finite() && (0. ..=64.).contains(intensity), "baked irradiance intensity"),
+            Self::BakedVertexIrradiance { intensity, slope_layer } => ensure!(
+                intensity.is_finite() && (0. ..=64.).contains(intensity) && slope_layer.iter().flatten().all(|x| range(*x, 0., 16.)),
+                "baked irradiance parameter range"
+            ),
+            Self::SlopeLayerBlend { tint } => ensure!(tint.iter().all(|x| range(*x, 0., 16.)), "slope layer tint range"),
             Self::Custom { asset, parameters } => {
                 let p =
                     crysirror_core::path::VfsPath::new(crysirror_core::path::Mount::Asset, asset)
@@ -212,9 +228,16 @@ impl ShaderEffect {
                 6.
             }
             Self::VertexLayerBlend => 7.,
-            Self::BakedVertexIrradiance { intensity } => {
+            Self::BakedVertexIrradiance { intensity, slope_layer } => {
                 p[0][0] = *intensity;
+                if let Some(t) = slope_layer {
+                    p[1] = [t[0], t[1], t[2], 1.];
+                }
                 8.
+            }
+            Self::SlopeLayerBlend { tint } => {
+                p[1] = [tint[0], tint[1], tint[2], 1.];
+                9.
             }
             Self::Custom { parameters, .. } => {
                 p = *parameters;
@@ -256,6 +279,9 @@ mod tests {
     }
 }
 
+fn white() -> [f32; 3] {
+    [1.; 3]
+}
 fn one() -> f32 {
     1.
 }

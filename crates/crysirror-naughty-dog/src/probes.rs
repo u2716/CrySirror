@@ -148,13 +148,15 @@ fn evaluate(sh: &[[f32; 3]; 9], n: [f32; 3]) -> [f32; 3] {
 }
 
 /// Engine material of a baked primitive: the base-colour image and the
-/// `baked_vertex_irradiance` effect.
-pub fn baked_material(base_color: Option<usize>) -> crysirror_asset::pbr::PbrMaterial {
+/// `baked_vertex_irradiance` effect, with an upper slope layer (image and
+/// tint) when the material has one.
+pub fn baked_material(base_color: Option<usize>, slope: Option<(Option<usize>, [f32; 3])>) -> crysirror_asset::pbr::PbrMaterial {
     crysirror_asset::pbr::PbrMaterial {
         base_color_texture: base_color,
+        emissive_texture: slope.and_then(|s| s.0),
         metallic_factor: 0.,
         roughness_factor: 1.,
-        effect: Some(crysirror_scene::effect::ShaderEffect::BakedVertexIrradiance { intensity: INTENSITY }),
+        effect: Some(crysirror_scene::effect::ShaderEffect::BakedVertexIrradiance { intensity: INTENSITY, slope_layer: slope.map(|s| s.1) }),
         ..Default::default()
     }
 }

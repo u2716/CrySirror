@@ -463,6 +463,37 @@ fn raw_channel(p: &Loaded, payload: usize, name: u32) -> Option<Vec<(Vec3, Quat)
     None
 }
 
+/// The names of an `ANIM` payload's raw channels with their sample
+/// layout `(stride, components, frames)`.
+pub fn raw_channels(p: &Loaded, payload: usize) -> Vec<(u32, u16, u16, u16)> {
+    let Ok(raw) = p.ptr(payload + 0xc) else { return Vec::new() };
+    let count = p.u32(raw).map_or(0, |c| c as usize).min(64);
+    (0..count)
+        .filter_map(|i| {
+            let entry = p.ptr(raw + 8 + 4 * i).ok()?;
+            let data = p.ptr(entry + 4).ok()?;
+            Some((p.u32(entry).ok()?, p.u16(data + 92).ok()?, p.u16(data + 94).ok()?, p.u16(data + 98).ok()?))
+        })
+        .collect()
+}
+
+/// The float samples of raw channel `name` (`stride / 4` floats each).
+pub fn raw_samples(p: &Loaded, payload: usize, name: u32) -> Vec<Vec<f32>> {
+    let found = || -> Option<Vec<Vec<f32>>> {
+        let raw = p.ptr(payload + 0xc).ok()?;
+        let count = (p.u32(raw).ok()? as usize).min(64);
+        let entry = (0..count).filter_map(|i| p.ptr(raw + 8 + 4 * i).ok()).find(|e| p.u32(*e).ok() == Some(name))?;
+        let data = p.ptr(entry + 4).ok()?;
+        let samples = p.ptr(data + 88).ok()?;
+        let (stride, frames) = (usize::from(p.u16(data + 92).ok()?), usize::from(p.u16(data + 98).ok()?));
+        if stride == 0 || stride % 4 != 0 || frames > 1 << 14 {
+            return None;
+        }
+        (0..frames).map(|k| (0..stride / 4).map(|j| p.f32(samples + stride * k + 4 * j).ok()).collect()).collect()
+    };
+    found().unwrap_or_default()
+}
+
 /// Every `ANIM` item of a relocated package, by name.
 pub fn items(p: &Loaded) -> impl Iterator<Item = (&str, usize)> {
     p.directory.items.iter().filter(|i| i.kind == "ANIM").map(|i| (i.name.as_str(), i.payload_offset as usize))

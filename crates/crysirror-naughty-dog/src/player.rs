@@ -21,10 +21,24 @@
 //! speed is the blended clips' root motion (`align`) along the facing
 //! direction. Thresholds and rates in this module are not native values
 //! (SATD-nd-retail-runtime).
+//!
+//! Hanging and climbing ([`Mode::Hang`], [`Mode::Climb`]) follow an edge:
+//! the hang and climb clips' `apReference` channel locates the edge (the
+//! action-pack reference) relative to their `align`, so with `AP =
+//! align(0) · apReference(0)` the root stands at `edge · AP⁻¹ · align(t)`
+//! (`ledge-grab-idle-hurt`: the edge 1.53 m above and 0.5 m ahead of the
+//! root; the chest and knee climb steps agree on the root 0.6 m below and
+//! 0.34 m behind the edge where they meet). From the hang, sideways input
+//! requests `ledge-shimmy-left`/`-right`, releasing it `ledge-grab`;
+//! forward input over a standable top enters `ledge-climb-up` (→ `-2` by
+//! `auto`, then the `idle`/`run` request picks `climb-onto-1-75m^…`);
+//! the drop input enters `fall`. Falling or jumping with an edge in reach
+//! enters `fall-grab-edge`, then `ledge-grab`.
 use crate::anim_state::{Machine, StateTable};
 use crate::anim_tree::{Graph, Inputs};
 use crate::dc::sid;
 use anyhow::Result;
+use glam::{Quat, Vec3};
 use std::collections::HashMap;
 use std::f32::consts::{FRAC_PI_4, PI};
 
@@ -63,7 +77,30 @@ pub const STATES: &[&str] = &[
     "fall-land-medium-run",
     "fall-land-hard-idle",
     "fall-land-hard-run",
+    "ledge-grab",
+    "ledge-shimmy-left",
+    "ledge-shimmy-right",
+    "ledge-climb-up",
+    "ledge-climb-up-2",
+    "climb-onto-1-75m^idle",
+    "climb-onto-1-75m^run",
+    "fall-grab-edge",
 ];
+
+const HANG: &[&str] = &["ledge-grab", "ledge-shimmy-left", "ledge-shimmy-right", "fall-grab-edge"];
+const CLIMB: &[&str] = &["ledge-climb-up", "ledge-climb-up-2", "climb-onto-1-75m^idle", "climb-onto-1-75m^run"];
+
+/// How the adapter places the player for the current state.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum Mode {
+    #[default]
+    Ground,
+    /// On an edge: the root follows the grab point.
+    Hang,
+    /// Climbing onto an edge's top: the root follows the clip from the
+    /// edge where the climb began.
+    Climb,
+}
 
 const AMBIENT: &[&str] = &["ambient-casual", "ambient-stand-a1", "ambient-stand-a2", "ambient-stand-a3"];
 const AMBIENT_AFTER: f32 = 10.;
@@ -73,13 +110,40 @@ const TURN_RATE: f32 = 6.;
 const LEAN_RATE: f32 = 8.;
 
 /// What the controller knows of a decoded clip.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct ClipInfo {
     pub name: String,
     pub duration: f32,
     /// `align` root speed, metres per second.
     pub speed: f32,
     pub additive: bool,
+    pub fps: f32,
+    /// `align` per frame (clip space).
+    pub align: Vec<(Vec3, Quat)>,
+    /// The action-pack reference in clip space, `align(0) ·
+    /// apReference(0)`, when the clip has one.
+    pub ap: Option<(Vec3, Quat)>,
+}
+
+impl ClipInfo {
+    /// `align` at `time` seconds (clamped, interpolated).
+    pub fn align_at(&self, time: f32) -> (Vec3, Quat) {
+        let Some(&first) = self.align.first() else { return (Vec3::ZERO, Quat::IDENTITY) };
+        let x = (time * self.fps.max(1.)).clamp(0., (self.align.len() - 1) as f32);
+        let (i, f) = (x.floor() as usize, x.fract());
+        let (a, b) = (self.align.get(i).copied().unwrap_or(first), self.align.get(i + 1).copied().unwrap_or(self.align[self.align.len() - 1]));
+        (a.0.lerp(b.0, f), a.1.slerp(b.1, f))
+    }
+}
+
+/// The root of the heaviest clip now: its name, `align` and reference.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Root {
+    pub clip: String,
+    pub align: (Vec3, Quat),
+    /// `align` one frame earlier.
+    pub before: (Vec3, Quat),
+    pub ap: Option<(Vec3, Quat)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -99,6 +163,13 @@ pub struct Frame {
     pub grounded: bool,
     /// Metres dropped since leaving the ground.
     pub dropped: f32,
+    /// Airborne with an edge in reach of the hands.
+    pub grab: bool,
+    /// While hanging: sideways input (+1 right), forward input over a
+    /// standable top, and the drop input.
+    pub lateral: f32,
+    pub climb: bool,
+    pub drop: bool,
     /// Ground rise per metre ahead.
     pub slope: f32,
     pub movement: u32,
@@ -114,6 +185,8 @@ pub struct Step {
     /// Upward velocity to apply (a jump take-off).
     pub lift: Option<f32>,
     pub state: Option<String>,
+    pub mode: Mode,
+    pub root: Option<Root>,
 }
 
 /// Presents an `anim-actor` state machine: the current state's tree
@@ -127,11 +200,21 @@ pub struct Animator {
     previous: Vec<Layer>,
     fade_time: f32,
     duration: f32,
+    /// The heaviest non-additive clip and its time.
+    main: Option<(u32, f32)>,
 }
 
 impl Animator {
     pub fn new(machine: Machine) -> Self {
-        Self { machine, current: Vec::new(), previous: Vec::new(), fade_time: 0., duration: 0. }
+        Self { machine, current: Vec::new(), previous: Vec::new(), fade_time: 0., duration: 0., main: None }
+    }
+
+    /// The root of the heaviest clip at its current time, and one
+    /// `seconds` step earlier (not before the clip's start).
+    pub fn root(&self, clips: &HashMap<u32, ClipInfo>, seconds: f32) -> Option<Root> {
+        let (clip, time) = self.main?;
+        let info = clips.get(&clip)?;
+        Some(Root { clip: info.name.clone(), align: info.align_at(time), before: info.align_at((time - seconds).max(0.)), ap: info.ap })
     }
 
     /// Advance by `seconds` (taking `auto` transitions) and present.
@@ -150,9 +233,11 @@ impl Animator {
         let leaves = graph.evaluate(tree, &inputs, &|c| clips.get(&map(c)).is_some_and(|i| i.additive))?;
         let present: Vec<_> = leaves.into_iter().filter_map(|l| clips.get(&map(l.clip)).map(|i| (l, i))).collect();
         let base: f32 = present.iter().filter(|(l, _)| !l.additive).map(|(l, _)| l.weight).sum();
-        let main = present.iter().filter(|(l, _)| !l.additive).max_by(|a, b| a.0.weight.total_cmp(&b.0.weight)).map(|(_, i)| i.duration).unwrap_or(0.);
+        let heaviest = present.iter().filter(|(l, _)| !l.additive).max_by(|a, b| a.0.weight.total_cmp(&b.0.weight));
+        let main = heaviest.map(|(_, i)| i.duration).unwrap_or(0.);
         self.duration = main;
         let phase = if main > 0. { self.machine.time / main } else { 0. };
+        self.main = heaviest.map(|(l, i)| (map(l.clip), l.phase.unwrap_or(phase) * i.duration));
         self.current = present
             .iter()
             .map(|(l, i)| Layer { clip: i.name.clone(), time: l.phase.unwrap_or(phase) * i.duration, weight: if l.additive || base <= 1e-4 { l.weight } else { l.weight / base }, additive: l.additive })
@@ -205,10 +290,61 @@ impl Controller {
         }
     }
 
+    /// The placement mode of the current state.
+    pub fn mode(&self, table: &StateTable) -> Mode {
+        let state = self.name(table);
+        if HANG.contains(&state.as_str()) {
+            Mode::Hang
+        } else if CLIMB.contains(&state.as_str()) {
+            Mode::Climb
+        } else {
+            Mode::Ground
+        }
+    }
+
+    /// Enter the hang on an edge (a hanging start, a grab).
+    pub fn hang(&mut self, fade: f32) {
+        self.anim.machine.force(sid("ledge-grab"), fade);
+    }
+
     pub fn step(&mut self, graph: &mut Graph, table: &StateTable, clips: &HashMap<u32, ClipInfo>, f: &Frame) -> Result<Step> {
         let before = self.anim.machine.state;
         let state = self.name(table);
+        let finished = self.anim.duration > 0. && self.anim.machine.time >= self.anim.duration;
+        match self.mode(table) {
+            Mode::Hang => {
+                if f.drop {
+                    self.anim.machine.force(sid("fall"), 0.2);
+                } else if state == "fall-grab-edge" {
+                    if finished {
+                        self.anim.machine.force(sid("ledge-grab"), 0.15);
+                    }
+                } else if f.climb {
+                    self.anim.machine.force(sid("ledge-climb-up"), 0.15);
+                } else if f.lateral > 0.5 {
+                    self.go(table, "ledge-shimmy-right", None, 0.15);
+                } else if f.lateral < -0.5 {
+                    self.go(table, "ledge-shimmy-left", None, 0.15);
+                } else if state != "ledge-grab" {
+                    self.go(table, "ledge-grab", Some("ledge-grab"), 0.15);
+                }
+                return self.finish(graph, table, clips, f, before, None, 0.);
+            }
+            Mode::Climb => {
+                // The last climb step takes the `idle`/`run` request.
+                if state == "ledge-climb-up-2" && finished {
+                    let target = if f.heading.is_some() { "run" } else { "idle" };
+                    self.go(table, target, Some(&format!("climb-onto-1-75m^{target}")), 0.1);
+                }
+                return self.finish(graph, table, clips, f, before, None, 0.);
+            }
+            Mode::Ground => {}
+        }
         let airborne = matches!(state.as_str(), "run-jump-long" | "jump-long" | "fall" | "jump-in-place");
+        if airborne && f.grab {
+            self.anim.machine.force(sid("fall-grab-edge"), 0.1);
+            return self.finish(graph, table, clips, f, before, None, 0.);
+        }
         let at_rest = state == "idle" || state == "run-idle" || state.starts_with("ambient-") || state.starts_with("idle-turn-") || state.ends_with("-land-idle") || state == "jump-in-place-land" || state.starts_with("fall-land-") && state.ends_with("-idle");
         let moving_state = state == "run" || state.starts_with("idle-run-") || state == "run-180" || state.ends_with("-land-run");
         let mut lift = None;
@@ -285,6 +421,12 @@ impl Controller {
         let rate = if f.seconds > 0. { wrap(self.yaw - old_yaw) / f.seconds } else { 0. };
         self.yaw_rate += (rate - self.yaw_rate) * (f.seconds * 8.).min(1.);
         let lean = (self.yaw_rate / LEAN_RATE).clamp(-1., 1.);
+        self.finish(graph, table, clips, f, before, lift, lean)
+    }
+
+    /// Present the state and report the step.
+    #[allow(clippy::too_many_arguments)]
+    fn finish(&mut self, graph: &mut Graph, table: &StateTable, clips: &HashMap<u32, ClipInfo>, f: &Frame, before: u32, lift: Option<f32>, lean: f32) -> Result<Step> {
         let inputs = Inputs {
             info: vec![(28, lean.max(0.)), (32, (-lean).max(0.)), (40, (f.slope * 2.).clamp(0., 1.)), (44, (-f.slope * 2.).clamp(0., 1.))],
             instance: vec![(48, f.movement), (52, f.weapon)],
@@ -292,6 +434,7 @@ impl Controller {
         };
         let (layers, speed) = self.anim.present(graph, table, clips, &|c| c, inputs, before, f.seconds)?;
         let changed = self.anim.machine.state != before;
-        Ok(Step { layers, speed, lift, state: changed.then(|| self.name(table)) })
+        let root = self.anim.root(clips, f.seconds);
+        Ok(Step { layers, speed, lift, state: changed.then(|| self.name(table)), mode: self.mode(table), root })
     }
 }

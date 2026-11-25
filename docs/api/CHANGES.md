@@ -1,5 +1,9 @@
 # API change log
 
+## `653c879dbcdae8ea` (2026-11-25) — slope layer blend
+
+`ShaderEffect.slope_layer_blend` mixes the base texture (walls) with the emissive-slot texture × `tint` (upward-facing surfaces) by `saturate(1 − n.y)` of the interpolated world normal. `baked_vertex_irradiance` takes an optional `slope_layer` tint for the same layering; omitted, materials are unchanged. Rust callers with exhaustive `ShaderEffect` matches need the new arm, and struct literals of `BakedVertexIrradiance` need `slope_layer: None`. The previous fingerprint was `9640ededc06f0fce`.
+
 ## `9640ededc06f0fce` (2026-11-24) — filmic tonemap
 
 `Environment.tonemap` accepts `filmic`: Hable's curve as published for Uncharted 2 (GDC 2010), with a fixed 2× exposure bias and white point 11.2. Existing environments keep their tonemap. Rust callers with exhaustive `Tonemap` matches need the new arm. The previous fingerprint was `01a2119f5ee7031e`.

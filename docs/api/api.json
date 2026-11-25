@@ -23131,7 +23131,13 @@
           "default": null,
           "doc": "Baked diffuse irradiance from the primitive's `_AUX` vertex stream (linear RGB, scaled by `intensity`) replaces the environment and GI-volume irradiance; direct lights still apply. Primitives without `_AUX` receive white irradiance × `intensity`.",
           "name": "baked_vertex_irradiance",
-          "rust_type": "intensity: f32"
+          "rust_type": "intensity: f32, slope_layer: Option<[f32; 3]>"
+        },
+        {
+          "default": null,
+          "doc": "Two albedo layers by surface slope: the base texture on walls, the emissive-slot texture (white when unbound) × `tint` on upward-facing surfaces, mixed as `mix(top, base, saturate(1 − n.y))` with `n` the interpolated world normal; the emissive slot then contributes no emission.",
+          "name": "slope_layer_blend",
+          "rust_type": "tint: [f32; 3]"
         },
         {
           "default": null,
@@ -30502,7 +30508,7 @@
       "used_by": "UiEvent.widget client/local identity"
     }
   ],
-  "fingerprint": "9640ededc06f0fce",
+  "fingerprint": "653c879dbcdae8ea",
   "generated_by": "crysirror-engine api_doc (tests/api_docs.rs)",
   "globals": [
     {

@@ -645,6 +645,14 @@ fn fs_main(i: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec
         surface.color = vec4<f32>(mix(layer_b.rgb * material.base_color.rgb, surface.color.rgb, w), surface.color.a);
         surface.emission = vec3<f32>(0.0);
     }
+    // Slope layers (effect 9, or 8 with a tint): the emissive-slot texture
+    // × tint on upward-facing surfaces, the base on walls.
+    if material.surface.y == 9.0 || (material.surface.y == 8.0 && material.effect_params[1].w > 0.5) {
+        let w = clamp(1.0 - normalize(i.normal).y, 0.0, 1.0);
+        let top = layer_b.rgb * material.effect_params[1].rgb * material.base_color.rgb;
+        surface.color = vec4<f32>(mix(top, surface.color.rgb, w), surface.color.a);
+        surface.emission = vec3<f32>(0.0);
+    }
     let base=surface.color;
     let tn = decode_normal(textureSample(t_normal, s_material, uv));
     let specular_color = textureSample(t_specular, s_material, uv).rgb * material.surface.w;

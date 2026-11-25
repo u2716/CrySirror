@@ -184,6 +184,11 @@ struct Player {
     air_top: Option<f32>,
     /// Current follow-camera distance (eases back out after obstruction).
     view_distance: f32,
+    /// The body the player stands on and its transform then: the player
+    /// rides its motion (the hanging car).
+    platform: Option<(u32, glam::Mat4)>,
+    /// The edge held while hanging or climbing.
+    grip: Option<Grip>,
 }
 
 /// Engine side of the script natives: spawner entities, prints and fades.
@@ -213,7 +218,34 @@ struct Stage {
     /// Props without an animation controller hold the last frame of their
     /// finished script animation: asset, clip and time.
     held: HashMap<u32, (String, String, f32)>,
+    /// Camera animations by name: clip, start, blend-in seconds and the
+    /// time a disable began blending it out.
+    camera_animations: Vec<CameraAnimation>,
+    /// Current world transforms of spawned objects moved away from their
+    /// spawner (script root motion, or a moved parent spawner).
+    poses: HashMap<u32, glam::Mat4>,
 }
+
+struct CameraAnimation {
+    name: u32,
+    clip: u32,
+    start: f64,
+    blend: f32,
+    stop: Option<f64>,
+}
+
+/// A camera clip's camera channel: frames per second and per frame the
+/// optional field of view (degrees), rotation and translation.
+struct CameraClip {
+    fps: f32,
+    samples: Vec<(Option<f32>, glam::Quat, glam::Vec3)>,
+}
+
+/// The camera channel of camera clips (`camera-train-wreck.pak`): per
+/// frame `[fov°, ?, ?, quat, translation]` (components 7) or
+/// `[quat, translation]` (components 6). No string with this `StringId`
+/// is stored in the EBOOT or the packages.
+const CAMERA_CHANNEL: u32 = 0x306c_3455;
 
 /// A clip a script plays on an object (`animate`). The clip is found and
 /// decoded by the adapter after the script tick; until then it reports
@@ -276,6 +308,10 @@ impl World for Stage {
         if name == sid("player") {
             return self.player_locator;
         }
+        if let Some(m) = self.poses.get(&name) {
+            let (_, r, t) = m.to_scale_rotation_translation();
+            return Some((t.to_array(), r.to_array()));
+        }
         self.spawners.get(&name).map(|s| (s.position, s.rotation))
     }
     fn property(&self, spawner: u32, prop: u32) -> Option<Property> {
@@ -299,6 +335,20 @@ impl World for Stage {
         self.log(format!("camera release {:?}", name.map(|n| format!("{n:08x}"))));
         if name.is_none() || name == self.camera {
             self.camera = None;
+        }
+    }
+    fn camera_animation(&mut self, name: u32, clip: u32, seconds: f32) {
+        if let Some(c) = self.camera_animations.iter_mut().find(|c| c.name == name) {
+            c.stop = None;
+        } else if self.camera_animations.len() < 10 {
+            self.log(format!("camera animation {name:08x}"));
+            self.camera_animations.push(CameraAnimation { name, clip, start: self.now, blend: seconds.max(0.), stop: None });
+        }
+    }
+    fn camera_animation_disable(&mut self, name: Option<u32>) {
+        let now = self.now;
+        for c in self.camera_animations.iter_mut().filter(|c| name.is_none_or(|n| n == c.name)) {
+            c.stop.get_or_insert(now);
         }
     }
     fn player_controls(&mut self, enabled: bool) {
@@ -398,6 +448,8 @@ struct Session {
     catalog: Option<Vec<u8>>,
     /// Developer free camera in task mode (F1), detached from the player.
     free: bool,
+    /// Camera clips by name (`None`: not found in the level's packages).
+    camera_clips: HashMap<u32, Option<CameraClip>>,
     /// The level's sky (`sky-…` package) as an uploaded environment image.
     sky: Option<VfsPath>,
     /// Front-end pages of `menu.bin` and the title logo (`menu.pak`
@@ -655,6 +707,7 @@ impl NaughtyDogVm {
             ui: None,
             catalog: None,
             free: false,
+            camera_clips: HashMap::new(),
             sky: None,
             menu_pages: Vec::new(),
             logo: None,
@@ -799,6 +852,8 @@ impl NaughtyDogVm {
         session.stage.animations.clear();
         session.stage.held.clear();
         session.stage.camera = None;
+        session.stage.camera_animations.clear();
+        session.stage.poses.clear();
         session.entity_rigs.clear();
         session.stage.visible.clear();
         session.stage.ops.clear();
@@ -896,7 +951,18 @@ impl NaughtyDogVm {
                 }
             }
             if session.game.is_some() {
-                session.ground.add(&meshes);
+                // Native collision and climb edges where the package has
+                // them; otherwise its render triangles.
+                let native = crate::collision::level_object(&loaded).unwrap_or_else(|e| {
+                    session.stage.log(format!("{package_name}: collision: {e:#}"));
+                    crate::collision::Object::default()
+                });
+                if native.triangles.is_empty() {
+                    session.ground.add(&meshes);
+                } else {
+                    session.ground.add_collision(&native.triangles);
+                }
+                session.ground.add_edges(&native.features.edges);
                 if let Some(item) = directory.items.iter().find(|i| i.kind == "REGION_TREE") {
                     let regions = crate::region::load_regions(&loaded, item.payload_offset as usize)?;
                     if !regions.is_empty() {
@@ -1027,6 +1093,98 @@ impl NaughtyDogVm {
         json!({"op": "set_camera", "camera": {"eye": eye.to_array(), "target": (eye + forward).to_array(), "up": up.to_array(), "fov_y_degrees": vertical, "near": 0.1, "far": 20000.0}})
     }
 
+    /// The camera clip `clip` from the level's `actor` packages
+    /// (`camera-train-wreck.pak` for `train-wreck`).
+    fn camera_clip(session: &mut Session, clip: u32) -> Option<&CameraClip> {
+        if !session.camera_clips.contains_key(&clip) {
+            let mut found = None;
+            let actors: Vec<String> = session.plan.iter().flat_map(|p| &p.levels).filter_map(|l| session.all_levels.get(l)).flat_map(|l| l.actors.iter().filter(|a| a.starts_with("camera-")).cloned()).collect();
+            for actor in actors {
+                let package = format!("{actor}.pak");
+                if !session.actors.exists(&package) {
+                    continue;
+                }
+                if !session.anim_packages.contains_key(&package) {
+                    let Ok(bytes) = session.actors.open(&package).map_err(anyhow::Error::from).and_then(|r| Ok(read_all(r.as_ref(), PACKAGE_LIMIT)?)) else { continue };
+                    let Ok(loaded) = crate::mesh::Loaded::read(&crysirror_core::service::MemoryAssetReader(bytes.into()), PACKAGE_LIMIT) else { continue };
+                    session.anim_packages.insert(package.clone(), Arc::new(loaded));
+                }
+                let loaded = session.anim_packages[&package].clone();
+                let Some((name, at)) = crate::anim::items(&loaded).find(|(n, _)| sid(n) == clip) else { continue };
+                let fps = crate::anim::decode(&loaded, at, name, 1).map_or(30., |c| c.fps);
+                let samples: Vec<_> = crate::anim::raw_samples(&loaded, at, CAMERA_CHANNEL)
+                    .into_iter()
+                    .filter_map(|v| {
+                        let (fov, r) = match v.len() {
+                            10 => (Some(v[0]), &v[3..]),
+                            7 => (None, &v[..]),
+                            _ => return None,
+                        };
+                        Some((fov, glam::Quat::from_xyzw(r[0], r[1], r[2], r[3]).normalize(), glam::Vec3::new(r[4], r[5], r[6])))
+                    })
+                    .collect();
+                session.stage.log(format!("camera clip {name}: {} frames", samples.len()));
+                found = (!samples.is_empty()).then_some(CameraClip { fps, samples });
+                break;
+            }
+            session.camera_clips.insert(clip, found);
+        }
+        session.camera_clips.get(&clip).and_then(Option::as_ref)
+    }
+
+    /// Offset a `set_camera` op by the running camera animations: each
+    /// loops its camera channel relative to its first frame, in camera
+    /// space (+z forward, +y up), weighted by its blend (inferred
+    /// application, SATD-nd-retail-runtime).
+    fn animate_camera(session: &mut Session, op: &mut serde_json::Value) {
+        let now = session.stage.now;
+        session.stage.camera_animations.retain(|c| c.stop.is_none_or(|s| ((now - s) as f32) < c.blend.max(1e-3)));
+        let running: Vec<(u32, f32, f32)> = session
+            .stage
+            .camera_animations
+            .iter()
+            .map(|c| {
+                let t = (now - c.start) as f32;
+                let w_in = if c.blend > 0. { t / c.blend } else { 1. };
+                let w_out = c.stop.map_or(1., |s| if c.blend > 0. { 1. - (now - s) as f32 / c.blend } else { 0. });
+                (c.clip, t, w_in.min(w_out).clamp(0., 1.))
+            })
+            .collect();
+        let v3 = |v: &serde_json::Value| v.as_array().map(|a| glam::Vec3::new(a[0].as_f64().unwrap_or(0.) as f32, a[1].as_f64().unwrap_or(0.) as f32, a[2].as_f64().unwrap_or(0.) as f32));
+        let cam = &op["camera"];
+        let (Some(mut eye), Some(target), Some(mut up)) = (v3(&cam["eye"]), v3(&cam["target"]), v3(&cam["up"])) else { return };
+        let mut forward = (target - eye).normalize_or_zero();
+        let mut fov = cam["fov_y_degrees"].as_f64().unwrap_or(60.) as f32;
+        let mut changed = false;
+        for (clip, t, w) in running {
+            let Some(c) = Self::camera_clip(session, clip) else { continue };
+            let x = (t * c.fps).rem_euclid(c.samples.len() as f32);
+            let (i, f) = (x.floor() as usize % c.samples.len(), x.fract());
+            let (fa, ra, ta) = c.samples[i];
+            let (fb, rb, tb) = c.samples[(i + 1) % c.samples.len()];
+            let (f0, r0, t0) = c.samples[0];
+            let rot = r0.inverse() * ra.slerp(rb, f);
+            let offset = r0.inverse() * (ta.lerp(tb, f) - t0);
+            let basis = glam::Mat3::from_cols(up.cross(forward).normalize_or_zero(), up, forward);
+            let rot = glam::Quat::IDENTITY.slerp(rot, w);
+            eye += basis * (offset * w);
+            forward = basis * (rot * glam::Vec3::Z);
+            up = basis * (rot * glam::Vec3::Y);
+            if let (Some(a), Some(b), Some(base)) = (fa, fb, f0) {
+                let half = |d: f32| (d.to_radians() * 0.5).tan();
+                let zoom = (half(a + (b - a) * f) / half(base)).powf(w);
+                fov = (2. * (half(fov) * zoom).atan()).to_degrees();
+            }
+            changed = true;
+        }
+        if changed {
+            op["camera"]["eye"] = json!(eye.to_array());
+            op["camera"]["target"] = json!((eye + forward).to_array());
+            op["camera"]["up"] = json!(up.to_array());
+            op["camera"]["fov_y_degrees"] = json!(fov);
+        }
+    }
+
     /// Place the player and start the level's state-script processes.
     fn start_task(&self, session: &mut Session, world: &mut Vec<serde_json::Value>) -> Result<()> {
         session.ground.prepare();
@@ -1066,7 +1224,7 @@ impl NaughtyDogVm {
         let anim = session.anim_table.as_ref().filter(|_| entity.is_some()).map(|t| crate::player::Controller::new(t, yaw));
         // The camera starts behind the player (eye offset `(-sin, cos)` of
         // the view yaw opposite the facing `(sin, cos)` of the yaw).
-        let mut player = Player { entity, position, yaw, fall: 0., view_yaw: std::f32::consts::PI - yaw, view_pitch: -0.25, controls: true, anim, air_top: None, view_distance: FOLLOW_DISTANCE };
+        let mut player = Player { entity, position, yaw, fall: 0., view_yaw: std::f32::consts::PI - yaw, view_pitch: -0.25, controls: true, anim, air_top: None, view_distance: FOLLOW_DISTANCE, platform: None, grip: None };
         // The continue camera spawner sets the starting view direction
         // (eye offset `(-sin y · cos p, -sin p, cos y · cos p)` from the head).
         if let Some(c) = camera {
@@ -1077,11 +1235,25 @@ impl NaughtyDogVm {
                 player.view_pitch = (-d[1] / len).asin().clamp(-1.2, 0.6);
             }
         }
-        let below = session.ground.height(position[0], position[2], position[1] + 1.);
-        // A spawn more than 8 m above the next surface is a climbing start
-        // (hanging, not implemented): it keeps its height.
-        if let Some(h) = below.filter(|h| position[1] - h <= 8.) {
-            player.position[1] = h;
+        // A spawner on a climb edge (within 0.3 m; `continue-player-climb-1`
+        // on the hanging car's rail) starts hanging from it: the spawner
+        // marks the grab point.
+        let at = glam::Vec3::from_array(position);
+        let edge = session.ground.edges_near(at, 0.3).into_iter().min_by(|a, b| crate::ground::segment_distance(at, a.1.p0, a.1.p1).total_cmp(&crate::ground::segment_distance(at, b.1.p0, b.1.p1)));
+        match (edge, player.anim.as_mut()) {
+            (Some((index, e, body)), Some(c)) => {
+                player.grip = Some(Grip { body, edge: index, s: (at - e.p0).dot((e.p1 - e.p0).normalize_or_zero()).clamp(0., (e.p1 - e.p0).length()), climb: None });
+                c.hang(0.);
+                session.stage.log(format!("player hangs from edge {index} of {body:?}"));
+            }
+            _ => {
+                let below = session.ground.height(position[0], position[2], position[1] + 1.);
+                // A spawn more than 8 m above the next surface keeps its
+                // height.
+                if let Some(h) = below.filter(|h| position[1] - h <= 8.) {
+                    player.position[1] = h;
+                }
+            }
         }
         session.player = Some(player);
         session.stage.log(format!("task {} level {}: player at {:?}", plan.name, plan.level, position));
@@ -1362,11 +1534,21 @@ impl NaughtyDogVm {
                 }
             }
             let (x, y, z) = r.to_euler(glam::EulerRot::XYZ);
+            if object != sid("player") {
+                session.stage.poses.insert(object, glam::Mat4::from_rotation_translation(r, glam::Vec3::from_array(pos)));
+            }
             let m = glam::Mat4::from_rotation_translation(r, glam::Vec3::from_array(pos)).to_cols_array();
             for e in Self::animation_entities(session, object) {
                 session.ground.move_body(e, m);
                 world.push(json!({"op": "set_transform", "id": e, "transform": {"translation": pos, "rotation_degrees": [x.to_degrees(), y.to_degrees(), z.to_degrees()], "scale": [1.0, 1.0, 1.0]}}));
             }
+        }
+        // Spawners placed in a moved object's frame (the rail, seats and
+        // child cameras of `train-wreck-car-b-1`) move with it, unless they
+        // play their own animation.
+        let moved: Vec<u32> = session.stage.poses.keys().copied().filter(|o| session.stage.animations.contains_key(o)).collect();
+        for parent in moved {
+            Self::move_children(session, parent, world, 0);
         }
         for o in finished {
             session.stage.animations.remove(&o);
@@ -1412,6 +1594,94 @@ impl NaughtyDogVm {
 
     /// The entities an animated object stands for: the player's, or its
     /// spawner's.
+    /// Place a hanging or climbing player from its grip. Hanging: the
+    /// clip's sideways root motion slides the grab point along the edge
+    /// (onto the linked edge past an end) and the root stands at `edge ·
+    /// AP⁻¹`. Climbing: the root follows `edge · AP⁻¹ · align(t)` from the
+    /// edge frame where the climb began, or the clip's `align` motion for
+    /// clips without a reference. A grip whose edge is gone is released.
+    fn follow_grip(p: &mut Player, ground: &Ground, mode: crate::player::Mode, root: Option<&crate::player::Root>) {
+        let Some(mut grip) = p.grip else { return };
+        let Some(mut edge) = ground.edge(grip.body, grip.edge) else {
+            p.grip = None;
+            return;
+        };
+        let ap = |r: Option<&crate::player::Root>| r.and_then(|r| r.ap).map_or(glam::Mat4::from_translation(HANG_REACH), |(t, q)| glam::Mat4::from_rotation_translation(q, t));
+        match mode {
+            crate::player::Mode::Hang => {
+                grip.climb = None;
+                if let Some(r) = root {
+                    let delta = r.align.0 - r.before.0;
+                    if delta.length() < 0.2 {
+                        let frame = edge_frame(&edge, grip.s);
+                        grip.s += frame.transform_vector3(glam::Vec3::new(delta.x, 0., 0.)).dot((edge.p1 - edge.p0).normalize_or_zero());
+                    }
+                }
+                // Past an end: the linked edge, else the end.
+                for _ in 0..4 {
+                    let len = (edge.p1 - edge.p0).length();
+                    let link = if grip.s < 0. { edge.prev } else if grip.s > len { edge.next } else { None };
+                    let Some(next) = link.and_then(|i| ground.edge(grip.body, usize::from(i)).map(|e| (usize::from(i), e))) else {
+                        grip.s = grip.s.clamp(0., len);
+                        break;
+                    };
+                    grip.s = if grip.s < 0. { (next.1.p1 - next.1.p0).length() + grip.s } else { grip.s - len };
+                    (grip.edge, edge) = next;
+                }
+                let m = edge_frame(&edge, grip.s) * ap(root).inverse();
+                let (_, _, t) = m.to_scale_rotation_translation();
+                p.position = t.to_array();
+            }
+            crate::player::Mode::Climb => {
+                let start = *grip.climb.get_or_insert_with(|| edge_frame(&edge, grip.s));
+                match root {
+                    Some(r) if r.ap.is_some() => {
+                        let m = start * ap(Some(r)).inverse() * glam::Mat4::from_rotation_translation(r.align.1, r.align.0);
+                        p.position = m.to_scale_rotation_translation().2.to_array();
+                    }
+                    Some(r) => {
+                        let (_, q, _) = start.to_scale_rotation_translation();
+                        p.position = (glam::Vec3::from_array(p.position) + q * (r.align.0 - r.before.0)).to_array();
+                    }
+                    None => {}
+                }
+            }
+            crate::player::Mode::Ground => return,
+        }
+        let f = edge_frame(&edge, grip.s).transform_vector3(glam::Vec3::Z);
+        p.yaw = f.x.atan2(f.z);
+        if let Some(c) = p.anim.as_mut() {
+            c.yaw = p.yaw;
+        }
+        p.fall = 0.;
+        p.air_top = None;
+        p.grip = Some(grip);
+    }
+
+    /// Place the spawners parented to `parent` (`SpawnerRecord::parent`)
+    /// in its current frame: `child = parent now · parent spawner⁻¹ · child
+    /// spawner`, recursively; their entities and bodies follow.
+    fn move_children(session: &mut Session, parent: u32, world: &mut Vec<serde_json::Value>, depth: usize) {
+        let (Some(now), Some(spawned)) = (session.stage.poses.get(&parent).copied(), session.stage.spawners.get(&parent)) else { return };
+        if depth > 8 {
+            return;
+        }
+        let frame = |s: &SpawnerRecord| glam::Mat4::from_rotation_translation(glam::Quat::from_array(s.rotation).normalize(), glam::Vec3::from_array(s.position));
+        let delta = now * frame(spawned).inverse();
+        let name = spawned.name.clone();
+        let children: Vec<(u32, glam::Mat4)> = session.stage.spawners.iter().filter(|(c, s)| s.parent.as_deref() == Some(name.as_str()) && !session.stage.animations.contains_key(c)).map(|(c, s)| (*c, delta * frame(s))).collect();
+        for (child, m) in children {
+            session.stage.poses.insert(child, m);
+            let (_, r, t) = m.to_scale_rotation_translation();
+            let (x, y, z) = r.to_euler(glam::EulerRot::XYZ);
+            for e in session.stage.entities.get(&child).cloned().unwrap_or_default() {
+                session.ground.move_body(e, m.to_cols_array());
+                world.push(json!({"op": "set_transform", "id": e, "transform": {"translation": t.to_array(), "rotation_degrees": [x.to_degrees(), y.to_degrees(), z.to_degrees()], "scale": [1.0, 1.0, 1.0]}}));
+            }
+            Self::move_children(session, child, world, depth + 1);
+        }
+    }
+
     fn animation_entities(session: &Session, object: u32) -> Vec<u32> {
         if object == sid("player") {
             return session.player.as_ref().and_then(|p| p.entity).into_iter().collect();
@@ -1606,23 +1876,30 @@ impl NaughtyDogVm {
         let far = FOLLOW_DISTANCE;
         // Blocked closer than 2.5 m (inside rooms or the hanging car), the
         // camera rises over the player toward the clearest pitch.
-        let free_at = |pitch: f32| {
+        let free_at = |yaw: f32, pitch: f32| {
             let cy = pitch.cos();
-            let dir = [-p.view_yaw.sin() * cy, -pitch.sin(), p.view_yaw.cos() * cy];
+            let dir = [-yaw.sin() * cy, -pitch.sin(), yaw.cos() * cy];
             let want: [f32; 3] = std::array::from_fn(|k| target[k] + dir[k] * far);
             (dir, ground.raycast(target, want).map_or(far, |t| (t * far - 0.3).max(0.5)))
         };
-        let (mut dir, mut free) = free_at(p.view_pitch);
+        let (mut dir, mut free) = free_at(p.view_yaw, p.view_pitch);
+        // Then over the shoulders, then rising; the view yaw follows a
+        // sideways choice so the camera does not swing back next frame.
         if free < 2.5 {
-            for k in 1..=4 {
-                let (d, f) = free_at((p.view_pitch - 0.3 * k as f32).max(-1.4));
-                if f > free + 0.25 {
-                    (dir, free) = (d, f);
-                }
-                if free >= 2.5 {
-                    break;
+            let mut best = (0., p.view_pitch);
+            'search: for k in 0..=4 {
+                let pitch = (p.view_pitch - 0.3 * k as f32).max(-1.4);
+                for side in [0., 0.5, -0.5, 1., -1.] {
+                    let (d, f) = free_at(p.view_yaw + side, pitch);
+                    if f > free + 0.25 {
+                        (dir, free, best) = (d, f, (side, pitch));
+                    }
+                    if free >= 2.5 {
+                        break 'search;
+                    }
                 }
             }
+            p.view_yaw += best.0 * seconds.min(1.) * 2.;
         }
         p.view_distance = if free < p.view_distance { free } else { (p.view_distance + 2. * seconds).min(free) };
         let d = p.view_distance;
@@ -1680,6 +1957,23 @@ impl NaughtyDogVm {
             }
             let len = (mv[0] * mv[0] + mv[1] * mv[1]).sqrt();
             let heading = (len > 0.).then(|| mv[0].atan2(mv[1]));
+            // Ride the platform's motion since the last frame.
+            if let Some((id, before)) = p.platform {
+                if let Some(now) = session.ground.body_transform(id) {
+                    let delta = now * before.inverse();
+                    p.position = delta.transform_point3(glam::Vec3::from_array(p.position)).to_array();
+                    let f = delta.transform_vector3(glam::Vec3::new(p.yaw.sin(), 0., p.yaw.cos()));
+                    let turn = f.x.atan2(f.z) - p.yaw;
+                    if turn.abs() > 1e-6 {
+                        p.yaw += turn;
+                        p.view_yaw -= turn;
+                        if let Some(c) = p.anim.as_mut() {
+                            c.yaw = p.yaw;
+                        }
+                    }
+                    p.platform = Some((id, now));
+                }
+            }
             let movement = session.game.as_ref().map_or([0; 2], |g| g.rt.inner.movement);
             let below = session.ground.height(p.position[0], p.position[2], p.position[1] + 0.6);
             let grounded = p.fall >= 0. && below.is_some_and(|h| h >= p.position[1] - p.fall.max(0.) * seconds - 0.05);
@@ -1689,7 +1983,37 @@ impl NaughtyDogVm {
                 (Some(h0), Some(h1)) if grounded => (h1 - h0) / 0.5,
                 _ => 0.,
             };
+            // Hanging: sideways input along the edge, forward input over a
+            // standable top (within 0.35 m of the edge height, 0.45 m in),
+            // the drop key (C). Airborne: an edge in reach of the hands.
+            let mode = p.anim.as_ref().zip(session.anim_table.as_ref()).map_or(crate::player::Mode::Ground, |(a, t)| a.mode(t));
+            let facing = glam::Vec3::new(p.yaw.sin(), 0., p.yaw.cos());
+            let right = glam::Vec3::new(-facing.z, 0., facing.x);
+            let stick = if len > 0. { glam::Vec3::new(mv[0], 0., mv[1]) / len } else { glam::Vec3::ZERO };
+            let (mut lateral, mut climb, mut release) = (0., false, false);
+            if mode == crate::player::Mode::Hang {
+                if let Some(edge) = p.grip.and_then(|g| session.ground.edge(g.body, g.edge).map(|e| (g, e))).map(|(g, e)| edge_frame(&e, g.s)) {
+                    let probe = edge.transform_point3(glam::Vec3::new(0., 0., 0.45));
+                    let top = session.ground.height(probe.x, probe.z, probe.y + 0.35).filter(|h| (h - probe.y).abs() < 0.35);
+                    lateral = stick.dot(right);
+                    climb = stick.dot(facing) > 0.7 && top.is_some();
+                }
+                release = input.buttons_pressed & b::KEY_C != 0 || p.grip.is_some_and(|g| session.ground.edge(g.body, g.edge).is_none());
+            }
+            let reach = glam::Vec3::from_array(p.position) + glam::Quat::from_rotation_y(p.yaw) * HANG_REACH;
+            let candidate = if mode == crate::player::Mode::Ground && p.fall > -1. && (p.air_top.is_some() || p.fall > 0.) {
+                session
+                    .ground
+                    .edges_near(reach, 0.45)
+                    .into_iter()
+                    .filter(|(_, e, _)| glam::Vec3::new(-e.n1.x, 0., -e.n1.z).normalize_or_zero().dot(facing) > 0.3)
+                    .min_by(|a, b| crate::ground::segment_distance(reach, a.1.p0, a.1.p1).total_cmp(&crate::ground::segment_distance(reach, b.1.p0, b.1.p1)))
+            } else {
+                None
+            };
             let mut ground_speed = None;
+            let mut step_mode = mode;
+            let mut step_root = None;
             if let (Some(anim), Some(table), Some(graph), Some(id)) = (p.anim.as_mut(), session.anim_table.as_ref(), session.anim_graph.as_mut(), p.entity) {
                 let running = down(b::SHIFT);
                 let wanted = movement[usize::from(running)];
@@ -1702,10 +2026,16 @@ impl NaughtyDogVm {
                     slope,
                     movement: graph.movement_index(wanted).or_else(|| graph.movement_index(sid("run"))).unwrap_or(0),
                     weapon: graph.weapon_index(sid("no-weapon")).unwrap_or(1),
+                    grab: candidate.is_some(),
+                    lateral,
+                    climb,
+                    drop: release,
                     seconds,
                 };
                 match anim.step(graph, table, &session.player_clips, &frame) {
                     Ok(step) => {
+                        step_mode = step.mode;
+                        step_root = step.root.clone();
                         if let Some(state) = &step.state {
                             session.stage.log(format!("player state {state} at {:?} yaw {:.2}: {}", p.position.map(|v| (v * 100.).round() / 100.), anim.yaw, step.layers.iter().map(|l| format!("{}×{:.2}", l.clip, l.weight)).collect::<Vec<_>>().join(" ")));
                         }
@@ -1721,7 +2051,21 @@ impl NaughtyDogVm {
                     Err(e) => session.stage.log(format!("player animation: {e:#}")),
                 }
             }
+            // On an edge the root follows the grip, not the ground.
+            if step_mode != crate::player::Mode::Ground {
+                if p.grip.is_none() {
+                    // A grab (or a hang without a grip): the nearest edge
+                    // in reach.
+                    let found = candidate.or_else(|| session.ground.edges_near(reach, 0.6).into_iter().min_by(|a, b| crate::ground::segment_distance(reach, a.1.p0, a.1.p1).total_cmp(&crate::ground::segment_distance(reach, b.1.p0, b.1.p1))));
+                    p.grip = found.map(|(edge, e, body)| Grip { body, edge, s: (reach - e.p0).dot((e.p1 - e.p0).normalize_or_zero()).clamp(0., (e.p1 - e.p0).length()), climb: None });
+                }
+                Self::follow_grip(p, &session.ground, step_mode, step_root.as_ref());
+            } else if p.grip.take().is_some() {
+                p.air_top = None;
+            }
+            let on_edge = step_mode != crate::player::Mode::Ground && p.grip.is_some();
             let speed = match ground_speed {
+                _ if on_edge => 0.,
                 Some(v) => v,
                 None if len > 0. => {
                     p.yaw = mv[0].atan2(mv[1]);
@@ -1754,11 +2098,14 @@ impl NaughtyDogVm {
                     }
                 }
             }
-            match session.ground.height(p.position[0], p.position[2], p.position[1] + 0.6) {
+            let support = if on_edge { None } else { session.ground.support(p.position[0], p.position[2], p.position[1] + 0.6) };
+            p.platform = None;
+            match support.map(|(h, _)| h) {
                 Some(h) if p.fall >= 0. && h >= p.position[1] - p.fall * seconds - 0.05 => {
                     p.position[1] = h;
                     p.fall = 0.;
                     p.air_top = None;
+                    p.platform = support.and_then(|(_, body)| body).and_then(|b| session.ground.body_transform(b).map(|m| (b, m)));
                 }
                 // Climbing and hanging are not implemented: standing still
                 // above a drop of more than 8 m (the hanging car at the
@@ -1786,10 +2133,21 @@ impl NaughtyDogVm {
             }
             // A camera the scripts enabled (`cam-…` spawners) replaces the
             // follow camera.
-            match session.stage.camera.and_then(|c| session.stage.spawners.get(&c)) {
-                Some(cam) => world.push(Self::spawner_camera(cam)),
-                None => world.push(Self::follow(p, &session.ground, seconds)),
-            }
+            // Cameras parented to a moved object follow its pose.
+            let scripted = session.stage.camera.and_then(|c| {
+                let mut cam = session.stage.spawners.get(&c)?.clone();
+                if let Some(m) = session.stage.poses.get(&c) {
+                    let (_, r, t) = m.to_scale_rotation_translation();
+                    (cam.position, cam.rotation) = (t.to_array(), r.to_array());
+                }
+                Some(cam)
+            });
+            let mut camera = match scripted.as_ref() {
+                Some(cam) => Self::spawner_camera(cam),
+                None => Self::follow(p, &session.ground, seconds),
+            };
+            Self::animate_camera(session, &mut camera);
+            world.push(camera);
         }
         session.stage.player_locator = session.player.as_ref().map(|p| (p.position, glam::Quat::from_rotation_y(p.yaw).to_array()));
         if let Some((graph, table)) = session.npc_anim.as_mut() {
@@ -2025,6 +2383,19 @@ impl NaughtyDogVm {
         let asset = host.upload_model(self.client, 0x4e44_0000 + session.next_model, &glb)?;
         let triangles: usize = meshes.iter().flat_map(|m| &m.fragments).map(|f| f.triangles.len()).sum();
         let task = session.game.is_some();
+        // Native prop collision in the art-group frame (bind pose of the
+        // collision joints) and its climb edges.
+        let bind = |j: usize| own.as_ref().and_then(|s| s.inverse_bind.get(j)).map(|m| glam::Mat4::from_cols_array(m).inverse());
+        let collision = if task && binding.is_none() {
+            crate::collision::prop_objects(&loaded, &bind).unwrap_or_else(|e| {
+                session.stage.log(format!("art {art}: collision: {e:#}"));
+                Vec::new()
+            })
+        } else {
+            Vec::new()
+        };
+        let collision_triangles: Vec<_> = collision.iter().flat_map(|o| o.triangles.iter().copied()).collect();
+        let collision_edges: Vec<_> = collision.iter().flat_map(|o| o.features.edges.iter().copied()).collect();
         for s in spawners {
             session.next_model += 1;
             let id = 0x100 + session.next_model;
@@ -2034,7 +2405,11 @@ impl NaughtyDogVm {
             // Props collide (as movable bodies); characters do not.
             if task && binding.is_none() {
                 let m = glam::Mat4::from_rotation_translation(q, glam::Vec3::from_array(s.position));
-                session.ground.add_body(id, &meshes, m.to_cols_array(), visible);
+                if collision_triangles.is_empty() {
+                    session.ground.add_body(id, &meshes, m.to_cols_array(), visible);
+                } else {
+                    session.ground.add_body_collision(id, &collision_triangles, &collision_edges, m.to_cols_array(), visible);
+                }
             }
             world.push(json!({"op": "spawn", "entity": {"id": id, "name": format!("{art}:{}", s.name), "visible": visible, "transform": {"translation": s.position, "rotation_degrees": [x.to_degrees(), y.to_degrees(), z.to_degrees()], "scale": [1.0, 1.0, 1.0]}, "geometry": {"kind": "scene", "asset": asset.relative()}}}));
             let driven = npc_key.as_ref().filter(|k| session.npc_clips.get(*k).is_some_and(|c| !c.is_empty()) && session.npc_anim.is_some());
@@ -2179,9 +2554,44 @@ impl crysirror_runtime::runtime::VmFactory for Factory {
 fn clip_infos(clips: &[crate::anim::Clip]) -> HashMap<u32, crate::player::ClipInfo> {
     clips
         .iter()
-        .map(|c| (sid(&c.name), crate::player::ClipInfo { name: c.name.clone(), duration: if c.frames > 1 { c.frames as f32 / c.fps.max(1.) } else { 0. }, speed: c.root_speed, additive: is_additive(&c.name) }))
+        .map(|c| {
+            // The action-pack reference in clip space, `align(0) ·
+            // apReference(0)`; clips without one store zeros.
+            let ap = match (c.align.first(), c.ap_reference.first()) {
+                (Some(&(at, ar)), Some(&(pt, pr))) if pt.length_squared() > 1e-8 => Some((at + ar * pt, ar * pr)),
+                _ => None,
+            };
+            let info = crate::player::ClipInfo { name: c.name.clone(), duration: if c.frames > 1 { c.frames as f32 / c.fps.max(1.) } else { 0. }, speed: c.root_speed, additive: is_additive(&c.name), fps: c.fps, align: c.align.clone(), ap };
+            (sid(&c.name), info)
+        })
         .collect()
 }
+
+/// A grip on a climb edge: the edge (a body's or the level's), the grab
+/// point's distance from `p0`, and the edge frame a climb began from.
+#[derive(Clone, Copy, Debug)]
+struct Grip {
+    body: Option<u32>,
+    edge: usize,
+    s: f32,
+    climb: Option<glam::Mat4>,
+}
+
+/// The frame of an edge at `s` metres from `p0`: at the grab point, +z
+/// into the wall (against the wall normal `n1`), +y up.
+fn edge_frame(e: &crate::collision::Edge, s: f32) -> glam::Mat4 {
+    let d = (e.p1 - e.p0).normalize_or_zero();
+    let mut f = glam::Vec3::new(-e.n1.x, 0., -e.n1.z);
+    if f.length_squared() < 1e-6 {
+        f = d.cross(glam::Vec3::Y);
+    }
+    let f = f.normalize_or_zero();
+    glam::Mat4::from_rotation_translation(glam::Quat::from_rotation_y(f.x.atan2(f.z)), e.p0 + d * s)
+}
+
+/// The root of the default hang (`ledge-grab-idle-hurt`): the edge 1.53 m
+/// above and 0.5 m ahead.
+const HANG_REACH: glam::Vec3 = glam::Vec3::new(-0.046, 1.525, 0.5);
 
 /// Additive clips carry an `add` name segment (`idle-base-big-add`,
 /// `look-add--up-down`, `ef-walk-add-look--up-down`); their channels are

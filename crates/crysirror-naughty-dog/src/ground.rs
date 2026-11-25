@@ -1,10 +1,15 @@
 // SPDX-License-Identifier: MPL-2.0
-//! Walkable surfaces of the placed level meshes for keeping the player on
-//! the ground: upward-facing triangles bucketed in a horizontal grid.
-//! Native collision (Havok data in the level packages) is not used; this
-//! is the viewer's ground model (SATD-nd-retail-runtime). Spawned art
-//! groups are movable bodies tested at their current transform.
+//! Walkable surfaces and solids for the player and camera, and the climb
+//! edges: upward-facing triangles bucketed in a horizontal grid, every
+//! triangle in a ray hierarchy. Native collision ([`crate::collision`]) is
+//! used where a package has it (its PAT flags decide what stands and
+//! blocks); packages without it fall back to their render triangles. The
+//! queries are the viewer's, not Havok's (SATD-nd-retail-runtime). Spawned
+//! art groups are movable bodies tested at their current transform; their
+//! edges move with them.
+use crate::collision::{self, Edge, Triangle};
 use crate::{mesh::Mesh, scene};
+use glam::{Mat4, Vec3};
 use std::collections::HashMap;
 
 const CELL: f32 = 4.;
@@ -20,6 +25,8 @@ pub struct Ground {
     /// hierarchy (built by [`Ground::prepare`]).
     solid: Vec<[[f32; 3]; 3]>,
     nodes: Vec<Node>,
+    /// Level climb edges (world space).
+    edges: Vec<Edge>,
     /// Spawned art groups, which scripts can move (`animate` root motion):
     /// tested at their current transform.
     bodies: HashMap<u32, Body>,
@@ -29,15 +36,23 @@ pub struct Ground {
 struct Body {
     local: Vec<[[f32; 3]; 3]>,
     world: Vec<[[f32; 3]; 3]>,
+    /// Per triangle: whether it can be stood on (not `NoStand`).
+    stand: Vec<bool>,
+    edges_local: Vec<Edge>,
+    edges: Vec<Edge>,
     lo: [f32; 3],
     hi: [f32; 3],
     enabled: bool,
+    /// Column-major world transform.
+    transform: [f32; 16],
 }
 
 impl Body {
     fn place(&mut self, m: [f32; 16]) {
+        self.transform = m;
         let tf = |p: [f32; 3]| -> [f32; 3] { std::array::from_fn(|c| p[0] * m[c] + p[1] * m[4 + c] + p[2] * m[8 + c] + m[12 + c]) };
         self.world = self.local.iter().map(|t| t.map(tf)).collect();
+        self.edges = collision::FeatureDb { edges: self.edges_local.clone(), corners: Vec::new() }.transformed(Mat4::from_cols_array(&m)).edges;
         self.lo = [f32::MAX; 3];
         self.hi = [f32::MIN; 3];
         for v in self.world.iter().flatten() {
@@ -102,27 +117,47 @@ impl Ground {
                             let p = f.positions[v as usize];
                             std::array::from_fn(|c| p[0] * t[c] + p[1] * t[4 + c] + p[2] * t[8 + c] + t[12 + c])
                         });
-                        self.add_solid(p);
-                        let (u, w) = (sub(p[1], p[0]), sub(p[2], p[0]));
-                        let n = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
-                        let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
-                        if !(len > 1e-8) || (n[1] / len).abs() < MIN_UP {
-                            continue;
-                        }
-                        let id = self.tris.len() as u32;
-                        self.tris.push(p);
-                        let (x0, x1) = (cell(p.iter().map(|v| v[0]).fold(f32::MAX, f32::min)), cell(p.iter().map(|v| v[0]).fold(f32::MIN, f32::max)));
-                        let (z0, z1) = (cell(p.iter().map(|v| v[2]).fold(f32::MAX, f32::min)), cell(p.iter().map(|v| v[2]).fold(f32::MIN, f32::max)));
-                        if (x1 - x0) > 64 || (z1 - z0) > 64 {
-                            continue;
-                        }
-                        for x in x0..=x1 {
-                            for z in z0..=z1 {
-                                self.cells.entry((x, z)).or_default().push(id);
-                            }
-                        }
+                        self.add_triangle(p, true);
                     }
                 }
+            }
+        }
+    }
+
+    /// Add native collision triangles (level space). `PassThru` and water
+    /// surfaces do not block; `NoStand` ones block but cannot be stood on.
+    pub fn add_collision(&mut self, triangles: &[Triangle]) {
+        for t in triangles {
+            if self.tris.len() >= MAX_TRIANGLES {
+                return;
+            }
+            if t.pat & (collision::PAT_PASS_THRU | collision::PAT_WATER) != 0 {
+                continue;
+            }
+            self.add_triangle(t.vertices.map(|v| v.to_array()), t.pat & collision::PAT_NO_STAND == 0);
+        }
+    }
+
+    /// Add climb edges in world space.
+    pub fn add_edges(&mut self, edges: &[Edge]) {
+        self.edges.extend_from_slice(edges);
+    }
+
+    fn add_triangle(&mut self, p: [[f32; 3]; 3], stand: bool) {
+        self.add_solid(p);
+        if !stand || !walkable(&p) {
+            return;
+        }
+        let id = self.tris.len() as u32;
+        self.tris.push(p);
+        let (x0, x1) = (cell(p.iter().map(|v| v[0]).fold(f32::MAX, f32::min)), cell(p.iter().map(|v| v[0]).fold(f32::MIN, f32::max)));
+        let (z0, z1) = (cell(p.iter().map(|v| v[2]).fold(f32::MAX, f32::min)), cell(p.iter().map(|v| v[2]).fold(f32::MIN, f32::max)));
+        if (x1 - x0) > 64 || (z1 - z0) > 64 {
+            return;
+        }
+        for x in x0..=x1 {
+            for z in z0..=z1 {
+                self.cells.entry((x, z)).or_default().push(id);
             }
         }
     }
@@ -153,9 +188,51 @@ impl Ground {
                 }
             }
         }
-        let mut body = Body { local, world: Vec::new(), lo: [0.; 3], hi: [0.; 3], enabled };
+        let stand = vec![true; local.len()];
+        let mut body = Body { local, world: Vec::new(), stand, edges_local: Vec::new(), edges: Vec::new(), lo: [0.; 3], hi: [0.; 3], enabled, transform: [0.; 16] };
         body.place(world);
         self.bodies.insert(id, body);
+    }
+
+    /// Add an entity's native collision (art-group frame) and climb edges
+    /// as a movable body at column-major `world`.
+    pub fn add_body_collision(&mut self, id: u32, triangles: &[Triangle], edges: &[Edge], world: [f32; 16], enabled: bool) {
+        let solid: Vec<&Triangle> = triangles.iter().filter(|t| t.pat & (collision::PAT_PASS_THRU | collision::PAT_WATER) == 0).take(MAX_BODY_TRIANGLES).collect();
+        let local = solid.iter().map(|t| t.vertices.map(|v| v.to_array())).collect();
+        let stand = solid.iter().map(|t| t.pat & collision::PAT_NO_STAND == 0).collect();
+        let mut body = Body { local, world: Vec::new(), stand, edges_local: edges.to_vec(), edges: Vec::new(), lo: [0.; 3], hi: [0.; 3], enabled, transform: [0.; 16] };
+        body.place(world);
+        self.bodies.insert(id, body);
+    }
+
+    /// Climb edges within `radius` of `point` whose top face points up
+    /// (the native query keeps `dot(up, n0) ≥ 0.707`, `sub_4F8318`), with
+    /// the body carrying each (`None`: the level).
+    pub fn edges_near(&self, point: Vec3, radius: f32) -> Vec<(usize, Edge, Option<u32>)> {
+        let near = |e: &Edge| e.n0.y >= 0.707 && segment_distance(point, e.p0, e.p1) <= radius;
+        let mut out: Vec<(usize, Edge, Option<u32>)> = self.edges.iter().enumerate().filter(|(_, e)| near(e)).map(|(i, e)| (i, *e, None)).collect();
+        for (id, b) in self.bodies.iter().filter(|(_, b)| b.enabled) {
+            out.extend(b.edges.iter().enumerate().filter(|(_, e)| near(e)).map(|(i, e)| (i, *e, Some(*id))));
+        }
+        out
+    }
+
+    /// Edge `index` of a body (`None`: the level), in world space.
+    pub fn edge(&self, body: Option<u32>, index: usize) -> Option<Edge> {
+        match body {
+            Some(id) => self.bodies.get(&id).filter(|b| b.enabled).and_then(|b| b.edges.get(index)).copied(),
+            None => self.edges.get(index).copied(),
+        }
+    }
+
+    /// A body's current edges (world space).
+    pub fn body_edges(&self, id: u32) -> &[Edge] {
+        self.bodies.get(&id).map_or(&[], |b| b.edges.as_slice())
+    }
+
+    /// The level edges (world space).
+    pub fn level_edges(&self) -> &[Edge] {
+        &self.edges
     }
 
     /// Move a body to column-major `world`.
@@ -285,10 +362,21 @@ impl Ground {
 
     /// The highest walkable surface at `(x, z)` not above `top`.
     pub fn height(&self, x: f32, z: f32, top: f32) -> Option<f32> {
-        let mut best: Option<f32> = None;
-        let bodies = self.live_bodies().filter(|b| (b.lo[0]..=b.hi[0]).contains(&x) && (b.lo[2]..=b.hi[2]).contains(&z)).flat_map(|b| b.world.iter().filter(|t| walkable(t)));
-        let fixed = self.cells.get(&(cell(x), cell(z))).into_iter().flatten().map(|id| &self.tris[*id as usize]);
-        for &[a, b, c] in fixed.chain(bodies) {
+        self.support(x, z, top).map(|(h, _)| h)
+    }
+
+    /// A body's column-major world transform.
+    pub fn body_transform(&self, id: u32) -> Option<Mat4> {
+        self.bodies.get(&id).map(|b| Mat4::from_cols_array(&b.transform))
+    }
+
+    /// [`Ground::height`] with the body that surface belongs to (`None`:
+    /// the level).
+    pub fn support(&self, x: f32, z: f32, top: f32) -> Option<(f32, Option<u32>)> {
+        let mut best: Option<(f32, Option<u32>)> = None;
+        let bodies = self.bodies.iter().filter(|(_, b)| b.enabled && (b.lo[0]..=b.hi[0]).contains(&x) && (b.lo[2]..=b.hi[2]).contains(&z)).flat_map(|(id, b)| b.world.iter().zip(&b.stand).filter(|(t, s)| **s && walkable(t)).map(move |(t, _)| (t, Some(*id))));
+        let fixed = self.cells.get(&(cell(x), cell(z))).into_iter().flatten().map(|id| (&self.tris[*id as usize], None));
+        for (&[a, b, c], owner) in fixed.chain(bodies) {
             let d = (b[2] - c[2]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[2] - c[2]);
             if d.abs() < 1e-9 {
                 continue;
@@ -300,8 +388,8 @@ impl Ground {
                 continue;
             }
             let y = l1 * a[1] + l2 * b[1] + l3 * c[1];
-            if y <= top && best.is_none_or(|h| y > h) {
-                best = Some(y);
+            if y <= top && best.is_none_or(|(h, _)| y > h) {
+                best = Some((y, owner));
             }
         }
         best
@@ -313,6 +401,13 @@ fn walkable(p: &[[f32; 3]; 3]) -> bool {
     let n = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
     let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
     len > 1e-8 && (n[1] / len).abs() >= MIN_UP
+}
+
+/// Distance from `p` to the segment `a`–`b`.
+pub fn segment_distance(p: Vec3, a: Vec3, b: Vec3) -> f32 {
+    let d = b - a;
+    let t = if d.length_squared() > 1e-12 { ((p - a).dot(d) / d.length_squared()).clamp(0., 1.) } else { 0. };
+    p.distance(a + d * t)
 }
 
 fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
