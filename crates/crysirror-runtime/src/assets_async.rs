@@ -93,11 +93,14 @@ struct Entry {
     leased: bool,
     touched: web_time::Instant,
     status: AssetStatus,
+    // A decoded payload that would fit once other owners release residency.
+    // Keep only its size, never the rejected allocation.
+    blocked_bytes: Option<usize>,
     job: Option<Task<Prepared>>,
     value: Option<Prepared>,
 }
 impl Entry {
-    fn reclaimable(&self) -> bool {
+    fn cache_owned(&self) -> bool {
         self.automatic
             && self.pins.load(Ordering::Acquire) == 0
             && match &self.value {
@@ -165,43 +168,64 @@ impl AsyncAssets {
         ensure!(entry.status.ticket == t, "foreign asset ticket");
         Ok(entry)
     }
-    fn make_room(&mut self, bytes: usize, protected: Option<u64>) -> bool {
+    fn remove_entry(&mut self, id: u64) {
+        let entry = self.entries.remove(&id).expect("existing asset entry");
+        let status = entry.status;
+        self.resident -= status.bytes;
+        self.keys
+            .remove(&(ClientId(status.ticket.client), status.kind, status.path));
+    }
+
+    fn eviction_candidates(&self) -> impl Iterator<Item = (&u64, &Entry)> {
+        self.entries
+            .iter()
+            .filter(|(_, entry)| entry.status.bytes != 0 && entry.cache_owned())
+    }
+
+    fn make_room(&mut self, bytes: usize) -> bool {
         let Some(budget) = self.budget else {
             return self.resident.checked_add(bytes).is_some();
         };
-        let Some(limit) = budget.checked_sub(bytes) else { return false };
+        let Some(limit) = budget.checked_sub(bytes) else {
+            return false;
+        };
         if self.resident <= limit {
             return true;
         }
-        // Under pressure the five-second idle grace gives way to admission.
-        // Preserve explicit tickets, live consumers and the caller's lookup.
-        let mut unused: Vec<_> = self.entries.iter()
-            .filter(|(id, e)| Some(**id) != protected && e.status.bytes > 0 && e.reclaimable())
+        let candidates = self.eviction_candidates();
+        let mut victims: Vec<_> = candidates
             .map(|(&id, e)| (e.touched, id, e.status.bytes))
             .collect();
-        if unused.iter().map(|&(_, _, size)| size).sum::<usize>() < self.resident - limit {
+        if victims.iter().map(|v| v.2).sum::<usize>() < self.resident - limit {
             return false;
         }
-        unused.sort_unstable();
-        for (_, id, _) in unused {
-            let e = self.entries.remove(&id).unwrap();
-            self.keys.remove(&(ClientId(e.status.ticket.client), e.status.kind, e.status.path));
-            self.resident -= e.status.bytes;
-            if self.resident <= limit { break; }
+        victims.sort_unstable();
+        for (_, id, _) in victims {
+            self.remove_entry(id);
+            if self.resident <= limit {
+                break;
+            }
         }
         true
     }
-    fn finish(&mut self, id: u64, result: Result<Prepared>, protected: Option<u64>) {
+
+    fn finish(&mut self, id: u64, result: Result<Prepared>) {
         match result {
             Ok(value) => {
                 let bytes = value.bytes();
-                let fits = self.make_room(bytes, protected);
+                let fits = self.make_room(bytes);
                 let e = self.entries.get_mut(&id).unwrap();
                 if !fits {
                     e.status.state = AssetState::Failed;
+                    e.blocked_bytes = self.budget.filter(|limit| bytes <= *limit).map(|_| bytes);
                     e.status.error = Some(match self.budget {
-                        Some(limit) => format!("prepared assets exceed {} MiB budget", limit / (1024 * 1024)),
-                        None => "prepared asset byte accounting overflow".to_owned(),
+                        Some(limit) => format!(
+                            "prepared assets exceed {} MiB budget (resident={} bytes, incoming={} bytes)",
+                            limit / (1024 * 1024),
+                            self.resident,
+                            bytes
+                        ),
+                        None => "prepared asset byte accounting overflow".into(),
                     });
                 } else {
                     self.resident += bytes;
@@ -217,18 +241,28 @@ impl AsyncAssets {
             }
         }
     }
-    fn poll(&mut self, protected: Option<u64>) {
-        let ids: Vec<_> = self.entries.iter()
-            .filter_map(|(&id, e)| e.job.is_some().then_some(id))
+    // A lookup must not publish an unrelated completion that evicts the very
+    // ticket being inspected. The regular runtime poll services all workers.
+    fn poll_one(&mut self, id: u64) {
+        let Some(entry) = self.entries.get_mut(&id) else {
+            return;
+        };
+        let Some(job) = &mut entry.job else { return };
+        let result = job.try_take();
+        if !matches!(result, Ok(None)) {
+            entry.job = None;
+            self.finish(id, result.and_then(|v| v.context("asset result absent")));
+        }
+    }
+
+    fn poll(&mut self) {
+        let ids: Vec<_> = self
+            .entries
+            .iter()
+            .filter_map(|(&id, e)| e.job.as_ref().map(|_| id))
             .collect();
         for id in ids {
-            let entry = self.entries.get_mut(&id).unwrap();
-            let Some(job) = &mut entry.job else { continue };
-            let result = job.try_take();
-            if !matches!(result, Ok(None)) {
-                entry.job = None;
-                self.finish(id, result.and_then(|v| v.context("asset result absent")), protected);
-            }
+            self.poll_one(id);
         }
     }
     pub fn invalidate(&mut self, client: ClientId) {
@@ -415,13 +449,30 @@ impl Assets {
         let path = VfsPath::new(Mount::Asset, path)?.relative().to_owned();
         self.key(client, &path)?;
         let key = (client, kind, path.clone());
-        if let Some(id) = self.asynchronous.keys.get(&key) {
-            let entry = self.asynchronous.entries.get_mut(id).unwrap();
-            entry.touched = web_time::Instant::now();
-            if explicit {
-                entry.automatic = false;
+        if let Some(&id) = self.asynchronous.keys.get(&key) {
+            let cache = &mut self.asynchronous;
+            let entry = &cache.entries[&id];
+            let retry = entry.blocked_bytes.is_some_and(|bytes| {
+                let Some(budget) = cache.budget else { return false };
+                let required = bytes.saturating_sub(budget - cache.resident);
+                entry.cache_owned()
+                    && bytes <= budget
+                    && (required == 0
+                        || cache
+                            .eviction_candidates()
+                            .map(|(_, e)| e.status.bytes)
+                            .sum::<usize>()
+                            >= required)
+            });
+            if !retry {
+                let entry = cache.entries.get_mut(&id).unwrap();
+                entry.touched = web_time::Instant::now();
+                if explicit {
+                    entry.automatic = false;
+                }
+                return Ok(entry.status.ticket);
             }
-            return Ok(entry.status.ticket);
+            cache.remove_entry(id);
         }
         ensure!(
             self.asynchronous.entries.len() < 4096,
@@ -517,6 +568,7 @@ impl Assets {
                 pins: Arc::new(AtomicUsize::new(0)),
                 automatic: !explicit,
                 leased: false,
+                blocked_bytes: None,
                 touched: web_time::Instant::now(),
                 status: AssetStatus {
                     ticket,
@@ -544,7 +596,7 @@ impl Assets {
         }
     }
     pub fn poll_tasks(&mut self) {
-        self.asynchronous.poll(None)
+        self.asynchronous.poll()
     }
     /// Explicit offline readiness fence. Interactive hosts use task_status.
     pub fn wait_task(&mut self, client: ClientId, ticket: AssetTicket) -> Result<AssetStatus> {
@@ -558,13 +610,13 @@ impl Assets {
             .take()
         {
             let result = job.wait();
-            self.asynchronous.finish(ticket.id, result, None);
+            self.asynchronous.finish(ticket.id, result);
         }
         self.task_status(client, ticket)
     }
     pub fn task_status(&mut self, client: ClientId, ticket: AssetTicket) -> Result<AssetStatus> {
         self.asynchronous.entry(client, ticket)?;
-        self.asynchronous.poll(Some(ticket.id));
+        self.asynchronous.poll_one(ticket.id);
         Ok(self.asynchronous.entry(client, ticket)?.status.clone())
     }
     pub fn ticket(&self, client: ClientId, id: u64) -> Result<AssetTicket> {
@@ -621,16 +673,12 @@ impl Assets {
                 == 0,
             "asset is pinned by a streaming lease"
         );
-        let e = self.asynchronous.entries.remove(&ticket.id).unwrap();
-        self.asynchronous.resident -= e.status.bytes;
-        self.asynchronous
-            .keys
-            .remove(&(client, e.status.kind, e.status.path));
+        self.asynchronous.remove_entry(ticket.id);
         Ok(())
     }
     fn resolve(&mut self, client: ClientId, ticket: AssetTicket) -> Result<Option<&Prepared>> {
         self.asynchronous.entry(client, ticket)?;
-        self.asynchronous.poll(Some(ticket.id));
+        self.asynchronous.poll_one(ticket.id);
         if !self.asynchronous.nonblocking {
             if let Some(job) = self
                 .asynchronous
@@ -641,7 +689,7 @@ impl Assets {
                 .take()
             {
                 let result = job.wait();
-                self.asynchronous.finish(ticket.id, result, None);
+                self.asynchronous.finish(ticket.id, result);
             }
         }
         let entry = self.asynchronous.entry(client, ticket)?;
@@ -709,7 +757,8 @@ impl Assets {
         client: ClientId,
         ticket: AssetTicket,
     ) -> Result<Arc<crysirror_asset::ImportedModel>> {
-        self.poll_tasks();
+        self.asynchronous.entry(client, ticket)?;
+        self.asynchronous.poll_one(ticket.id);
         let entry = self.asynchronous.entry(client, ticket)?;
         match entry.value.as_ref() {
             Some(Prepared::Scene(v, _)) | Some(Prepared::Level(v, _, _)) => Ok(v.clone()),
@@ -724,7 +773,7 @@ impl Assets {
             .entries
             .iter()
             .filter(|(_, e)| {
-                e.reclaimable()
+                e.cache_owned()
                     && (e.leased
                         || (e.status.state != AssetState::Loading
                             && e.touched.elapsed().as_secs() >= 5))

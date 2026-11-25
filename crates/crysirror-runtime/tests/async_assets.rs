@@ -424,3 +424,133 @@ fn image_sequence_reclaims_old_frames_under_pressure_and_preserves_owners() {
     assert_eq!(next.rgba[..4], [7, 0, 0, 255]);
     assert_eq!(assets.tasks_inspect()["resident_bytes"], 5 * FRAME_BYTES);
 }
+
+#[test]
+fn image_admission_reclaims_only_the_needed_unowned_cache_entries() {
+    struct SizedImage;
+    impl crysirror_image::ImageDecoder for SizedImage {
+        fn decode(&self, data: &[u8]) -> anyhow::Result<crysirror_image::ImageSurface> {
+            let height = u32::from(data[0]) * 256;
+            Ok(crysirror_image::ImageSurface {
+                width: 1024,
+                height,
+                rgba: vec![0; height as usize * 4096],
+            })
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let mut assets = Assets::new(dir.path()).unwrap();
+    let client = ClientId(1);
+    assets.register(client, "").unwrap();
+    assets.set_prepared_budget(16 << 20).unwrap();
+    assets
+        .decoders
+        .register("sized", Arc::new(SizedImage))
+        .unwrap();
+    for (name, mib) in [
+        ("held", 4),
+        ("pinned", 4),
+        ("explicit", 2),
+        ("cold", 3),
+        ("warm", 3),
+        ("next", 3),
+        ("too-large", 17),
+        ("blocked", 8),
+    ] {
+        std::fs::write(dir.path().join(format!("{name}.sized")), [mib]).unwrap();
+    }
+    let held = assets.image_for(client, "held.sized").unwrap().unwrap();
+    let lease = assets
+        .lease(client, "pinned.sized", AssetKind::Image)
+        .unwrap();
+    assets.wait_task(client, lease.ticket()).unwrap();
+    let explicit = assets
+        .request(client, "explicit.sized", AssetKind::Image)
+        .unwrap();
+    assets.wait_task(client, explicit).unwrap();
+    for name in ["cold.sized", "warm.sized"] {
+        drop(assets.image_for(client, name).unwrap().unwrap());
+    }
+    let paths = |a: &Assets| -> Vec<String> {
+        a.tasks_inspect()["assets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|s| s["state"] == "ready")
+            .map(|s| s["path"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let before = paths(&assets);
+    assert!(assets.image_for(client, "too-large.sized").is_err());
+    assert!(assets.image_for(client, "blocked.sized").is_err());
+    assert_eq!(
+        paths(&assets),
+        before,
+        "unfulfillable requests preserve cached work"
+    );
+    assets.image_for(client, "next.sized").unwrap().unwrap();
+    assert_eq!(
+        paths(&assets),
+        [
+            "held.sized",
+            "pinned.sized",
+            "explicit.sized",
+            "warm.sized",
+            "next.sized"
+        ]
+    );
+    assert_eq!(assets.tasks_inspect()["resident_bytes"], 16 << 20);
+    assert!(Arc::ptr_eq(
+        &held,
+        &assets.image_for(client, "held.sized").unwrap().unwrap()
+    ));
+    assert_eq!(
+        assets.task_status(client, lease.ticket()).unwrap().state,
+        AssetState::Ready
+    );
+    assert_eq!(
+        assets.task_status(client, explicit).unwrap().state,
+        AssetState::Ready
+    );
+    drop(held);
+    // A transient admission failure from an automatic image request must
+    // recover when enough residency becomes reclaimable.
+    assets.image_for(client, "blocked.sized").unwrap().unwrap();
+    assert!(assets.tasks_inspect()["resident_bytes"].as_u64().unwrap() <= 16 << 20);
+}
+
+#[test]
+fn querying_an_unpinned_ticket_does_not_fail_an_unrelated_completion() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut assets = Assets::new(dir.path()).unwrap();
+    let client = ClientId(1);
+    assets.register(client, "").unwrap();
+    assets.set_prepared_budget(16 << 20).unwrap();
+    for path in ["first.bin", "second.bin"] {
+        std::fs::write(dir.path().join(path), vec![0; 9 << 20]).unwrap();
+    }
+    let lease = assets.lease(client, "first.bin", AssetKind::Bytes).unwrap();
+    let first = lease.ticket();
+    assert_eq!(
+        assets.wait_task(client, first).unwrap().state,
+        AssetState::Ready
+    );
+    drop(lease);
+    let second = assets
+        .request(client, "second.bin", AssetKind::Bytes)
+        .unwrap();
+    let start = Instant::now();
+    while assets.io_tasks().stats().completed < 2 {
+        assert!(start.elapsed() < Duration::from_secs(5));
+        std::thread::yield_now();
+    }
+    assert_eq!(
+        assets.task_status(client, first).unwrap().state,
+        AssetState::Ready
+    );
+    assert_eq!(
+        assets.wait_task(client, second).unwrap().state,
+        AssetState::Ready
+    );
+    assert!(assets.task_status(client, first).is_err());
+}
