@@ -167,3 +167,7 @@ Trigger regions (2026-11-25):
 
 - **Offline:** `examples/trigger_regions train-wreck-climb-fg-ingame10.pak continue-player car-b-seat cam-car-b-interior` reads 69 regions; every seat and interior camera spawner lies in `climb-car-1` (parent `train-wreck-car-b-1`), `continue-player-climb-1` in `rs-stick-to-move-drake-1`, and `continue-player-treadmill-1` in `rs-task-bench-climb-complete-1`, as the static analysis of the EBOOT tests predicts.
 - **Prologue run:** on the climb track the log shows `region enter` for `rs-stick-to-move-drake-1`, `rs-disable-circle-1`, `rs-camera-cut-compensate-1`, `rgn-fall-to-death-treadmill-1`, `rs-kill-journal-2` and `rs-cam-railing-center-1` at the start and `region exit rs-cam-railing-center-1` after climbing onto the platform, with no script errors.
+
+Materials (2026-11-25):
+
+- **Captures:** after the change the prologue capture shows the car metal matte with normal-map relief and the rock faces without the white grazing-angle sheen they had before. Painting the river material red in a test build left the pale flat region seen from 25–30 m above the cliffs unchanged: it is sky beyond the authored canyon geometry, not the river (`trnwrk-wide-river-water`, 509 × 1505 m at y −125), and does not appear from the player's position.

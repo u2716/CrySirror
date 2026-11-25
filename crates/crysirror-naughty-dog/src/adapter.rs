@@ -1960,7 +1960,7 @@ impl NaughtyDogVm {
                     }
                 }
             }
-            session.stage.log(format!("load region {} scheme {scheme}: {} displayed, {} not displayed", region.name, shown.len(), hidden.len()));
+            session.stage.log(format!("load region {} scheme {scheme}: displayed {shown:?}, not displayed {hidden:?}", region.name));
             plan.regions.push((region.name.clone(), scheme, shown, hidden));
         }
         Ok(())

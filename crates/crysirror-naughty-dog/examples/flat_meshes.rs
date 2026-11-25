@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
-//! Large flat placed meshes (horizontal extent over 40 m, height under
+//! Large flat placed meshes (column-major placements) (horizontal extent over 40 m, height under
 //! 4 m) of the given packages with their materials: water, cloud and
 //! fog planes.
 use anyhow::Result;
@@ -16,7 +16,7 @@ fn main() -> Result<()> {
                 let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
                 for p in m.fragments.iter().flat_map(|f| &f.positions) {
                     for c in 0..3 {
-                        let v = p[0] * t[4 * c] + p[1] * t[4 * c + 1] + p[2] * t[4 * c + 2] + t[4 * c + 3];
+                        let v = p[0] * t[c] + p[1] * t[4 + c] + p[2] * t[8 + c] + t[12 + c];
                         lo[c] = lo[c].min(v);
                         hi[c] = hi[c].max(v);
                     }

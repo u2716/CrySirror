@@ -416,20 +416,49 @@ pub fn document_lit(name: &str, meshes: &[Mesh], source: &dyn AssetReader, direc
             // cannot differ between instances of one glTF mesh).
             let bake = probes.filter(|p| !p.is_empty() && mesh.instances.len() == 1);
             let mut material = Material { name: group.material.name.clone(), base_color_texture: image, ..Default::default() };
-            if bake.is_some() {
-                material.engine = Some(crate::probes::baked_material(image, layer.as_ref()));
+            let mut engine = if bake.is_some() {
+                crate::probes::baked_material(image, layer.as_ref())
             } else if let Some(l) = layer {
                 // Without per-vertex data a height-mask blend falls back to
                 // the slope layering.
-                material.engine = Some(crysirror_asset::pbr::PbrMaterial {
+                crysirror_asset::pbr::PbrMaterial {
                     base_color_texture: image,
                     emissive_texture: l.top,
-                    metallic_factor: 0.,
-                    roughness_factor: 1.,
                     effect: Some(crysirror_scene::effect::ShaderEffect::SlopeLayerBlend { tint: l.tint }),
                     ..Default::default()
-                });
+                }
+            } else {
+                crysirror_asset::pbr::PbrMaterial { base_color_texture: image, ..Default::default() }
+            };
+            // The native passes shade diffuse light (pre-pass and probes)
+            // and add specular only through a `…-spec-mask` map: without
+            // one the surface reflects nothing. The first `…-normal` map of
+            // the passes perturbs the normal (DXT5 maps hold X in alpha and
+            // Y in green).
+            // `default-…` maps are the shared flat placeholders. Water
+            // binds an environment reflection map (`…-env-reflection`) that
+            // its program adds at 0.6 along the reflection vector: here a
+            // smooth specular reflects the environment instead.
+            let named = |role: &str| {
+                group.material.passes.iter().flatten().copied().find(|id| {
+                    textures.get(id).is_some_and(|d: &VramDesc| {
+                        let file = d.name.rsplit('/').find(|p| p.contains('.')).unwrap_or(&d.name).to_ascii_lowercase();
+                        file.contains(role) && !file.starts_with("default-")
+                    })
+                })
+            };
+            let normal = named("-normal");
+            let spec = named("spec");
+            let reflective = named("env-reflection").is_some();
+            engine.metallic_factor = 0.;
+            engine.roughness_factor = if reflective { 0.12 } else if spec.is_some() { 0.55 } else { 1. };
+            engine.specular_factor = if spec.is_some() || reflective { 1. } else { 0. };
+            engine.specular_texture = image_of(spec)?;
+            if let Some(id) = normal {
+                engine.normal_encoding = if textures.get(&id).is_some_and(|d| d.format == crate::texture::Format::Dxt5) { crysirror_scene::material::NormalEncoding::Ag } else { crysirror_scene::material::NormalEncoding::Rgb };
+                engine.normal_texture = image_of(Some(id))?;
             }
+            material.engine = Some(engine);
             doc.materials.push(material);
             let material = doc.materials.len() - 1;
             for f in &mesh.fragments[group.fragments.clone()] {

@@ -191,6 +191,8 @@ Spawner (+0x40) points to a parent spawner; locators of children are in the pare
 - **Slope:** `mix(top, side, saturate(1 − n.y))`. `trnwrk-snow-mod-cliff-cheap` puts rock under snow on the same UV (`TEX0 = v1.xyxy`). The `cliffwall-snow` and `snow-boulder` programs use a computed light grey on top (0.5 plus three saturated terms in gamma space). `trnwrk-tree-bark-cheap` carries snow on its bark.
 - **Height mask:** the side layer is weighted `saturate((mask.g − (1 + s)·m + 2s) / 2s)`, with `m` the vertex mask and `s` = `g_fBlendSoftness` (0.1). It appears in `trn-wide-mountains-snow/rock-to-snow`, 13 `ice-cave-temple` materials and the `menu-temple` gold and plaster blends.
 
+Shading follows the native passes: diffuse light from the pre-pass and probes, with specular only through a `…-spec-mask` sampler, so materials without one reflect nothing (the shared PBR environment reflection is off for them). The first non-placeholder `…-normal` sampler perturbs the normal; DXT5 normal maps hold X in alpha and Y in green (mean channels `(0, 136, 0, 139)`), DXT1 ones XYZ in RGB. Water binds an environment reflection map (`…-env-reflection`, 128² lat-long) that its program adds at 0.6 along the reflection vector over the scrolling colour; here a smooth specular reflects the environment instead.
+
 Pass 5 holds the albedo alone. Materials whose pass 0 binds none (`snow-ground-main-noblend`) take it from there.
 
 ## Hanging and climbing
