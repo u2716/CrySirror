@@ -112,7 +112,7 @@ pub fn pass_program(p: &Loaded, data: usize) -> Result<Vec<Instruction>> {
     Ok(decode(p.data.get(fp + code..fp + size).context("ND fragment program outside package")?))
 }
 
-/// The upper layer of a slope blend.
+/// The upper layer of a two-layer blend.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Top {
     /// The pass sampler with this index.
@@ -122,62 +122,150 @@ pub enum Top {
     Computed,
 }
 
-/// `colour = mix(top, side, saturate(1 − n.y))` with `n` the normalised
-/// world normal input `TEX2`: the side layer on walls, the top layer on
-/// upward-facing surfaces (the `train-wreck` snow programs).
+/// What weighs the side layer against the top layer.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct SlopeBlend {
+pub enum Weight {
+    /// `saturate(1 − n.y)` of the normalised world normal input `TEX2`:
+    /// the side layer on walls (the `train-wreck` snow programs).
+    Slope,
+    /// `saturate((mask.g − (1 + s)·m + 2s) / 2s)` with `m` the vertex
+    /// mask (`COL0.x`, attribute 0x15) and `mask` the green channel of a
+    /// pass sampler (`trn-wide-mountains-snow/rock-to-snow`, `s` =
+    /// `g_fBlendSoftness`).
+    Mask { sampler: u8, softness: f32 },
+}
+
+/// `colour = mix(top, side, weight)`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LayerBlend {
     pub side: u8,
     pub top: Top,
+    pub weight: Weight,
+}
+
+/// Texture units 12 and up hold the light pre-pass buffers.
+pub const FIRST_GLOBAL_UNIT: u8 = 12;
+
+/// The texture unit of each pass sampler, from the pass data's parameter
+/// bindings (+0x14, count in the low half of word 2; 16-byte records `{u16
+/// register, u16, u32 class, u32 value, u32 name}`): the k-th material
+/// sampler binding (class low half 0x0202) gives sampler k + 1 its unit in
+/// the high half of the record's first word; class 0x0201 binds global
+/// buffers (pre-pass 12/13, the screen shadow). Sampler 0 is the shared
+/// placeholder (`rock-to-snow`: rock → 2, mask → 0, snow → 3).
+pub fn sampler_units(p: &Loaded, data: usize) -> Result<Vec<(u8, u8)>> {
+    let n = (p.u32(data + 8)? & 0xffff) as usize;
+    ensure!(n <= 256, "ND parameter binding count");
+    let table = p.ptr(data + 0x14)?;
+    let mut out = Vec::new();
+    for r in 0..n {
+        let at = table + 16 * r;
+        if p.u32(at + 4)? & 0xffff == 0x0202 {
+            let sampler = u8::try_from(out.len() + 1)?;
+            out.push(((p.u32(at)? >> 16) as u8, sampler));
+        }
+    }
+    Ok(out)
+}
+
+/// A weight term: the world normal's y, the vertex mask, or a texture
+/// channel (unit, component).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Symbol {
+    NormalY,
+    VertexMask,
+    Texture(u8, u8),
+}
+
+/// `Σ kᵢ·symbolᵢ + c`, saturated or not.
+#[derive(Clone, Debug, PartialEq)]
+struct Affine {
+    terms: Vec<(Symbol, f32)>,
+    c: f32,
+    saturated: bool,
+}
+
+impl Affine {
+    fn constant(c: f32) -> Self {
+        Self { terms: Vec::new(), c, saturated: false }
+    }
+    fn symbol(s: Symbol) -> Self {
+        Self { terms: vec![(s, 1.)], c: 0., saturated: false }
+    }
+    fn as_constant(&self) -> Option<f32> {
+        self.terms.is_empty().then_some(self.c)
+    }
+    fn add(&self, o: &Self) -> Self {
+        let mut terms = self.terms.clone();
+        for (s, k) in &o.terms {
+            match terms.iter_mut().find(|(t, _)| t == s) {
+                Some(t) => t.1 += k,
+                None => terms.push((*s, *k)),
+            }
+        }
+        terms.retain(|(_, k)| k.abs() > 1e-7);
+        Self { terms, c: self.c + o.c, saturated: false }
+    }
+    fn scale(&self, f: f32) -> Self {
+        Self { terms: self.terms.iter().map(|(s, k)| (*s, k * f)).collect(), c: self.c * f, saturated: false }
+    }
+    fn coefficient(&self, s: Symbol) -> f32 {
+        self.terms.iter().find(|(t, _)| *t == s).map_or(0., |t| t.1)
+    }
 }
 
 /// What the recogniser knows of one register component.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 enum Value {
     Unknown,
-    Const(f32),
+    Affine(Affine),
     /// Component `k` of the normalised world normal.
     Normal(u8),
-    /// `a · n.y + b`, saturated or not.
-    Linear { a: f32, b: f32, saturated: bool },
-    Texture(u8),
+    Texture(u8, u8),
     /// `texture − other` (`None`: a computed value).
     Difference(u8, Option<u8>),
-    Blend(SlopeBlend),
+    Blend(LayerBlend),
 }
 
-/// Texture units 12 and up hold the light pre-pass buffers; the units
-/// below take the pass's samplers in order (the bark programs sample from
-/// units 1–3, the snow ones from 0–2, each for samplers 0–2; inferred from
-/// what each unit is sampled with).
-pub const FIRST_GLOBAL_UNIT: u8 = 12;
-
-/// The pass sampler each texture unit below [`FIRST_GLOBAL_UNIT`] reads.
-pub fn unit_samplers(code: &[Instruction]) -> Vec<u8> {
-    let mut units: Vec<u8> = code.iter().filter(|i| matches!(i.op, TEX | 0x18 | 0x19 | 0x2f | 0x31) && i.texture < FIRST_GLOBAL_UNIT).map(|i| i.texture).collect();
-    units.sort_unstable();
-    units.dedup();
-    units
-}
-
-/// Find a slope blend: a texture difference scaled by
-/// `saturate(1 − n.y)` and added back to its second term. Layers are
-/// reported as pass sampler indices.
-pub fn slope_blend(code: &[Instruction]) -> Option<SlopeBlend> {
-    let units = unit_samplers(code);
-    let sampler = |unit: u8| units.iter().position(|u| *u == unit).map(|i| i as u8);
-    let blend = slope_units(code)?;
-    Some(SlopeBlend {
+/// Find a two-layer blend: a texture difference scaled by a recognised
+/// weight and added back to its second term. Layers are reported as pass
+/// sampler indices through `units` (texture unit, sampler).
+pub fn layer_blend(code: &[Instruction], units: &[(u8, u8)]) -> Option<LayerBlend> {
+    let sampler = |unit: u8| units.iter().find(|(u, _)| *u == unit).map(|(_, s)| *s);
+    let blend = blend_units(code)?;
+    Some(LayerBlend {
         side: sampler(blend.side)?,
         top: match blend.top {
             Top::Sampler(u) => Top::Sampler(sampler(u)?),
             Top::Computed => Top::Computed,
         },
+        weight: match blend.weight {
+            Weight::Mask { sampler: u, softness } => Weight::Mask { sampler: sampler(u)?, softness },
+            w => w,
+        },
     })
 }
 
-/// [`slope_blend`] in texture units.
-fn slope_units(code: &[Instruction]) -> Option<SlopeBlend> {
+/// The weight an affine saturated value stands for (texture units).
+fn weight_of(w: &Affine) -> Option<Weight> {
+    if !w.saturated {
+        return None;
+    }
+    let near = |a: f32, b: f32| (a - b).abs() < 1e-4 * (1. + b.abs());
+    if w.terms.len() == 1 && near(w.coefficient(Symbol::NormalY), -1.) && near(w.c, 1.) {
+        return Some(Weight::Slope);
+    }
+    // k·(mask − (1 + s)·m + 2s) with k = 1 / 2s.
+    let (mask, k) = w.terms.iter().find_map(|(s, k)| match s {
+        Symbol::Texture(u, 1) => Some((*u, *k)),
+        _ => None,
+    })?;
+    let s = 1. / (2. * k);
+    (w.terms.len() == 2 && k > 0. && near(w.coefficient(Symbol::VertexMask), -k * (1. + s)) && near(w.c, k * 2. * s)).then_some(Weight::Mask { sampler: mask, softness: s })
+}
+
+/// [`layer_blend`] in texture units.
+fn blend_units(code: &[Instruction]) -> Option<LayerBlend> {
     let mut regs: std::collections::HashMap<(bool, u8), [Value; 4]> = std::collections::HashMap::new();
     let mut found = None;
     for ins in code {
@@ -186,19 +274,19 @@ fn slope_units(code: &[Instruction]) -> Option<SlopeBlend> {
         let read = |s: &Source, k: usize| -> (Value, bool) {
             let c = usize::from(s.swizzle[k]);
             let v = match s.operand {
-                Operand::Const => Value::Const(ins.constant.map_or(0., |c4| c4[c])),
+                Operand::Const => Value::Affine(Affine::constant(ins.constant.map_or(0., |c4| c4[c]))),
+                Operand::Input(1) if c == 0 => Value::Affine(Affine::symbol(Symbol::VertexMask)),
                 Operand::Input(_) => Value::Unknown,
-                Operand::Temp { half, index } => regs.get(&(half, index)).map_or(Value::Unknown, |r| r[c]),
+                Operand::Temp { half, index } => regs.get(&(half, index)).map_or(Value::Unknown, |r| r[c].clone()),
             };
             (v, s.negate)
         };
         let signed = |(v, negate): (Value, bool)| match (v, negate) {
-            (Value::Const(x), true) => Value::Const(-x),
-            (Value::Linear { a, b, .. }, true) => Value::Linear { a: -a, b: -b, saturated: false },
-            (Value::Texture(_) | Value::Difference(..) | Value::Normal(_) | Value::Blend(_), true) => Value::Unknown,
+            (Value::Affine(a), true) => Value::Affine(a.scale(-1.)),
+            (Value::Texture(..) | Value::Difference(..) | Value::Normal(_) | Value::Blend(_), true) => Value::Unknown,
             (v, _) => v,
         };
-        let mut result = [Value::Unknown; 4];
+        let mut result: [Value; 4] = std::array::from_fn(|_| Value::Unknown);
         for (k, slot) in result.iter_mut().enumerate() {
             if !ins.mask[k] {
                 continue;
@@ -206,62 +294,73 @@ fn slope_units(code: &[Instruction]) -> Option<SlopeBlend> {
             let (a, b, c) = (signed(read(&ins.sources[0], k)), signed(read(&ins.sources[1], k)), signed(read(&ins.sources[2], k)));
             // `DIV` divides by the divisor's first component.
             let divisor = signed(read(&ins.sources[1], 0));
-            let linear = |v: Value| match v {
-                Value::Normal(1) => Some((1., 0.)),
-                Value::Linear { a, b, .. } => Some((a, b)),
-                Value::Const(x) => Some((0., x)),
+            let affine = |v: &Value| match v {
+                Value::Normal(1) => Some(Affine::symbol(Symbol::NormalY)),
+                Value::Texture(u, ch) => Some(Affine::symbol(Symbol::Texture(*u, *ch))),
+                Value::Affine(a) => Some(a.clone()),
                 _ => None,
             };
-            let folded = |a: f32, b: f32| if a == 0. { Value::Const(b) } else { Value::Linear { a, b, saturated: false } };
             *slot = match ins.op {
                 MOV => a,
-                TEX => Value::Texture(ins.texture),
+                TEX => Value::Texture(ins.texture, k as u8),
                 NRM if ins.sources[0].operand == Operand::Input(INPUT_TEX2) => Value::Normal(ins.sources[0].swizzle[k]),
                 NRM => match a {
                     Value::Normal(_) => Value::Normal(k as u8),
                     _ => Value::Unknown,
                 },
-                ADD => match (a, read(&ins.sources[1], k)) {
-                    (Value::Texture(t), (Value::Texture(u), true)) => Value::Difference(t, Some(u)),
-                    (Value::Texture(t), (Value::Unknown, true)) => Value::Difference(t, None),
-                    _ => match (linear(a), linear(b)) {
-                        (Some((p, q)), Some((r, s))) => folded(p + r, q + s),
+                ADD => match (&a, read(&ins.sources[1], k)) {
+                    (Value::Texture(t, _), (Value::Texture(u, _), true)) => Value::Difference(*t, Some(u)),
+                    (Value::Texture(t, _), (Value::Unknown, true)) => Value::Difference(*t, None),
+                    _ => match (affine(&a), affine(&b)) {
+                        (Some(x), Some(y)) => Value::Affine(x.add(&y)),
                         _ => Value::Unknown,
                     },
                 },
-                MUL | DIV => match (linear(a), if ins.op == DIV { divisor } else { b }) {
-                    (Some((p, q)), Value::Const(x)) if x != 0. => {
-                        let f = if ins.op == DIV { 1. / x } else { x };
-                        folded(p * f, q * f)
+                MUL | DIV => {
+                    let (x, y) = (affine(&a), affine(if ins.op == DIV { &divisor } else { &b }));
+                    match (x, y) {
+                        (Some(x), Some(y)) if ins.op == DIV => y.as_constant().filter(|d| *d != 0.).map_or(Value::Unknown, |d| Value::Affine(x.scale(1. / d))),
+                        (Some(x), Some(y)) => match (x.as_constant(), y.as_constant()) {
+                            (_, Some(f)) => Value::Affine(x.scale(f)),
+                            (Some(f), _) => Value::Affine(y.scale(f)),
+                            _ => Value::Unknown,
+                        },
+                        _ => Value::Unknown,
                     }
-                    _ => Value::Unknown,
-                },
-                MAD => match (a, b, c) {
-                    (Value::Linear { a, b, saturated: true }, Value::Difference(side, top), third) if (a + 1.).abs() < 1e-6 && (b - 1.).abs() < 1e-6 => {
+                }
+                MAD => match (&a, &b, &c) {
+                    (Value::Affine(w), Value::Difference(side, top), third) if weight_of(w).is_some() => {
                         let top = match (top, third) {
-                            (Some(u), Value::Texture(v)) if u == v => Some(Top::Sampler(u)),
+                            (Some(u), Value::Texture(v, _)) if u == v => Some(Top::Sampler(*u)),
                             (None, Value::Unknown) => Some(Top::Computed),
                             _ => None,
                         };
-                        top.map_or(Value::Unknown, |top| Value::Blend(SlopeBlend { side, top }))
+                        top.zip(weight_of(w)).map_or(Value::Unknown, |(top, weight)| Value::Blend(LayerBlend { side: *side, top, weight }))
                     }
-                    _ => Value::Unknown,
+                    _ => match (affine(&a), affine(&b), affine(&c)) {
+                        (Some(x), Some(y), Some(z)) => match (x.as_constant(), y.as_constant()) {
+                            (_, Some(f)) => Value::Affine(x.scale(f).add(&z)),
+                            (Some(f), _) => Value::Affine(y.scale(f).add(&z)),
+                            _ => Value::Unknown,
+                        },
+                        _ => Value::Unknown,
+                    },
                 },
                 _ => Value::Unknown,
             };
             if ins.saturate {
-                if let Value::Linear { a, b, .. } = *slot {
-                    *slot = Value::Linear { a, b, saturated: true };
+                if let Value::Affine(x) = slot {
+                    x.saturated = true;
                 }
             }
-            if let Value::Blend(s) = *slot {
-                found = Some(s);
+            if let Value::Blend(s) = slot {
+                found = Some(*s);
             }
         }
-        let entry = regs.entry((ins.half, ins.dst)).or_insert([Value::Unknown; 4]);
-        for k in 0..4 {
+        let entry = regs.entry((ins.half, ins.dst)).or_insert_with(|| std::array::from_fn(|_| Value::Unknown));
+        for (k, v) in result.into_iter().enumerate() {
             if ins.mask[k] {
-                entry[k] = result[k];
+                entry[k] = v;
             }
         }
     }
@@ -288,8 +387,6 @@ mod tests {
         let x = [true, false, false, false];
         // From `trnwrk-snow-mod-cliff-cheap` (shader 34 of `train-wreck-b`).
         let code = vec![
-            // Unit 0: the screen-space buffer of sampler 0.
-            ins(TEX, false, 8, x, 0, [none; 3], None),
             ins(TEX, false, 6, xyz, 1, [none; 3], None),
             ins(NRM, false, 5, xyz, 0, [src(Operand::Input(INPUT_TEX2), [0, 1, 2, 3], false), none, none], None),
             ins(ADD, false, 7, x, 0, [src(Operand::Const, [0; 4], false), src(Operand::Const, [1; 4], true), none], Some([0., 1., 0., 0.])),
@@ -301,7 +398,7 @@ mod tests {
             ins(ADD, false, 6, xyz, 0, [src(h(6), [0, 1, 2, 3], false), src(h(5), [0, 1, 2, 3], true), none], None),
             ins(MAD, false, 0, xyz, 0, [src(h(6), [3; 4], false), src(h(6), [0, 1, 2, 3], false), src(h(5), [0, 1, 2, 3], false)], None),
         ];
-        assert_eq!(slope_blend(&code), Some(SlopeBlend { side: 1, top: Top::Sampler(2) }));
+        assert_eq!(layer_blend(&code, &[(1, 1), (2, 2)]), Some(LayerBlend { side: 1, top: Top::Sampler(2), weight: Weight::Slope }));
     }
 
     #[test]

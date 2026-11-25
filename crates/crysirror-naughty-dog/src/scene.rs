@@ -373,9 +373,9 @@ pub fn document_lit(name: &str, meshes: &[Mesh], source: &dyn AssetReader, direc
             // single-texture pass (5) holds it.
             let role = |id: u32| textures.get(&id).map_or(0, |d: &VramDesc| texture_role(&d.name));
             let colour = |samplers: &[u32]| samplers.iter().copied().find(|id| role(*id) == 2 && !tiny(*id));
-            let slope = group.material.slope;
+            let layers = group.material.layers;
             let sampler = |i: u8| group.material.samplers.get(usize::from(i)).copied().filter(|id| !tiny(*id));
-            let chosen = match slope {
+            let chosen = match layers {
                 Some(s) => sampler(s.side),
                 None => colour(&group.material.samplers).or_else(|| group.material.base_color_with(|id| role(id) == 0 || tiny(id))),
             }
@@ -394,12 +394,22 @@ pub fn document_lit(name: &str, meshes: &[Mesh], source: &dyn AssetReader, direc
                 Ok(Some(doc.images.len() - 1))
             };
             let image = image_of(chosen)?;
-            // The upper slope layer: a sampler, or the light grey the
+            // The upper layer: a sampler, or the light grey the
             // `cliffwall-snow` programs compute (0.5 plus lighting terms;
-            // approximated, SATD-nd-retail-runtime).
-            let top = match slope.map(|s| s.top) {
-                Some(crate::rsx::Top::Sampler(i)) => Some((image_of(sampler(i))?, [1.; 3])),
-                Some(crate::rsx::Top::Computed) => Some((None, [COMPUTED_SNOW; 3])),
+            // approximated, SATD-nd-retail-runtime); a height-mask blend
+            // also binds its mask.
+            let layer = match layers {
+                Some(l) => {
+                    let (top, tint) = match l.top {
+                        crate::rsx::Top::Sampler(i) => (image_of(sampler(i))?, [1.; 3]),
+                        crate::rsx::Top::Computed => (None, [COMPUTED_SNOW; 3]),
+                    };
+                    let mask = match l.weight {
+                        crate::rsx::Weight::Mask { sampler: m, softness } => Some((image_of(group.material.samplers.get(usize::from(m)).copied())?, softness)),
+                        crate::rsx::Weight::Slope => None,
+                    };
+                    Some(crate::probes::Layer { top, tint, mask })
+                }
                 None => None,
             };
             // Baked lighting applies to meshes placed once (per-vertex data
@@ -407,14 +417,16 @@ pub fn document_lit(name: &str, meshes: &[Mesh], source: &dyn AssetReader, direc
             let bake = probes.filter(|p| !p.is_empty() && mesh.instances.len() == 1);
             let mut material = Material { name: group.material.name.clone(), base_color_texture: image, ..Default::default() };
             if bake.is_some() {
-                material.engine = Some(crate::probes::baked_material(image, top));
-            } else if let Some((layer, tint)) = top {
+                material.engine = Some(crate::probes::baked_material(image, layer.as_ref()));
+            } else if let Some(l) = layer {
+                // Without per-vertex data a height-mask blend falls back to
+                // the slope layering.
                 material.engine = Some(crysirror_asset::pbr::PbrMaterial {
                     base_color_texture: image,
-                    emissive_texture: layer,
+                    emissive_texture: l.top,
                     metallic_factor: 0.,
                     roughness_factor: 1.,
-                    effect: Some(crysirror_scene::effect::ShaderEffect::SlopeLayerBlend { tint }),
+                    effect: Some(crysirror_scene::effect::ShaderEffect::SlopeLayerBlend { tint: l.tint }),
                     ..Default::default()
                 });
             }
@@ -429,10 +441,17 @@ pub fn document_lit(name: &str, meshes: &[Mesh], source: &dyn AssetReader, direc
                     Some(r) if f.skin.len() == f.positions.len() => f.skin.iter().map(|v| influences(v, r.skeleton.names.len())).unzip(),
                     _ => (Vec::new(), Vec::new()),
                 };
-                let aux = match bake {
+                let mut aux = match bake {
                     Some(field) => crate::probes::bake(field, &placement(mesh, 0), &f.positions, &normals, &f.triangles),
                     None => Vec::new(),
                 };
+                // A height-mask blend reads the vertex mask (attribute
+                // 0x15 x) in `_AUX` w.
+                if group.material.layers.is_some_and(|l| matches!(l.weight, crate::rsx::Weight::Mask { .. })) && f.masks.len() == aux.len() {
+                    for (a, m) in aux.iter_mut().zip(&f.masks) {
+                        a[3] = m[0];
+                    }
+                }
                 primitives.push(Primitive {
                     positions: f.positions.clone(),
                     normals,

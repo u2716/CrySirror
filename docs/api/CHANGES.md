@@ -1,5 +1,9 @@
 # API change log
 
+## `7a50ef09e7ce0526` (2026-11-25) — height-mask layers
+
+`baked_vertex_irradiance` takes an optional `mask_layer` (`MaskLayer { tint, softness }`): the emissive-slot texture × `tint` covers the base where the vertex mask in `_AUX` w rises above the occlusion-slot texture's green channel, with the base weighted `saturate((mask − (1 + s)·m + 2s) / 2s)`. The occlusion slot then gives no occlusion. Omitted, materials are unchanged; struct literals of `BakedVertexIrradiance` need `mask_layer: None`. The previous fingerprint was `653c879dbcdae8ea`.
+
 ## `653c879dbcdae8ea` (2026-11-25) — slope layer blend
 
 `ShaderEffect.slope_layer_blend` mixes the base texture (walls) with the emissive-slot texture × `tint` (upward-facing surfaces) by `saturate(1 − n.y)` of the interpolated world normal. `baked_vertex_irradiance` takes an optional `slope_layer` tint for the same layering; omitted, materials are unchanged. Rust callers with exhaustive `ShaderEffect` matches need the new arm, and struct literals of `BakedVertexIrradiance` need `slope_layer: None`. The previous fingerprint was `9640ededc06f0fce`.

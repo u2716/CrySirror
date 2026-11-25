@@ -93,6 +93,13 @@ pub enum ShaderEffect {
         /// With a tint, also the [`ShaderEffect::SlopeLayerBlend`] layering.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         slope_layer: Option<[f32; 3]>,
+        /// A height-mask layering instead: the emissive-slot texture ×
+        /// `tint` over the base where the vertex mask (`_AUX` w) rises
+        /// above the occlusion-slot texture's green channel, weight
+        /// `saturate((mask − (1 + s)·m + 2s) / 2s)` for the base with `s`
+        /// the softness; the occlusion slot then gives no occlusion.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mask_layer: Option<MaskLayer>,
     },
     /// Two albedo layers by surface slope: the base texture on walls, the
     /// emissive-slot texture (white when unbound) × `tint` on upward-facing
@@ -155,8 +162,12 @@ impl ShaderEffect {
                 scale.iter().chain(offset).all(|v| v.is_finite()), "non-finite lightmap transform"
             ),
             Self::VertexLayerBlend => {}
-            Self::BakedVertexIrradiance { intensity, slope_layer } => ensure!(
-                intensity.is_finite() && (0. ..=64.).contains(intensity) && slope_layer.iter().flatten().all(|x| range(*x, 0., 16.)),
+            Self::BakedVertexIrradiance { intensity, slope_layer, mask_layer } => ensure!(
+                intensity.is_finite()
+                    && (0. ..=64.).contains(intensity)
+                    && slope_layer.iter().flatten().all(|x| range(*x, 0., 16.))
+                    && mask_layer.iter().all(|m| m.tint.iter().all(|x| range(*x, 0., 16.)) && range(m.softness, 1e-4, 16.))
+                    && !(slope_layer.is_some() && mask_layer.is_some()),
                 "baked irradiance parameter range"
             ),
             Self::SlopeLayerBlend { tint } => ensure!(tint.iter().all(|x| range(*x, 0., 16.)), "slope layer tint range"),
@@ -228,10 +239,14 @@ impl ShaderEffect {
                 6.
             }
             Self::VertexLayerBlend => 7.,
-            Self::BakedVertexIrradiance { intensity, slope_layer } => {
+            Self::BakedVertexIrradiance { intensity, slope_layer, mask_layer } => {
                 p[0][0] = *intensity;
                 if let Some(t) = slope_layer {
                     p[1] = [t[0], t[1], t[2], 1.];
+                }
+                if let Some(m) = mask_layer {
+                    p[1] = [m.tint[0], m.tint[1], m.tint[2], 2.];
+                    p[2][0] = m.softness;
                 }
                 8.
             }
@@ -277,6 +292,15 @@ mod tests {
                 .unwrap();
         }
     }
+}
+
+/// The height-mask layer of [`ShaderEffect::BakedVertexIrradiance`].
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MaskLayer {
+    #[serde(default = "white")]
+    pub tint: [f32; 3],
+    pub softness: f32,
 }
 
 fn white() -> [f32; 3] {

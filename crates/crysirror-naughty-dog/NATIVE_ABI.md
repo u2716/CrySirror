@@ -177,7 +177,12 @@ Spawner (+0x40) points to a parent spawner; locators of children are in the pare
 
 ## Material layering
 
-`src/rsx.rs` decodes RSX fragment programs (`MATERIAL_TABLE_1` shader +0xc; size at +0, microcode at +0x10; instruction words half-swapped) and recognizes slope layering: a texture difference scaled by `saturate(1 − n.y)` of the normalised `TEX2` world normal (vertex program: `v2 · c[8…10]`) and added back to its second term. `trnwrk-snow-mod-cliff-cheap` blends rock (sampler 1) under snow (sampler 2, same UV: `TEX0 = v1.xyxy`); the `cliffwall-snow` and `snow-boulder` programs blend their one texture with a computed light grey (0.5 plus three saturated terms in gamma space); `trnwrk-tree-bark-cheap` carries snow on its bark. Texture units below 12 take the pass samplers in order (units 12/13 are the light pre-pass buffers; the bark program uses units 1–3 for samplers 0–2), inferred from what each unit samples. Attribute 0x15 is read by these vertex programs (`COL0`) but not by these fragment programs. Pass 5 holds the albedo alone; materials whose pass 0 binds none (`snow-ground-main-noblend`) take it there.
+`src/rsx.rs` decodes RSX fragment programs. The shader table is `MATERIAL_TABLE_1` +0x1c; each program stores its size at +0 and its microcode at +0x10, with instruction words half-swapped. Passes bind texture units through their parameter table at pass data +0x14: 16-byte records `{u16 register, u16, u32 class, u32 value, u32 name}`, with the count in the low half of word 2 and names in a package string pool. A record of class 0x0202 binds the k-th material sampler (sampler k + 1) to the unit in its high half. Class 0x0201 binds global buffers: the light pre-pass on 12/13 and the screen shadow. In `rock-to-snow`, rock is unit 2, mask unit 0 and snow unit 3. The recogniser follows weights as affine sums of the world normal's y (`TEX2`, from `v2 · c[8…10]`), the vertex mask (`COL0.x`, attribute 0x15) and texture channels, and finds two-layer blends:
+
+- **Slope:** `mix(top, side, saturate(1 − n.y))`. `trnwrk-snow-mod-cliff-cheap` puts rock under snow on the same UV (`TEX0 = v1.xyxy`). The `cliffwall-snow` and `snow-boulder` programs use a computed light grey on top (0.5 plus three saturated terms in gamma space). `trnwrk-tree-bark-cheap` carries snow on its bark.
+- **Height mask:** the side layer is weighted `saturate((mask.g − (1 + s)·m + 2s) / 2s)`, with `m` the vertex mask and `s` = `g_fBlendSoftness` (0.1). It appears in `trn-wide-mountains-snow/rock-to-snow`, 13 `ice-cave-temple` materials and the `menu-temple` gold and plaster blends.
+
+Pass 5 holds the albedo alone. Materials whose pass 0 binds none (`snow-ground-main-noblend`) take it from there.
 
 ## Hanging and climbing
 

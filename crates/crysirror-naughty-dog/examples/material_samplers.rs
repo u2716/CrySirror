@@ -33,7 +33,7 @@ fn main() -> Result<()> {
                         .clone()
                 };
                 let row: Vec<String> = g.material.passes.iter().enumerate().map(|(i, pass)| format!("p{i}: {}", pass.iter().map(&mut describe).collect::<Vec<_>>().join(" "))).collect();
-                let row: Vec<String> = row.into_iter().chain(g.material.slope.map(|s| format!("slope {s:?}"))).collect();
+                let row: Vec<String> = row.into_iter().chain(g.material.layers.map(|s| format!("layers {s:?}"))).collect();
                 *seen.entry((g.material.name.clone(), row.join(" "))).or_insert(0) += 1;
             }
         }

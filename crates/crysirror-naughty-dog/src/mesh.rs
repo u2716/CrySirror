@@ -144,8 +144,8 @@ pub struct Material {
     pub samplers: Vec<u32>,
     /// Every pass's samplers, pass 0 first.
     pub passes: Vec<Vec<u32>>,
-    /// The slope layering pass 0's fragment program computes, if any.
-    pub slope: Option<crate::rsx::SlopeBlend>,
+    /// The two-layer blend pass 0's fragment program computes, if any.
+    pub layers: Option<crate::rsx::LayerBlend>,
 }
 
 impl Material {
@@ -402,9 +402,13 @@ fn material(p: &Loaded, m: usize) -> Result<Material> {
     };
     let list = p.ptr(m + 0x10)?;
     let samplers = pass_samplers(p.ptr(list)?)?;
-    let slope = p.ptr(p.ptr(list)? + 0x10).and_then(|data| crate::rsx::pass_program(p, data)).ok().and_then(|code| crate::rsx::slope_blend(&code));
+    let layers = p
+        .ptr(p.ptr(list)? + 0x10)
+        .and_then(|data| Ok((crate::rsx::pass_program(p, data)?, crate::rsx::sampler_units(p, data)?)))
+        .ok()
+        .and_then(|(code, units)| crate::rsx::layer_blend(&code, &units));
     let passes = (0..passes as usize).map(|i| p.ptr(list + 4 * i).and_then(pass_samplers)).collect::<Result<Vec<_>>>().unwrap_or_else(|_| vec![samplers.clone()]);
-    Ok(Material { name, samplers, passes, slope })
+    Ok(Material { name, samplers, passes, layers })
 }
 
 /// First word of the collision-mesh collections in actor packages (the

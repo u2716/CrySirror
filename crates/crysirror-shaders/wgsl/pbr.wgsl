@@ -646,9 +646,17 @@ fn fs_main(i: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec
         surface.emission = vec3<f32>(0.0);
     }
     // Slope layers (effect 9, or 8 with a tint): the emissive-slot texture
-    // × tint on upward-facing surfaces, the base on walls.
+    // × tint on upward-facing surfaces, the base on walls. Height-mask
+    // layers (effect 8, mode 2): the base where the occlusion-slot mask's
+    // green channel rises above the vertex mask (`_AUX` w).
+    let mask_layer = material.surface.y == 8.0 && material.effect_params[1].w > 1.5;
+    let layer_mask = textureSample(t_occlusion, s_material, uv).g;
     if material.surface.y == 9.0 || (material.surface.y == 8.0 && material.effect_params[1].w > 0.5) {
-        let w = clamp(1.0 - normalize(i.normal).y, 0.0, 1.0);
+        var w = clamp(1.0 - normalize(i.normal).y, 0.0, 1.0);
+        if mask_layer {
+            let soft = max(material.effect_params[2].x, 1e-4);
+            w = clamp((layer_mask - (1.0 + soft) * i.aux.w + 2.0 * soft) / (2.0 * soft), 0.0, 1.0);
+        }
         let top = layer_b.rgb * material.effect_params[1].rgb * material.base_color.rgb;
         surface.color = vec4<f32>(mix(top, surface.color.rgb, w), surface.color.a);
         surface.emission = vec3<f32>(0.0);
@@ -657,7 +665,7 @@ fn fs_main(i: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec
     let tn = decode_normal(textureSample(t_normal, s_material, uv));
     let specular_color = textureSample(t_specular, s_material, uv).rgb * material.surface.w;
     let occ_sample = textureSample(t_occlusion, s_material, uv);
-    let occ_tex = select(occ_sample.r, 1.0, material.surface.y == 6.0);
+    let occ_tex = select(occ_sample.r, 1.0, material.surface.y == 6.0 || mask_layer);
     // Toon: raw base, shadow (slot 3) and highlight (slot 6) samples.
     var toon_base = textureSample(t_base, s_material, uv);
     let toon_blend = textureSample(t_emissive, s_material, uv);
