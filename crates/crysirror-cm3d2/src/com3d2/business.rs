@@ -59,7 +59,7 @@ fn maid_widget(p: &str) -> bool {
 pub(super) fn wanted(scene: &str, p: &str) -> bool {
     match scene {
         "SceneCharacterSelect" => p.starts_with("UI Root/Parent/") && (
-            p.ends_with("/ButtonParent/Cancel") || p.ends_with("/ButtonParent/OK") ||
+            p.ends_with("/ButtonParent/Cancel") || p.ends_with("/ButtonParent/OK") || p.ends_with("/全選択") || p.ends_with("/全解除") ||
             p.contains("/ExplanatoryText") || p.ends_with("/CharacterSelectPanel/BG") ||
             p.ends_with("/CharacterSelectPanel/Contents") || p.ends_with(STAFFGRID)),
         "ResultIncomePanel" => p.contains("/ResultIncomePanel/") && !p.contains("/BonusIncome"),
@@ -275,6 +275,7 @@ pub(super) fn contains([x, y, w, h]: [f32; 4], i: &InputFrame) -> bool {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Action {
+    ShowGroup(bool),
     Ok,
     Cancel,
     Staff(usize),
@@ -521,6 +522,7 @@ impl Panel {
     }
     fn activate(&mut self, action: Action, s: &mut TjsState, now: u64) -> Result<()> {
         match action {
+            Action::ShowGroup(_) => bail!("unexpected character selection action on schedule"),
             Action::Cancel => bail!("unexpected schedule cancel"),
             Action::AssignUpgrade => {let (slot,shift)=self.selection.context("missing assignment cell")?; operations::upgrade::assign(s,slot,shift)?;}
             Action::WorkCategory => {
@@ -976,7 +978,7 @@ impl Panel {
                 .enumerate()
             {
                 for mut w in self.plate.clone() {
-                    if !prepare_plate(&mut w, id, self.picker.selected==Some(id), s, assets, host, client)? {continue;}
+                    if !prepare_plate(&mut w, id, self.picker.selected==Some(id) || self.picker.checked.contains(&id), s, assets, host, client)? {continue;}
                     let button = w.path.ends_with("/Button");
                     move_by(
                         &mut w,

@@ -341,6 +341,15 @@ pub(super) struct Tracking {
 }
 impl Tracking {
     /// ThumShot uses TransformPoint(localPosition + offset) on the posed HeadNub.
+    pub fn bone_position(&mut self,index:usize,m:&Maid,bone:&str,transform:Mat4,files:&GameFiles,op:&Opener,now:u64)->Result<Vec3>{
+        let file=m.slots.get("body").and_then(|body|body.model.as_deref()).context("missing actor body")?;
+        if self.rigs.get(&index).is_none_or(|rig|rig.file!=file){
+            self.rigs.insert(index,Skeleton::load(file,files,op)?);
+        }
+        let rig=self.rigs.get_mut(&index).unwrap();
+        let joint=rig.index(bone).with_context(||format!("missing camera target bone {bone}"))?;
+        Ok(rig.sample(m,files,op,now,transform)?.world(joint).transform_point3(Vec3::ZERO))
+    }
     pub fn photo_transform(
         &mut self,
         index: usize,

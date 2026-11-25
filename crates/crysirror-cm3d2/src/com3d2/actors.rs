@@ -21,6 +21,7 @@ pub(super) struct Actors {
     position: [f32; 3],
     rotation: [f32; 3],
     group_offset: [f32; 3],
+    group_rotation: [f32;3],
     last: Option<u64>,
 }
 
@@ -103,6 +104,21 @@ impl Actors {
         self.tracking.gaze(index);
         Ok(())
     }
+    fn group_frame(&self)->([f32;3],[f32;3]){
+        let parent=crate::chara::unity_euler(self.rotation);
+        let pos=glam::Vec3::from_array(self.position)+parent*glam::Vec3::from_array(self.group_offset);
+        if self.group_rotation==[0.;3]{return (pos.to_array(),self.rotation);}
+        let (y,x,z)=(parent*crate::chara::unity_euler(self.group_rotation)).to_euler(glam::EulerRot::YXZ);
+        (pos.to_array(),[x,y,z].map(f32::to_degrees))
+    }
+    pub fn examination_head(&mut self,files:&GameFiles,op:&Opener,now:u64)->Result<[f32;3]> {
+        let index=*self.slots.get(&(false,0)).context("missing examination subject")?;
+        let actor=&self.characters[index];
+        let (pos,rot)=self.group_frame();let group=crate::chara::unity_euler(rot);
+        let translation=glam::Vec3::from_array(pos)+group*glam::Vec3::from_array(actor.position);
+        let world=glam::Mat4::from_rotation_translation(group*crate::chara::unity_euler(actor.rotation),translation);
+        Ok(self.tracking.bone_position(index,actor,"Bip01 Head",world,files,op,now)?.to_array())
+    }
     pub fn photo_view(
         &mut self,
         kind: photo::Kind,
@@ -118,8 +134,8 @@ impl Actors {
             .context("missing portrait subject")?;
         let m = &self.characters[index];
         let (eye, rotation, fov) = if let Some(offset) = kind.head_offset() {
-            let group = crate::chara::unity_euler(self.rotation);
-            let pos: [f32; 3] = std::array::from_fn(|i| self.position[i] + self.group_offset[i]);
+            let (pos,rot)=self.group_frame();
+            let group = crate::chara::unity_euler(rot);
             let transform = Mat4::from_rotation_translation(
                 group * crate::chara::unity_euler(m.rotation),
                 Vec3::from_array(pos) + group * Vec3::from_array(m.position),
@@ -165,6 +181,7 @@ impl Actors {
                 | AdvUi::CameraChaseStop
                 | AdvUi::Eye { .. }
                 | AdvUi::Chinko { .. }
+                | AdvUi::AllOffset { .. }
                 | AdvUi::AllPos { .. }
                 | AdvUi::Offset { .. }
                 | AdvUi::Motion { .. }
@@ -543,6 +560,10 @@ impl Actors {
                     }
                 }
             }
+            AdvUi::AllOffset {position,rotation}=>{
+                if let Some(p)=position{self.group_offset=p;}
+                if let Some(r)=rotation{self.group_rotation=r;}
+            }
             AdvUi::AllPos { position, rotation } => {
                 if let Some(p) = position {
                     self.position = p;
@@ -704,12 +725,12 @@ impl Actors {
             self.view.shape_rules = Some(crate::bone_shape::Rules::load(&assembly)?);
         }
         let dt = now.saturating_sub(self.last.replace(now).unwrap_or(now)) as f32 / 1000.;
-        let group_pos = std::array::from_fn(|i| self.position[i] + self.group_offset[i]);
+        let (group_pos,group_rot)=self.group_frame();
         if self.tracking.update(
             &mut self.characters,
             &self.slots,
             glam::Vec3::from_array(group_pos),
-            crate::chara::unity_euler(self.rotation),
+            crate::chara::unity_euler(group_rot),
             camera,
             files,
             op,
@@ -732,8 +753,8 @@ impl Actors {
             .collect::<Vec<_>>();
         cmds.extend(self.view.sync(
             &mut self.characters,
-            std::array::from_fn(|i| self.position[i] + self.group_offset[i]),
-            self.rotation,
+            group_pos,
+            group_rot,
             files,
             op.storage.as_ref(),
             now,
@@ -776,6 +797,7 @@ impl Actors {
         self.position = [0.; 3];
         self.rotation = [0.; 3];
         self.group_offset = [0.; 3];
+        self.group_rotation = [0.;3];
         for actor in &mut self.characters {
             actor.position = [0.; 3];
             actor.rotation = [0.; 3];

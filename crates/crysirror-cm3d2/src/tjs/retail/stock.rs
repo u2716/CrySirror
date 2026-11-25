@@ -187,18 +187,7 @@ fn apply_class_level(m: &mut MaidStatus, x: &mut character::Status, text: &str) 
     Ok(())
 }
 
-fn learn_classes(
-    s: &mut TjsState,
-    m: &mut MaidStatus,
-    status: &mut character::Status,
-    skills: bool,
-    editing: bool,
-) -> Result<BTreeMap<String, i32>> {
-    let base = if skills {
-        "maid_status_yotogiclass"
-    } else {
-        "maid_status_jobclass"
-    };
+fn eligible_classes(s:&mut TjsState,m:&MaidStatus,status:&character::Status,skills:bool,editing:bool,base:&str)->Result<Vec<(i32,String)>>{
     let list = s.retail.table(&format!("{base}_list.nei"))?;
     let conditions = s.retail.table(&format!("{base}_acquired_condition.nei"))?;
     let personals = s.retail.table("maid_status_personal_list.nei")?;
@@ -212,7 +201,6 @@ fn learn_classes(
         .get(m.contract_type as usize)
         .context("invalid contract")?;
     let facilities = s.retail.table("facility.nei")?;
-    let mut levels = BTreeMap::new();
     // GetLearnPossibleClassDatas evaluates the entire list before Add updates the bonuses.
     let mut acquired = Vec::new();
     for row in 1..list.rows {
@@ -274,6 +262,60 @@ fn learn_classes(
             acquired.push((id, key));
         }
     }
+    Ok(acquired)
+}
+
+pub(crate) fn examine(s:&mut TjsState,id:usize,apply:bool)->Result<Vec<String>>{
+    let mut m=s.maids.get(&id).context("examination subject")?.clone();
+    let mut x=s.retail.characters.get(&m.guid_id).context("examination profile")?.clone();
+    let mut gained=Vec::new();
+    for (skills,base) in [(false,"maid_status_jobclass"),(true,"maid_status_yotogiclass")]{
+        let list=s.retail.table(&format!("{base}_list.nei"))?;
+        for (cid,key) in eligible_classes(s,&m,&x,skills,false,base)? {
+            if skills && s.player.flag("__lockNTRPlay")!=0 {
+                let req=s.retail.table("yotogi_skill_acquisition.nei")?;
+                let defs=s.retail.table("yotogi_skill_list.nei")?;
+                let mut categories=Vec::new();
+                for r in 1..req.rows {
+                    if req.string(16,r)==key && s.retail.enabled("yotogi_skill_enabled_list",req.int(0,r))?{
+                        categories.push(defs.string(3,row_id(&defs,req.int(0,r))?));
+                    }
+                }
+                if !categories.is_empty() && categories.iter().all(|v|matches!(v.as_str(),"交換"|"乱交")){continue;}
+            }
+            let levels=if skills{&mut x.skill_class_levels}else{&mut x.job_levels};
+            if levels.contains_key(&cid){continue;}
+            levels.insert(cid,1);x.class_exp[usize::from(skills)].insert(cid,0);
+            gained.push(list.string(2,row_id(&list,cid)?));
+            if apply{if skills{s.player.yotogi_class_open.add(cid);}else{s.player.maid_class_open.add(cid);}}
+        }
+        if !skills{
+            let mut jobs=BTreeMap::new();
+            for (&cid,&level) in &x.job_levels{jobs.insert(list.string(1,row_id(&list,cid)?),level);}
+            class_bonus(&mut s.retail,&mut m,&mut x,&jobs)?;
+            if apply{for (i,name) in ["Novice2","Concierge","Waitress","Maitre","Bartender","Therapist","Empire","Dealer","Healing","Night"].iter().enumerate(){
+                if jobs.contains_key(*name){award(s,2000+10*i as i32)?;}
+            }}
+        }
+    }
+    if apply{s.retail.characters.insert(m.guid_id.clone(),x);s.maids.insert(id,m);}
+    Ok(gained)
+}
+
+fn learn_classes(
+    s: &mut TjsState,
+    m: &mut MaidStatus,
+    status: &mut character::Status,
+    skills: bool,
+    editing: bool,
+) -> Result<BTreeMap<String, i32>> {
+    let base = if skills {
+        "maid_status_yotogiclass"
+    } else {
+        "maid_status_jobclass"
+    };
+    let acquired=eligible_classes(s,m,status,skills,editing,base)?;
+    let mut levels=BTreeMap::new();
     let (owned, selected, open) = if skills {
         (
             &mut status.skill_class_levels,

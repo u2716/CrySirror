@@ -11,8 +11,13 @@ pub(super) struct Menu {
 }
 impl Menu {
     pub fn new() -> Result<Self> {
-        let packs = ["sound", "sound2", "parts", "parts2"];
+        Self::with_motion(false)
+    }
+    pub fn with_motion(motion:bool)->Result<Self>{
+        let mut packs=vec!["sound", "sound2", "parts", "parts2"];
+        if motion{packs.push("motion2");}
         let (dir, mut rt, client, op, _, _, _) = daily::installed_panel(&packs)?;
+        if motion{mount_motion(&mut rt,client,&dir)?;packs.push("motion");}
         let mut vm = Vm {
             client,
             config: Config {
@@ -128,4 +133,33 @@ impl Menu {
             },
         )
     }
+}
+
+pub(in crate::com3d2) fn mount_motion(rt:&mut crysirror_runtime::Runtime,c:ClientId,tmp:&tempfile::TempDir)->Result<()>{
+    use crysirror_core::path::{Mount,VfsPath};
+    use crysirror_resource::{ArchiveMount,DecodeContext,FormatRegistry};
+    use std::{path::PathBuf,sync::Arc};
+    let archive = std::env::var_os("COM3D2_MOTION_ARCHIVE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(std::env::var_os("COM3D2_ROOT").unwrap()).join("GameData/motion.arc")
+        });
+    let mut disk = crysirror_runtime::vfs::DiskVfs::new(
+        archive.parent().context("motion archive parent")?,
+        tmp.path(),
+    )?;
+    disk.register(c, "com3d2", "motion")?;
+    let source = disk.storage(c)?.open_asset(&VfsPath::new(
+        Mount::Asset,
+        archive
+            .file_name()
+            .and_then(|v| v.to_str())
+            .context("motion archive name")?,
+    )?)?;
+    let cx = DecodeContext::new(c);
+    let mut reg = FormatRegistry::default();
+    crysirror_formats_arc::register(&mut reg)?;
+    let (_, arc) = reg.open(source, Some("kiss/warc"), &cx)?;
+    rt.mount_provider(c, "motion", Arc::new(ArchiveMount::new(arc, cx)?))?;
+    Ok(())
 }

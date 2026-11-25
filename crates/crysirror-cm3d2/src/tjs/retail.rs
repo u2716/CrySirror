@@ -14,7 +14,7 @@ mod daily;
 pub(crate) mod operations;
 pub(crate) use daily::close_daily;
 mod stock;
-pub(crate) use stock::{finish_profile,names as stock_names,retail_maid,prop,edit_wear,edit_slider,apply_body as apply_live_body,select as select_stock};
+pub(crate) use stock::{examine,finish_profile,names as stock_names,retail_maid,prop,edit_wear,edit_slider,apply_body as apply_live_body,select as select_stock};
 mod stock_profile;
 pub(crate) mod personnel;
 pub(crate) use day::start_before_hiring;
@@ -64,6 +64,10 @@ pub(crate) struct State {
     switch_depth: (usize, usize),
     pub(crate) stop_motions: bool,
     activities: activities::Activities,
+    pub(crate) show_in_progress: bool,
+    pub(crate) casino_coins: i64,
+    pub(crate) casino_dealers: BTreeMap<usize,usize>,
+    pub(crate) casino_slot: Option<usize>,
     events: scenario::Events,
     vr_karaoke: Option<bool>,
     selection: Option<selection::Manager>,

@@ -173,3 +173,48 @@ mod tests {
 }
 #[cfg(test)]
 pub(super) use tests::buy_for_test;
+
+/// The standalone selection list excludes sub-characters.
+pub(crate) fn entrants(s: &TjsState) -> Vec<usize> {
+    let mut ids: Vec<_> = s.stock.iter().copied().filter(|id| {
+        s.maids.get(id).is_some_and(|m| s.retail.characters.get(&m.guid_id).is_some_and(|x| x.sub_name.is_none()))
+    }).collect();
+    s.sort_maid_standard(&mut ids);
+    ids
+}
+
+pub(crate) fn original_entrant(s:&TjsState,id:usize)->bool {
+    s.maids.get(&id).and_then(|m|s.retail.characters.get(&m.guid_id)).is_some_and(|ch|ch.sub_name.is_none() && ch.old.is_none())
+}
+pub(crate) fn select_show(s: &mut TjsState, ids: &[usize]) {
+    s.retail.show_in_progress=false;
+    s.retail.activities.candidates = ids.iter().copied().collect();
+    s.retail.activities.simplified=false;
+}
+pub(crate) fn simplify_show(s: &mut TjsState, simplified: bool) {
+    s.retail.show_in_progress=true;
+    s.retail.activities.simplified = simplified;
+    s.tmp_flags.insert("品評会_演出省略".into(), i64::from(simplified));
+}
+pub(crate) fn show_candidates(s:&TjsState) -> Vec<usize> {
+    s.retail.activities.candidates.iter().copied().collect()
+}
+
+pub(crate) fn casinos(s:&mut TjsState)->Result<Vec<(usize,String)>> {
+    let t=s.retail.table("facility.nei")?;
+    let mut result=Vec::new();
+    for name in ["高級カジノ","カジノ"] {
+        if let Some(r)=(1..t.rows).find(|&r|t.string(2,r)==name)
+            && let Some((i,f))=s.retail.facilities.iter().enumerate().find(|(_,f)|f.type_id==t.int(0,r)) {
+            result.push((f.slot.unwrap_or(i),f.name.clone().unwrap_or_else(||name.into())));
+        }
+    }
+    Ok(result)
+}
+pub(crate) fn first_dealer(s:&mut TjsState)->Result<usize> {
+    let t=s.retail.table("maid_status_personal_list.nei")?;
+    let muku=t.int(0,stock::named(&t,1,"Muku")?);
+    s.active_maids.iter().flatten().chain(s.stock.iter()).copied()
+      .find(|id|s.retail.main_characters.contains(id)&&s.maids.get(id).is_some_and(|m|m.personal==muku))
+      .context("casino requires the main Muku dealer")
+}

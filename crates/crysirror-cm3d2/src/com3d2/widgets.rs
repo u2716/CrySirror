@@ -522,6 +522,9 @@ impl Assets {
                 p = *up;
             }
             let wanted = match scene {
+                "SceneCasino"=>matches!(path.as_str(),"UI Root/CharacterSelectPanel/BG"|"UI Root/CharacterSelectPanel/Ok_Button"),
+                "ScenePhotoMode" => super::leisure::photo_widget(&path),
+                "SceneCompetitiveShow" => path.starts_with("UI Root/MaidExaminationPanel/Viewer/"),
                 "SceneStaffRoll" => path == "UI Root/BG" || path.starts_with("UI Root/StaffRollPanel/StaffRollViewer/"),
                 "SceneDeskCustomize" => path=="UI Root/MainScreen/Parent/OK" || (path.starts_with("UI Root/MainScreen/Parent/DeskCustomizeWindowManager/DeskItemWindow/Parent/") && !path.contains("/SelectPopupList") && !path.contains("/TransformParts") && !path.contains("/TitleBar/Btn/")),
                 "DeskItemPlate" => true,

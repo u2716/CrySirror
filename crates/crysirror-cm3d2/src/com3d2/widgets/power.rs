@@ -166,6 +166,12 @@ impl Assets {
         scene: &str,
         root_name: &str,
     ) -> Result<Layout> {
+        self.filtered_canvas(op,host,client,scene,root_name,|_|true)
+    }
+    pub(in crate::com3d2) fn filtered_canvas(
+        &mut self, op:&mut Opener,host:&mut dyn HostServices,client:ClientId,
+        scene:&str,root_name:&str, include:impl Fn(&str)->bool,
+    )->Result<Layout> {
         let file = self.scene_file(scene)?;
         let sf = self.unity.file(op, &file)?;
         let mut root = None;
@@ -199,7 +205,10 @@ impl Assets {
                 .map(|_| r.pptr64().map(|p| p.path_id))
                 .collect::<std::result::Result<Vec<_>, _>>()?;
             r.pptr64()?;
-            let mut rect = anchored(parent_rect, r.f32s::<10>()?);
+            // Some levels group several full-screen Canvases below an ordinary Transform.
+            let mut rect = if sf.object(tr).is_some_and(|o|o.class_id==224) {
+                anchored(parent_rect,r.f32s::<10>()?)
+            } else {parent_rect};
             let bytes = sf.bytes_of(go)?;
             let mut r = Reader::new(&bytes);
             let n = r.count(12)?;
@@ -214,6 +223,8 @@ impl Assets {
             } else {
                 format!("{parent}/{name}")
             };
+            if !include(&path) {continue;}
+            if parent.is_empty() && sf.object(root).is_some_and(|o|o.class_id==c::TRANSFORM){rect=screen;}
             if parent == "/Window Main Menu/Button List" {
                 rect = layout
                     .grids

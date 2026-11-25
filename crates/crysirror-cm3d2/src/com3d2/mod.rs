@@ -22,6 +22,7 @@ mod events;
 mod personnel;
 mod dance;
 mod desk;
+mod leisure;
 #[cfg(test)]
 mod installed_menu;
 mod credits;
@@ -68,6 +69,7 @@ enum Scene {
     Personnel,
     Dance,
     Desk,
+    Leisure(leisure::Destination),
 }
 impl Scene {
     fn name(self) -> &'static str {
@@ -79,6 +81,7 @@ impl Scene {
             Self::CharacterSelect(_) => "SceneCharacterSelect",
             Self::FacilityManagement => "SceneFacilityManagement",
             Self::FacilityPowerUp => "SceneFacilityPowerUp",
+            Self::Leisure(kind) => kind.name(),
             Self::Desk => "SceneDeskCustomize",
             Self::Dance => "SceneDanceSelect",
             Self::Personnel => "SceneMaidManagement",
@@ -218,6 +221,7 @@ struct Game {
     trophies: trophy::Effects,
     credits: Option<credits::Roll>,
     awards: Option<awards::Screen>,
+    leisure: leisure::Screen,
     desk: desk::Desk,
     dance: Option<dance::Screen>,
     personnel: Option<personnel::Screen>,
@@ -235,14 +239,14 @@ impl Game {
         client: ClientId,
         now: u64,
     ) -> Result<()> {
-        if matches!(self.scene,Scene::Script | Scene::StockEditor | Scene::Shop) && self.scene != scene {
+        if matches!(self.scene,Scene::Script | Scene::StockEditor | Scene::Shop | Scene::Leisure(_)) && self.scene != scene {
             self.actors.leave(host, client)?;
         }
         if self.scene == Scene::StockEditor { self.stock_editor.profile.blur(host, client)?; }
         if self.scene == Scene::Editor {
             self.editor.leave(host, client)?;
         }
-        self.widgets = if matches!(scene,Scene::FacilityPowerUp|Scene::FacilityManagement) {
+        self.widgets = if matches!(scene,Scene::FacilityPowerUp|Scene::FacilityManagement|Scene::Leisure(leisure::Destination::CreativeRoom)) {
             Vec::new()
         } else {
             self.assets.scene(op, host, client, match scene {Scene::Result(panel)=>panel.asset(), _=>scene.name()}).with_context(|| format!("load widgets for {}", scene.name()))?
@@ -260,6 +264,7 @@ impl Game {
         if scene == Scene::Script {
             self.widgets.extend(self.assets.scene(op, host, client, "_cm3d21")?);
         }
+        if !matches!(scene, Scene::Leisure(_)) {self.leisure=Default::default();}
         if scene!=Scene::Desk {self.desk.leave();}
         if scene!=Scene::Title {self.config_panel=None;}
         if scene!=Scene::Dance {self.dance=None;}
@@ -306,7 +311,7 @@ impl Game {
             )?;
             self.club_meshes = 0;
         }
-        if matches!(scene, Scene::Title | Scene::Setup | Scene::Editor | Scene::StartDaily | Scene::StockEditor | Scene::Daily(_) | Scene::Result(_) | Scene::CharacterSelect(_) | Scene::Shop | Scene::FacilityManagement | Scene::FacilityPowerUp | Scene::Events | Scene::Personnel | Scene::Dance | Scene::Desk) {
+        if matches!(scene, Scene::Title | Scene::Setup | Scene::Editor | Scene::StartDaily | Scene::StockEditor | Scene::Daily(_) | Scene::Result(_) | Scene::CharacterSelect(_) | Scene::Shop | Scene::FacilityManagement | Scene::FacilityPowerUp | Scene::Events | Scene::Personnel | Scene::Dance | Scene::Desk | Scene::Leisure(_)) {
             self.main_light = MainLight::default();
             if scene == Scene::Setup {
                 // SceneNetorareCheck overrides intensity after LightMain.Reset.
@@ -325,6 +330,10 @@ impl Game {
                         35.,
                     ),
                 )
+            } else if let Scene::Leisure(kind)=scene {
+                let (name, model)=self.open_leisure(kind,op,host,client,now)?;
+                let (target,distance,angles)=self.adv_camera;
+                (name,model,crate::bg::orbit_camera(target,angles,distance,35.))
             } else if scene==Scene::Desk {
                 let name=self.open_desk(op,host,client)?;
                 let (target,distance,angles)=self.adv_camera;
@@ -870,6 +879,7 @@ impl Game {
                             let mode = business::PickMode::from_tag(self.script.tag_backup.get("type"))?;
                             self.enter(Scene::CharacterSelect(mode), op, host, client, now)?;
                         }
+                        name if let Some(destination)=leisure::Destination::parse(name) => self.enter(Scene::Leisure(destination),op,host,client,now)?,
                         "SceneDeskCustomize" => self.enter(Scene::Desk,op,host,client,now)?,
                         "SceneDanceSelect" => self.enter(Scene::Dance,op,host,client,now)?,
                         "SceneMaidManagement" => self.enter(Scene::Personnel,op,host,client,now)?,
@@ -896,6 +906,7 @@ impl Game {
                 self.update_shop(op,host,client,input,released,now)?;
             }
             Scene::Desk => self.update_desk(op,host,client,input,released,now)?,
+            Scene::Leisure(kind) => self.update_leisure(kind,op,host,client,input,released,now)?,
             Scene::Dance => self.update_dance(op,host,client,input,released,now)?,
             Scene::Personnel => self.update_personnel(op,host,client,input,released,now)?,
             Scene::Events => self.update_events(op,host,client,input,released,now)?,
@@ -1190,7 +1201,7 @@ impl Game {
         } else {
             brightness
         };
-        if self.scene == Scene::Script
+        if matches!(self.scene,Scene::Script|Scene::Leisure(leisure::Destination::Examination))
             && let Some(t) = &self.camera_move
         {
             let ratio = if t.duration == 0 {
@@ -1215,7 +1226,7 @@ impl Game {
                 self.camera_move = None;
             }
         }
-        if matches!(self.scene,Scene::Script|Scene::StockEditor|Scene::Shop) { self.actors.sync(host, client, &self.files, op, now, &mut self.adv_camera, if self.scene==Scene::Shop {shop::CAMERA_OFFSET} else {0.})?; }
+        if matches!(self.scene,Scene::Script|Scene::StockEditor|Scene::Shop|Scene::Leisure(leisure::Destination::Casino|leisure::Destination::Examination)) { self.actors.sync(host, client, &self.files, op, now, &mut self.adv_camera, if self.scene==Scene::Shop {shop::CAMERA_OFFSET} else {0.})?; }
         if self.scene==Scene::Shop {self.shop.initial_camera.get_or_insert(self.adv_camera);}
         if let Some(mut photo) = self.photo.take() {
             if !photo.update(self, host, client, op, now)? { self.photo = Some(photo); }
@@ -1323,7 +1334,7 @@ impl Game {
                         if self.scene == Scene::StartDaily {
                             let alpha = self.leaving.map_or(elapsed as f32 / 250., |start| 1. - now.saturating_sub(start) as f32 / 250.);
                             (255. * alpha.clamp(0., 1.)).round() as u8
-                        } else if let Some(dialog) = self.quit_dialog.as_ref().or(self.stock_editor.confirming.as_ref()).or(self.business.dialog()).or(self.power.dialog.as_ref()).or(self.shop.dialog.as_ref()).or(self.construction.as_ref().and_then(|s|s.dialog.as_ref())).or(self.slot_viewer.as_ref().and_then(|v|v.dialog.as_ref())) && i >= dialog.first {
+                        } else if let Some(dialog) = self.quit_dialog.as_ref().or(self.leisure.dialog.as_ref()).or(self.stock_editor.confirming.as_ref()).or(self.business.dialog()).or(self.power.dialog.as_ref()).or(self.shop.dialog.as_ref()).or(self.construction.as_ref().and_then(|s|s.dialog.as_ref())).or(self.slot_viewer.as_ref().and_then(|v|v.dialog.as_ref())) && i >= dialog.first {
                             dialog.opacity(now)
                         } else if let Some(viewer)=&self.slot_viewer { viewer.alpha(now)
                         } else if let Some(alpha) = self.business.alpha(self.scene,now,self.entered) {
@@ -1344,7 +1355,7 @@ impl Game {
                     )
                 };
             let visible = if !overlay && w.path.ends_with("/SelectCursor") && ((self.scene==Scene::Title && self.slot_viewer.is_none()) || self.stock_editor.confirming.is_some() || self.business.dialog().or(self.power.dialog.as_ref()).or(self.shop.dialog.as_ref()).or(self.construction.as_ref().and_then(|s|s.dialog.as_ref())).or(self.slot_viewer.as_ref().and_then(|v|v.dialog.as_ref())).is_some_and(|d|i>=d.first)) {
-                if let Some(dialog) = self.quit_dialog.as_ref().or(self.stock_editor.confirming.as_ref()).or(self.business.dialog()).or(self.power.dialog.as_ref()).or(self.shop.dialog.as_ref()).or(self.construction.as_ref().and_then(|s|s.dialog.as_ref())).or(self.slot_viewer.as_ref().and_then(|v|v.dialog.as_ref())) { dialog.cursor(&w.path) } else { Self::button(w) == Some(self.focus) }
+                if let Some(dialog) = self.quit_dialog.as_ref().or(self.leisure.dialog.as_ref()).or(self.stock_editor.confirming.as_ref()).or(self.business.dialog()).or(self.power.dialog.as_ref()).or(self.shop.dialog.as_ref()).or(self.construction.as_ref().and_then(|s|s.dialog.as_ref())).or(self.slot_viewer.as_ref().and_then(|v|v.dialog.as_ref())) { dialog.cursor(&w.path) } else { Self::button(w) == Some(self.focus) }
             } else {
                 overlay || (editor_visible && sprites.get(&w.component).copied().unwrap_or(true))
             };
@@ -1475,6 +1486,7 @@ impl Vm {
                 trophies: Default::default(),
                 credits: None,
                 awards: None,
+                leisure: Default::default(),
                 desk: Default::default(),
                 dance: None,
                 personnel: None,

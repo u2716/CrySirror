@@ -759,3 +759,24 @@ the thumb position. In two muted headless desktop runs from the normal
 After clicking the master slider and native OK, frame 852 showed SceneTitle
 with Config closed (13 widgets) and focus on Config. Both runs used isolated
 writable data and the installed 1.0.4 game files.
+
+### Standalone management menu coverage, 16 direct destinations
+
+The standalone adapter now dispatches the four remaining destinations in
+`DaytimeMain.ks` and `NightMain.ks`. The denominator counts distinct
+destinations directly requested by these two management menus. Each fixture
+starts at the installed day or night menu label and clicks the serialized
+management button with a temporary player state.
+
+| Installed scene | Interaction covered by the fixture |
+| --- | --- |
+| 27, photography | Load the first available photo backdrop as geometry, hide and restore the toolbar, switch to the night rotary backdrop, cancel the exit dialog and then confirm it. |
+| 59, creative room | Build the default room from ten boundary quads. Use the installed size sliders, save a rectangular room into a temporary native slot, edit another axis and reload the saved geometry. |
+| 2, competitive show | Follow the single eligible entrant through character selection, timed judging, the installed personality motion and the acknowledgment that resumes the caller. |
+| 54, casino | Build the casino through facility management, select a dealer, check the insufficient-chip dialog, cancel one exchange, then buy 310 chips for 310,000 CR and leave the casino. |
+
+Scope below these entries includes photo posing and composition files, placed
+objects and custom panel materials in room saves, additional competitive-show
+award combinations, and the separate blackjack, slot and casino shop scenes.
+The room loader rejects unsupported object or material data before applying
+it. Physical input and desktop pixels were outside this fixture run.

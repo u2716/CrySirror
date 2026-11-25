@@ -333,8 +333,8 @@ remain in scope. See [the level 10 fixture](../../docs/validation/com3d2.md#stan
 2026-11-25 — Standalone level 49 event selection, level 7 personnel,
 level 21 free dance selection and level 23 desk decoration now have player
 dispatch and installed input fixtures in `src/com3d2/{events,personnel,dance,desk}.rs`.
-Four direct destinations still lack dispatch (photo, creative room, examination
-and casino). Outstanding branches in the four newly reachable scenes include
+At that point four direct destinations still lacked dispatch (photo, creative
+room, examination and casino). Outstanding branches in the four newly reachable scenes include
 personnel status/classes, dance execution and settings, desk transforms and
 slot data, and broader scenario condition/cast validation. See the
 [per-controller results](../../docs/validation/com3d2.md#standalone-management-destinations-after-level-10).
@@ -343,6 +343,14 @@ slot data, and broader scenario condition/cast validation. See the
 `src/com3d2/config_panel.rs`. Eight of 32 native panel callbacks have
 handlers. The other 24 bindings, original settings persistence, and the
 title Guest load mode remain open. See the [title and corpus inventory](../../docs/validation/com3d2.md#standalone-title-config-and-static-ui-coverage).
+
+2026-11-25 — The remaining direct management destinations now dispatch in
+`src/com3d2/leisure/{studio,room,examination,casino}.rs`. Per-controller
+scope and installed-data fixtures are recorded in the
+[16-destination inventory](../../docs/validation/com3d2.md#standalone-management-menu-coverage-16-direct-destinations).
+Remaining work within these scenes includes photo character placement, posing
+and composition files, room objects and custom materials, broader judging
+and award validation, casino coin persistence and the separate casino games.
 
 **Closure.** Exercise the remaining controllers, rendering and resource
 variants through installed original scripts and ordinary input, including
