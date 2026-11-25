@@ -23,7 +23,7 @@ fn main() -> Result<()> {
     println!("{} regions", regions.len());
     if args.len() == 1 {
         for r in &regions {
-            println!("  {} parent {:?} categories {:08x?} [{}] enter {:?} exit {:?}", r.name, r.parent.map(|p| format!("{p:08x}")), r.categories, kinds(r), r.enter.map(|x| format!("{x:#x}")), r.exit.map(|x| format!("{x:#x}")));
+            println!("  {} parent {:?} categories {:08x?} [{}] enter {:?} exit {:?} render-settings {:?}", r.name, r.parent.map(|p| format!("{p:08x}")), r.categories, kinds(r), r.enter.map(|x| format!("{x:#x}")), r.exit.map(|x| format!("{x:#x}")), r.render_settings.map(|x| format!("{x:08x}")));
         }
     }
     for s in spawners.iter().filter(|s| args[1..].iter().any(|w| s.name.contains(w.as_str()))) {

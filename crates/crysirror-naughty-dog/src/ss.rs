@@ -547,6 +547,48 @@ fn trace_natives() -> Option<&'static String> {
     FILTER.get_or_init(|| std::env::var("ND_TRACE_NATIVES").ok()).as_ref()
 }
 
+impl Ctx<'_> {
+    fn next_random(&mut self) -> u32 {
+        let r = &mut self.inner.rng;
+        *r ^= *r << 13;
+        *r ^= *r >> 17;
+        *r ^= *r << 5;
+        *r
+    }
+
+    /// Members of an `entity-group` symbol (empty when it is none).
+    fn group_members(dc: &Dc, name: u32) -> Result<Vec<u32>> {
+        let Some(&group) = dc.symbols.get(&name) else { return Ok(Vec::new()) };
+        if dc.mem.type_of(group).ok() != Some(sid("entity-group")) {
+            return Ok(Vec::new());
+        }
+        let (count, array) = (dc.mem.u32(group)?, dc.mem.u32(group + 4)?);
+        ensure!(count <= 4096, "entity-group size");
+        (0..count).map(|i| dc.mem.u32(array + 8 * i + 4)).collect()
+    }
+
+    /// Call a native (by its script value) or a script lambda with `args`;
+    /// a lambda must not suspend.
+    fn invoke(&mut self, dc: &mut Dc, function: u32, args: &[u32]) -> Result<u32> {
+        let mut regs = [0u32; MAX_ARGS];
+        regs[..args.len().min(MAX_ARGS)].copy_from_slice(&args[..args.len().min(MAX_ARGS)]);
+        if function >= crate::script::NATIVE_BASE && function != crate::script::NULL_SYMBOL {
+            return Ok(self.call(dc, function - crate::script::NATIVE_BASE, &regs, args.len() as u32)?.0);
+        }
+        if function == 0 || function == crate::script::NULL_SYMBOL {
+            return Ok(0);
+        }
+        let mut thread = Thread::new(dc, function, args)?;
+        match thread.run(dc, self)? {
+            Outcome::Returned(v) => Ok(v),
+            other => {
+                self.inner.error(format!("group lambda ended with {other:?}"));
+                Ok(0)
+            }
+        }
+    }
+}
+
 impl Natives for Ctx<'_> {
     fn lookup(&self, s: u32) -> Option<u32> {
         self.inner.native_ids.get(&s).copied()
@@ -669,6 +711,39 @@ impl Natives for Ctx<'_> {
                 let object = if a[0] == sid("player") { a[0] } else { self.inner.process(a[0]).and_then(|p| self.inner.procs[p].spawner).unwrap_or(a[0]) };
                 b(self.world.in_region(object, a[1]))
             }
+            // Entity groups (`entity-group` symbols: `{count, {ptr,
+            // member}…}`). (for-group group fn args…) calls `fn` (a native
+            // or lambda) with each member and the args (`sub_A1BF0`);
+            // (group-and group fn args…) is true while every call is
+            // (`sub_A1A40`).
+            "for-group" | "group-and" | "group-or" if n > 1 => {
+                let members = Self::group_members(dc, a[0])?;
+                let extra: Vec<u32> = a[2..n.min(MAX_ARGS)].to_vec();
+                let mut all = true;
+                let mut any = false;
+                for m in members {
+                    let args: Vec<u32> = std::iter::once(m).chain(extra.iter().copied()).collect();
+                    let v = self.invoke(dc, a[1], &args)?;
+                    all &= v != 0;
+                    any |= v != 0;
+                }
+                match name {
+                    "group-and" => b(all),
+                    "group-or" => b(any),
+                    _ => ok(0),
+                }
+            }
+            // (group-is-member-symbol? group symbol), `sub_A13BC`.
+            "group-is-member-symbol?" if n > 1 => b(Self::group_members(dc, a[0])?.contains(&a[1])),
+            // (group-random group): a member chosen at random.
+            "group-random" if n > 0 => {
+                let members = Self::group_members(dc, a[0])?;
+                if members.is_empty() {
+                    return ok(0);
+                }
+                let r = self.next_random();
+                ok(members[(r as usize) % members.len()])
+            }
             // (symbol-eq? a b).
             "symbol-eq?" => b(n > 1 && a[0] == a[1]),
             // (lerp-scale a b c d x): `t = clamp((x − a) / (b − a), 0, 1)`,
@@ -681,11 +756,8 @@ impl Natives for Ctx<'_> {
             }
             // (random-float): uniform in [0, 1) (`sub_90A9F0`).
             "random-float" => {
-                let r = &mut self.inner.rng;
-                *r ^= *r << 13;
-                *r ^= *r >> 17;
-                *r ^= *r << 5;
-                ok(((*r >> 8) as f32 / (1u32 << 24) as f32).to_bits())
+                let r = self.next_random();
+                ok(((r >> 8) as f32 / (1u32 << 24) as f32).to_bits())
             }
             // (get-locator-distance a b): distance between two locator
             // records `{x, y, z, 1, …}`.
