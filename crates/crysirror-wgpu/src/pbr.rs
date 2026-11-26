@@ -811,6 +811,7 @@ fn halton(mut i: u32, base: u32) -> f32 {
 }
 
 pub struct PbrRenderer {
+    pub(super) photo_alpha: bool,
     profiler: crysirror_tasks::profile::Profiler,
     profile_frame: u64,
     hardware_rt: Option<crate::rt_pbr::PbrRt>,
@@ -1887,7 +1888,7 @@ impl PbrRenderer {
         let cascade_bufs: Vec<wgpu::Buffer> = (0..CASCADES)
             .map(|_| uniform("cascade light", std::mem::size_of::<ShadowUniform>() as u64))
             .collect();
-        let post_buf = uniform("post", 64);
+        let post_buf = uniform("post", 96);
         let object_capacity = 256;
         let object_buf = uniform("pbr objects", OBJECT_STRIDE * object_capacity);
         let particles = crate::particles::Particles::new(d, HDR, MSAA)?;
@@ -2084,6 +2085,7 @@ impl PbrRenderer {
             material_sampler,
             shadow_sampler,
             frame_buf,
+            photo_alpha: false,
             post_buf,
             object_buf,
             object_capacity,
@@ -2513,7 +2515,7 @@ impl PbrRenderer {
             toon_light: m.toon.as_ref().map_or([0.; 4], |t| t.shadow_light),
             liquid_tiling: m.toon.as_ref().map_or([1., 1., 0., 0.], |t| t.liquid_tiling),
             liquid_color: m.toon.as_ref().map_or([0.; 4], |t| [t.liquid_color[0], t.liquid_color[1], t.liquid_color[2], if t.liquid_blobs.is_some() && t.liquid_regions.is_some() { 1. } else { 0. }]),
-            raster: [m.raster_queue.map_or(0., |q| if q.cull_front { 1. } else if !m.double_sided { 2. } else { 0. }), 0., 0., 0.],
+            raster: [m.raster_queue.map_or(0., |q| if q.cull_front { 1. } else if !m.double_sided { 2. } else { 0. }), if m.toon.as_ref().is_some_and(|t| t.outline_texture.is_some()) { 1. } else { 0. }, 0., 0.],
             line_params: m.toon.as_ref().map_or([[0.; 4]; 2], |t| t.line_model.uniforms()),
             line_color: m.toon.as_ref().filter(|t| t.surface_line_texture.is_some()).map_or([0., 0., 0., -1.], |t| t.line_color),
             shadow_tone_override: m.toon.as_ref().map_or([0.; 4], |t| t.shadow_tone_override),
@@ -2723,8 +2725,8 @@ impl PbrRenderer {
         let mut slots = m.textures();
         if let Some(t) = &m.toon {
             let [lookup, shadow, highlight, blend, _, _, line] = t.textures();
-            if line.is_some() {
-                slots[2] = line;
+            if let Some(texture) = line.or(t.outline_texture.as_ref()) {
+                slots[2] = Some(texture);
             }
             [slots[1], slots[3], slots[6]] = [lookup, shadow, highlight];
             if blend.is_some() {
@@ -2866,7 +2868,7 @@ impl PbrRenderer {
                             pick(m.base_color_texture, 0),
                             // Toon: lookup, shadow and highlight textures.
                             pick(m.toon.as_ref().map_or(m.metallic_roughness_texture, |t| t.lookup_texture), 1),
-                            pick(m.toon.as_ref().and_then(|t| t.surface_line_texture).or(m.normal_texture), 2),
+                            pick(m.toon.as_ref().and_then(|t| t.surface_line_texture.or(t.outline_texture)).or(m.normal_texture), 2),
                             pick(m.toon.as_ref().map_or(m.occlusion_texture, |t| t.shadow_texture), 1),
                             // Toon: the blend texture when present.
                             pick(m.toon.as_ref().and_then(|t| t.blend_texture).or(m.emissive_texture), 0),
@@ -3323,6 +3325,7 @@ impl PbrRenderer {
                         weight: l.weight,
                         looping: l.looping,
                         layer: l.blend_layer,
+                        additive: l.additive,
                     });
                 }
                 pose_keys.push(instance.key);
@@ -4624,6 +4627,7 @@ impl PbrRenderer {
             screen: fu.screen,
         };
         let grading = env.grading.clone().unwrap_or_default();
+        let curve = env.filmic_curve.unwrap_or_default().uniforms();
         let tonemap = match env.tonemap {
             Tonemap::PbrNeutral => 0.,
             Tonemap::Aces => 1.,
@@ -4637,7 +4641,7 @@ impl PbrRenderer {
                 2f32.powf(env.exposure),
                 tonemap,
                 env.bloom,
-                0.,
+                if self.photo_alpha { 1. } else { 0. },
                 if env.auto_exposure.is_some() { 1. } else { 0. },
                 env.auto_exposure.as_ref().map_or(0., |a| a.compensation),
                 0.,
@@ -4650,6 +4654,14 @@ impl PbrRenderer {
                 grading.saturation,
                 0.,
                 0.,
+                curve[0][0],
+                curve[0][1],
+                curve[0][2],
+                curve[0][3],
+                curve[1][0],
+                curve[1][1],
+                curve[1][2],
+                curve[1][3],
             ]),
         );
 
@@ -5875,7 +5887,7 @@ impl PbrRenderer {
                     view: &t.msaa_color,
                     resolve_target: Some(&t.resolved),
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        load: wgpu::LoadOp::Clear(if self.photo_alpha { wgpu::Color::TRANSPARENT } else { wgpu::Color::BLACK }),
                         store: wgpu::StoreOp::Discard,
                     },
                 })],

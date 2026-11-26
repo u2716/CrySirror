@@ -195,6 +195,23 @@ impl Assets {
         ensure!(self.clients.contains_key(&client), "unknown asset client");
         Ok(format!("client:{}:{}", client.0, path.relative()))
     }
+    /// Read a client asset without entering it in the cache (an already
+    /// cached copy is returned): for large single-consumer streams such as
+    /// world videos, which would otherwise exceed the cache budget.
+    pub fn read_uncached_for(&mut self, client: ClientId, path: &str) -> Result<Arc<[u8]>> {
+        let key = self.key(client, path)?;
+        if let Some(bytes) = self.bytes.get(&key) {
+            return Ok(bytes.clone());
+        }
+        let logical = VfsPath::new(Mount::Asset, path).map_err(|e| anyhow::anyhow!("{e}"))?;
+        let bytes = if let Some(storage) = self.storage.get(&client) {
+            storage.read(&logical).map_err(|e| anyhow::anyhow!("client asset {path}: {e}"))?
+        } else {
+            let dir = self.clients.get(&client).context("unknown asset client")?;
+            dir.read(&logical).map_err(|e| anyhow::anyhow!("client asset {path}: {e}"))?
+        };
+        Ok(Arc::from(bytes))
+    }
     pub fn read_for(&mut self, client: ClientId, path: &str) -> Result<Arc<[u8]>> {
         let key = self.key(client, path)?;
         if let Some(bytes) = self.bytes.get(&key) {

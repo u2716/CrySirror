@@ -52,11 +52,28 @@ tracks the secretary’s animated neck, presents the two opening choices,
 shows the first calendar-day scene and reaches the three-person recruitment
 menu. The standalone factory creates each candidate, activates the new stock
 model and applies the installed preset. The stock editor loads its Theater
-background, pose and serialized controls. Mouse input can change the owned
-hair menu, body sliders and the name used in dialogue. Profile confirmation still requires
-the native portrait and return sequence. Title End supports confirmation
+background, pose and serialized controls. Character rendering uses the standalone
+per-texture palettes, textured toon outlines and scene-specific main light. Mouse input can change the owned
+hair menu, body sliders and the name used in dialogue. The profile panel edits
+names and free comments. On desktop the confirmation sequence photographs
+the posed character, runs the installed photography script and resumes the
+calling KAG label. Title End supports confirmation
 and cancellation. Title Shop requests the unlinked installation's shop URL
 through the desktop host.
+
+The standalone daytime and night management menus read their button bindings
+from the installed Unity scene. They resolve the calling scenario's navigation
+labels, display the multi-page tutorials and club status, and record the
+morning schedule on Next. In the standalone 1.0.4 profile the schedule editor
+supports the stock roster, both shifts and eight basic training jobs. Installed
+script and widget fixtures cover daytime and night results, the income panel,
+and the second day’s management menu. Muku can keep her original night work
+10000 and reach day two by cancelling the character selection. The schedule
+supports ordinary paid facilities, room selection, roster dragging and manual
+facility upgrades with owned materials. Title Continue and the daily slot panels
+list v1040 saves, edit comments and support confirmed slot deletion.
+Whole-slot creation and gameplay restoration
+remain open. The last full opening replay reached the first daytime menu call.
 
 The standalone profile binds the 128 names registered by its retail
 `ScriptManager.Initialize`. The [registration list](src/tjs/standalone.rs)

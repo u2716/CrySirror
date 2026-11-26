@@ -149,12 +149,12 @@ impl Binding {
         let mut scale = Vec3::ONE;
         let (mut set_pos, mut set_scale) = (false, false);
         for rule in self.rules.iter() {
-            let mut v = maid.value(&rule.property) as f32 / 100.;
+            let mut v = maid.posed_value(&rule.property) as f32 / 100.;
             if rule.property == "DouPer" && !self.lower {
                 v = 1. - v;
             }
             if rule.property == "EyePosX" {
-                v *= 0.5 + maid.value("EyePosY") as f32 / 200.;
+                v *= 0.5 + maid.posed_value("EyePosY") as f32 / 200.;
             }
             let multiplier = rule.min.lerp(rule.max, v.clamp(0., 1.));
             if rule.scale {

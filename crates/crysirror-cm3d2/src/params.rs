@@ -102,13 +102,13 @@ impl Exp {
         self.current = 0;
         self.next = 0;
     }
-    fn write(&self, w: &mut Writer) {
+    pub(crate) fn write(&self, w: &mut Writer) {
         w.i32(self.current);
         w.i32(self.total);
         w.i32(self.next);
         w.i32(self.level);
     }
-    fn read(&mut self, r: &mut Reader) -> Result<()> {
+    pub(crate) fn read(&mut self, r: &mut Reader) -> Result<()> {
         self.current = r.i32()?;
         self.total = r.i32()?;
         self.next = r.i32()?;

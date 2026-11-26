@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
-//! Edit.MaidProfile.Create as called during Status.Initialize: continuous NEI
-//! blocks, before features, item descriptions or propensities have been set.
+//! Edit.MaidProfile.Create for new and player-edited stock characters.
 use super::*;
 use crate::{chara::Maid, params::MaidStatus};
 
@@ -65,12 +64,23 @@ fn range(t: &Table, r: usize, c: usize, n: i32) -> bool {
 
 pub(super) fn initialize(s: &mut State, m: &mut MaidStatus, model: &Maid) -> Result<()> {
     let mut b = Block::open(s, 1)?;
-    // An absent item key passes the original parts-dictionary predicate.
-    let mut text = b.text(|_, _| true);
+    let feature_table = s.table("maid_status_feature_list.nei")?;
+    let features: BTreeSet<_> = m
+        .feature
+        .keys()
+        .map(|&id| Ok(feature_table.string(1, row_id(&feature_table, id)?)))
+        .collect::<Result<_>>()?;
+    let part = |t: &Table, r| {
+        m.parts_dic
+            .get(&t.string(1, r))
+            .is_none_or(|value| *value == t.string(2, r))
+    };
+    let feature = |t: &Table, r| !t.exists(1, r) || features.contains(&t.string(1, r));
+    let mut text = b.text(part);
     b.next()?;
-    text += &b.text(|t, r| !t.exists(1, r));
+    text += &b.text(feature);
     b.next()?;
-    text += &b.text(|_, _| true);
+    text += &b.text(part);
     let mut b = Block::open(s, 2)?;
     for value in [m.body.bust, m.body.waist, m.body.hip] {
         text += &b
@@ -87,7 +97,9 @@ pub(super) fn initialize(s: &mut State, m: &mut MaidStatus, model: &Maid) -> Res
     text += &b.text(|t, r| m.body.waist < t.int(1, r) && range(t, r, 2, m.body.hip));
     for _ in 0..2 {
         b.next()?;
-        text += &b.text(|t, r| m.personal == t.int(1, r) && !t.exists(2, r));
+        text += &b.text(|t, r| {
+            m.personal == t.int(1, r) && (!t.exists(2, r) || features.contains(&t.string(2, r)))
+        });
     }
     let mut b = Block::open(s, 3)?;
     text += &b.text(|t, r| {
@@ -102,17 +114,57 @@ pub(super) fn initialize(s: &mut State, m: &mut MaidStatus, model: &Maid) -> Res
     b.next()?;
     text += &b.text(|t, r| m.contract_type == t.int(1, r));
     b.next()?;
-    if let Some(r) = b.first(|t, r| !t.exists(1, r) || t.int(1, r) <= m.a_inyoku()) {
+    for _ in 0..2 * m.seikeiken {
+        b.next()?;
+    }
+    let value = if m.seikeiken == 0 {
+        m.a_inyoku()
+    } else {
+        m.play_number
+    };
+    if let Some(r) = b.first(|t, r| !t.exists(1, r) || t.int(1, r) <= value) {
         m.study_rate = b.table.int(2, r).clamp(0, 1000);
         text += &b.table.string(b.right, r);
     }
-    // The fifth table selects only acquired propensities; the new status has none.
-    Block::open(s, 5)?;
+    let b = Block::open(s, 5)?;
+    if !m.propensity.is_empty() {
+        let definitions = s.table("maid_status_propensity_list.nei")?;
+        let owned: BTreeSet<_> = m
+            .propensity
+            .keys()
+            .map(|&id| Ok(definitions.string(1, row_id(&definitions, id)?)))
+            .collect::<Result<_>>()?;
+        let stats = [m.a_inyoku(), m.a_m_value(), m.a_hentai(), m.a_housi()];
+        let appeal = [m.a_lovely(), m.a_elegance(), m.a_charm()];
+        let strongest = (0..3).rev().max_by_key(|&i| appeal[i]).unwrap();
+        if let Some(r) = b.first(|t, r| {
+            let kind = match t.string(2, r).as_str() {
+                "処女" => Some(0),
+                "前穴" => Some(1),
+                "後穴" => Some(2),
+                "両穴" => Some(3),
+                _ => None,
+            };
+            owned.contains(&t.string(1, r))
+                && kind.is_none_or(|k| m.seikeiken == k)
+                && stats
+                    .iter()
+                    .enumerate()
+                    .all(|(i, &v)| !t.exists(3 + i, r) || t.int(3 + i, r) <= v)
+                && (t.int(7, r) <= 0 || t.int(7, r) <= appeal[strongest])
+        }) {
+            let variant = if b.table.int(7, r) > 0 { strongest } else { 0 };
+            text += &b.table.string(
+                b.right.checked_sub(2).context("invalid profile columns")? + variant,
+                r,
+            );
+        }
+    }
     for (number, count) in [(6, 1), (7, 3)] {
         let mut b = Block::open(s, number)?;
         for _ in 0..count {
             b.next()?;
-            text += &b.text(|t, r| !t.exists(1, r));
+            text += &b.text(feature);
         }
     }
     m.profile = text;

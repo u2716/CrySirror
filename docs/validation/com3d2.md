@@ -317,3 +317,466 @@ Release logs are under `target/com3d2-validation/`. This pass uses method and
 UI fixtures. A complete post-recruitment story route, pixel/timing parity of the trophy animation,
 profile photography and native save interoperability have separate acceptance
 criteria.
+
+## 2026-11-25 recruitment profile, portraits and character lighting
+
+The original `SceneEdit.OnEndDlgOk` updates the stock profile, waits
+90 updates, captures a 90 × 90 icon and a 630 × 890 character card, fades
+out, and starts `KasizukiThumShot.ks`. That script supplies a separate pose
+and camera. The last image is captured after the two 30-update waits. All
+three PNGs use the subject GUID under the client’s `Save/Thumb` directory.
+The installed Metal fixture checks the return label, names, UTF-16 input
+limits, comment tabs, image sizes, transparent background and visible subject
+pixels. The World image test separately checks ownership and frozen geometry
+and interleaves a screen capture.
+
+The installed standalone `LightMain.Start` and `OnLevelWasLoaded` zero both
+ambient color and ambient intensity. `LightMain.Reset` uses Euler angles
+(40, 180, 18), white directional light at 0.95 and shadow strength 0.098.
+`SceneEdit`, `TitleMgr`, `SceneUserEditMain`, `StartDailyAPI` and
+`SceneNetorareCheck` call that reset. Only the last of those sets 0.65
+afterward. `BaseKagManager.TagLightMain` preserves the previous rotation or
+intensity when the tag omits it. Evidence was read from the installed
+`Assembly-CSharp.dll` and the serialized directional lights. Native Unity
+shadow bias does not have a matching per-sun field in the shared raster
+renderer.
+
+An ordinary muted headless replay selected Muku from the recruitment menu,
+confirmed her name and wrote all three PNGs. The initial follow-up replay
+reached `OP_0002` and exposed the missing temporary broom at frame 10203.
+The next replay processed the broom and reached the character-offset tag in
+the same motion script.
+
+### Standalone face and hair rendering
+
+The installed Unity 5.6 `TBody.ChangeTex` / `InfinityColorTextureCache`
+key each part colour by material **and texture property**. Muku's hair menu
+assigns HAIR to the surface, shadow, highlight and diffuse ramp, then
+HAIR_OUTLINE to the outline texture and its separate ramp. A single palette
+per material let the last assignment replace all preceding ones. The
+`resources.assets` fragment programs 9784 and 9750 respectively sample the
+palette at `(source.r * 0.995, 0.5)` with source alpha, and extract red for
+the R8 optimization. The importer now reproduces these per-texture operations
+before layer compositing. The installed first-generation path retains its
+material-wide palette.
+
+Standalone shaders 9723 and 9765 use the original hair/ordinary toon forward
+passes and pass 9732 for the textured outline. These names previously selected
+the fallback material. The hull now samples its own texture and light ramp;
+the surface uses its diffuse ramp. An image reused for base and outline gets
+separate sRGB and raw GPU views. The embedded preview in `pre_muku.preset`
+is a reference for the authored colour family, with a different camera and
+lighting.
+
+The 1920 × 1080 muted offscreen Metal replay (Apple M4 Max) captured
+Muku at frame 9900 before and after with the same input track and camera.
+The former purple fringe, green eyes and red cheeks changed to chestnut,
+amber and a light complexion, respectively. This is a visual check against
+the installed preset preview, not a pixel-perfect comparison with a running
+Windows player. Local captures are in
+`target/com3d2-validation/{before-photo,face-final,face-before-after}.png`.
+
+The full opening input track passed the broom scene in `OP_0002` and stopped
+at frame 12314 at `DaytimeMain.ks:10 *昼メニュー`. The standalone `SceneDaily`
+daytime management controller was missing in that build. All seven standalone
+installed-data UI tests passed, including the post-portrait return, the
+temporary hand prop's right-hand bone, the temporary body morph and their
+restoration.
+
+The final desktop release reproduced the frame-9900 image pixel for pixel.
+The release adapter library suite passed all 45 tests, the model importer
+passed all five CM3D2 tests, and the first-generation title/settings/load
+cancel fixture passed with the installed CM3D2 data.
+
+### Standalone daytime and night management menus
+
+The preceding opening replay reached the menu call at frame 12314. This pass
+inspected the installed 1.0.4 managed assembly, Unity 5.6.4p2 scene and
+KAG scripts directly. The tests advance no gameplay frames.
+
+| Original evidence | Coverage |
+| --- | --- |
+| Level 3, DailyCtrl.menuButtons, DailyMgr.OnClickMenuButton | Resolve the 20 serialized UIButton references. Reflow active buttons and use the corresponding colliders. Day and night have different visibility rules. Night disables the casino until a casino facility exists. |
+| DaytimeMain.ks, NightMain.ks, SceneMgr.GoToLabel, DailyAPI.EndNextScene | Resolve each visible scripted destination against the actual caller. The native controller uses 16 named destination attributes across all modes and a separate default label for Next. Schedule, Save and Load call local panel managers. |
+| uGUITutorialPanel, tutorial_list.nei, tutorial prefab, system.arc and system2.arc | Open the seven day and three night pages, decode each page image, hit the page toggles and OK, isolate the underlying menu and track the first-open flag separately for each period. |
+| StatusViewer, FacilityManager.SetUpFixedFacilityArray, Status.CheckTrophyMainMenu | Bind club name, grade, gauge, evaluation, cash, roster count, day and main business. The installed initial theater selects アイドル系. Renaming updates session state. The two facility-count thresholds award separate trophies. |
+| ScheduleAPI.SlotEmptyCheck, BackupParamAccessor.BackupParam, Status.BackupScheduleSlot, Facility.UpdateAllocationMaidList | Prefer the stock leader on an empty schedule. Daytime Next records 32 morning fields for each occupied slot and backs up GUID, work IDs and both communication flags across 40 slots. Both shifts refresh facility assignments. Night preserves the morning backup. |
+
+The focused suite contains three fixture tests and two tests using installed
+assets with temporary writable storage. The installed UI test checks each
+visible scripted target in its own KAG file, every tutorial page, the rename
+dialog's hit isolation and a partially filled club gauge.
+
+```sh
+COM3D2_ROOT="$HOME/Downloads/game-com3d2" cargo test --offline --locked --release \
+  -p crysirror-cm3d2 --features runtime --lib daily -- --include-ignored
+```
+
+This earlier menu pass stopped before the separate schedule, result and
+save/load controllers. The following pass exercises the basic-training route.
+Window appearance, physical input, IME and audio timing await runtime verification.
+
+All five focused release tests passed on the installed corpus. The separate
+release regression for standalone stock creation and live presets also
+passed after the class experience change. Logs are in
+`target/com3d2-validation/daily-verified.log` and
+`target/com3d2-validation/daily-stock-regression.log`.
+
+### Standalone basic training through the second day
+
+2026-11-25. The local standalone COM3D2 1.0.4 installation uses Unity
+5.6.4p2. The authored daytime menu opens a local schedule panel. Both shifts
+are editable there. The night menu has its own Next action. Eight enabled
+basic jobs in the installed table (2001–2008) award training progress and
+have zero base pay.
+
+| Original evidence | Implemented and exercised |
+| --- | --- |
+| Level 3 `ScheduleCtrl`, `MaidStatusListCtrl`, `ScheduleTaskViewer`, schedule category 51 and the character/task prefabs | Fill an empty row from stock and exclude staff already scheduled. Assign each shift, hover a task for its name, switch or clear the per-shift communication selection, and confirm the panel. Right-click removal uses the original OK/Cancel dialog. The only remaining leader cannot be removed. Hit tests use the serialized colliders, grid sizes and panel clip offsets. |
+| `Schedule.WorkResultScene.Calc`, `ScheduleCalcAPI`, `schedule_define.nei` and the installed facility, recipe, class and correction tables | Settle occupied slots in order and guard each shift against duplicate settlement. A job advances to level 3 on its twentieth execution. The tests assert the communication multiplier, fatigue outcome, trait correction, class experience, facility level and a failed later slot with no earlier award committed. The unmodified training room earns 15 experience per employee and shift from its base recipes. |
+| `ResultTrainingTask`, `ResultWorkCtrl`, `ScheduleMaidStatusUnit`, `ResultIncomeMgr/Ctrl` | Show the task and outcome icons and positive stat changes using the prefab’s two parameter grids. Display six income and evaluation fields from the first occupied slot's Start backup and live club status. A separate receipt fixture checks signed values and grouping, including the original double minus for a negative evaluation change. Result office prefabs, BGM and SE references resolve in the installation. |
+| `GameMain.OnEndDay/OnStartDay`, `Status.ApplyScheduleSlotBackup`, `ScheduleAPI.DayStartManage` | Resolve fatigue and restore current HP and mind, restore morning GUIDs, work IDs and communication flags, choose the leader when needed, advance the day and reset the settlement flags. The KAG setters complete before subsequent script conditions run. |
+
+Four short installed-data fixtures provide different checks.
+
+- `installed_schedule_and_result_controls` drives the authored colliders with pointer press/release events. Two stock characters receive both shifts. The fixture checks selection, the removal dialog, task icons and result labels.
+- `installed_eight_basic_jobs_on_both_shifts` assigns each of the eight jobs separately to each shift and checks its specific growth, work count and zero pay across 16 cases.
+- `installed_training_settlement_and_second_day` checks work counts, experience, cumulative snapshots, facility growth, rollback and carryover into day two.
+- `installed_management_script_callbacks` creates Muku through the retail TJS function and uses temporary writable storage. It starts at the return from the first daytime menu in `AllMain.ks:129`. The original script calls `ScheduleProcess` at lines 133 and 156 for gardening and piano. It passes daytime results, the night menu, night results, income, `EndDay`, the next date screen and `StartDay`, then reaches `DaytimeMain.ks` again with day 2. Each job counts once. The 1.0.4 filename substitution resolves personality placeholders from the installed personality table.
+
+The script fixture returns from scene calls through their supplied labels and
+consumes ordinary scenario waits without rendering. The widget fixture reads
+prefabs and builds host resources independently. Both avoid the game process
+and user saves.
+
+```sh
+COM3D2_ROOT="$HOME/Downloads/game-com3d2" cargo test --offline --locked --release \
+  -p crysirror-cm3d2 --features runtime --lib -- --include-ignored
+```
+
+The release library run passed all 54 tests, with zero failures and zero ignored tests. The test binary linked against the runtime feature. This pass did not relink the desktop executable.
+
+### Standalone default night work and paid facilities
+
+2026-11-25, COM3D2 1.0.4. The original-script fixture `installed_default_night_work_to_second_day` leaves Muku's two initial assignments untouched, resolves the actual `YotogiMain.ks` candidate list, dismisses and then accepts the character picker's cancellation dialog, and follows the original callbacks through the two work receipts, income, `EndDay`, and the day-two daytime menu. Work 10000 remains assigned. Its played-work flag is set, the activity counter and revenue stay unchanged, and the night receipt records the cancellation. This exercises the management return path.
+
+`installed_theater_selection_and_shift_receipts` uses the serialized work and room controls. Only the matching theater is selectable in the twelve-cell grid. One employee falls below the installed minimum of two and receives no wages or work count. Two employees in the same room earn sales and rating, record visitor counts, and advance facility experience. The per-guest results feed the club and individual receipts. `installed_roster_mouse_drag` checks swapping two occupied slots and moving into an empty slot using press, motion and release. These are pointer fixtures without a window.
+
+The release library run including the installed-data tests passed 57/57 at this checkpoint. The local log is `/tmp/cry-com104-business-regression.log`.
+
+### Standalone facility upgrades and native slots
+
+2026-11-25, installed standalone COM3D2 1.0.4. Tests use scoped temporary
+save storage. The script fixtures start at a management callback and use
+the installed KAG scripts, tables and serialized scene controls.
+
+| Behavior | Evidence |
+| --- | --- |
+| Manual upgrade work 3000 | `installed_upgrade_script_to_second_day` selects the employee and training room through the original `FacilityMain.ks` path, equips an owned material, confirms, checks the resulting room recipe and receipt, and reaches day two. `installed_manual_facility_upgrade` separately checks ownership, requirements and the cached result. The fixture now buys material 10 from the installed shop catalog before scheduling the upgrade. Shop UI purchase and cancellation are tested separately below. |
+| Separate result panel and camera fades | `result_panel_fades_independently_of_camera` checks the work and income panels during their 250 ms transition. The surrounding camera transition takes 1 s. The installed assembly populates result rows and stamps synchronously. The managed work/income `StartAnimation` methods have no call sites in this profile. Window presentation and audible timing are unverified. |
+| Paid facilities | `installed_theater_selection_and_shift_receipts` checks the selected employee's room, visible status with one and two workers, ratings and thumbnail. The grid uses the room detail component referenced by the installed level 3 `ScheduleFacillityPanelCtrl`. `installed_cafe_sales_follow_room_and_shift` checks sales work 3002 with two existing café rooms in temporary state. With the same two grade-one customers, the worker earns 160,000 when their colleague is elsewhere and 167,000 when both work together. Two understaffed separate rooms pay zero on actual shift settlement. Construction is outside this fixture. |
+| Standalone save headers and comments | `installed_native_slot_catalog_and_comment` checks slot numbering on the title panel, date and status labels, page changes, the 25 UTF-16-unit comment limit, stale edits, and preservation of both relative bookmarks and the following bytes. |
+| Daytime and night slot panel | Both menu actions now enter the local panel and return to the calling menu. `installed_daily_slot_modes_and_confirmed_deletion` drives the installed daily panel through save, load, slot selection and cancel. It checks that empty loads are inert, an unsupported overwrite preserves the old file, and right-click deletion removes only the confirmed temporary slot. These tests exercise the panel through pointer events without rendering a game window. |
+| Player and facility data | `installed_managed_player_writer_matches_both_schedule_banks` and `installed_managed_writers_match_room_and_manager_bytes` compare Rust output with bytes produced by the installed `PlayerStatus.Status.Serialize`, `Facility.Serialize` and `FacilityManager.Serialize` methods, invoked on detached test objects. The reference records are 269, 102 and 177 bytes respectively. |
+| Character appearance in slots | `native_stock_appearance_stops_at_the_first_employee_status` checks stock male properties, active slot, icon bytes, timestamp, RGBA and voice pitch, then the first employee's properties and all nine palette slots. Its property record contains two sub-property slots and a bone-length adjustment written by the installed `MaidProp.Serialize`. Truncation at every byte of the stock prefix fails inside the first bookmark. Empty rosters reach the script section. |
+
+The slot reader works on detached data. Loading a character roster, reattaching
+its models and restoring KAG, desk, scenario and other managers as a single
+operation remain open. The game has not been launched during these checks.
+
+The final release library run passed **66/66**, including every installed-data
+test. The local log is `/tmp/cry-com104-management-final.log`.
+
+```sh
+COM3D2_ROOT="$HOME/Downloads/game-com3d2" cargo test --release --offline --locked \
+  -p crysirror-cm3d2 --features runtime --lib -- --include-ignored
+```
+
+### Standalone shop and management scene coverage
+
+2026-11-25, standalone 1.0.4. Both `DaytimeMain.ks` and `NightMain.ks`
+call `SceneShop` from `*ショップ`. Day supplies background ID 0, and night
+uses the same default. BuildSettings resolves the scene to level8. The
+serialized panels contain three UIGrids, with cell heights 64, 64 and 110.
+The scene uses `GameInShop`, `GameInShopMain`, `ShopItem` and `ItemInfoWnd`.
+The installed base tables contain 64 individual articles, 8 bundles and
+34 event items enabled by the base ID list. Entry checks club grade,
+building flags, group membership and background before exposing the lineup.
+
+| Release fixture | Observed behavior |
+| --- | --- |
+| `installed_shop_day_and_night_callers` | Starts at each installed shop label with a detached Muku roster. The ordinary scene loads the dance room, stock actor, camera, idle motion and shop widgets. Press/release on the category and item controls previews a skirt and restores its original property. Cancelling the material purchase leaves 30,000 CR and no material. Confirming debits 30,000 once, grants material 10, and shows the receipt. Leaving reaches a new `SceneDaily` call of the correct day/night type. |
+| `installed_shop_controls_and_ownership` | Checks installed collider bounds, hover description, working-funds label and a disabled purchase at 29,999 CR. After purchase the material has its own ownership flag and the event item's lineup entry retains its original status. A second purchase is rejected. Buying an individual garment reduces the bundle price and completing the set unlocks the editor card. |
+| `installed_upgrade_script_to_second_day` | Buys shop item 10000 through the purchase logic, schedules work 3000, applies a room recipe using material 10 and reaches day two through the installed scripts. The shop visit and the upgrade route have separate short fixtures. |
+
+A static scan of explicit SceneCall names found 14 in `DaytimeMain.ks` and
+15 in `NightMain.ks`, with 16 unique names across the two scripts. The
+standalone dispatcher has entries for `SceneCharacterSelect`, `SceneDaily`,
+`SceneEdit`, `SceneShop` and `SceneUserEdit`. Individual modes within those
+controllers require separate coverage. The 11 destinations still missing
+from this dispatcher are `SceneCasino`, `SceneCompetitiveShow`,
+`SceneCreativeRoom`, `SceneDanceSelect`, `SceneDeskCustomize`,
+`SceneFacilityManagement`, `SceneMaidManagement`, `ScenePhotoMode`,
+`SceneScenarioSelect`, `SceneStaffRoll` and `SceneTrophy`. This count covers
+direct destinations only. For example, `FacilityMain.ks` separately calls
+the implemented `SceneFacilityPowerUp`.
+
+The original construction controller checks pending costs before accepting
+an order. It queues a replacement (or an empty slot for demolition) with
+`FacilityManager.SetNextDayFacility`. `UpdateNextDayFacility` charges the
+cost and replaces the facility if the funds are still available; otherwise
+it discards the order. This is separate from work 3000. Construction,
+whole native slots, shop scroll dragging, per-hair fitting adjustments and
+windowed visual/timing parity remain open.
+
+The final release library run passed 68 tests, with zero failures or ignored
+tests. The standard desktop release executable linked and its detect-only
+entry recognized this installation as COM3D2. No full game replay or
+windowed input was run for this pass.
+
+To repeat the installed release fixtures, set `COM3D2_ROOT` to the install
+directory. For an installation wrapped in bzip2, set
+`COM3D2_MOTION_ARCHIVE` to the absolute path of the seekable motion archive
+already prepared by the player. The fixtures write saves only under a
+temporary directory.
+
+```sh
+cargo test --release --locked --offline -p crysirror-cm3d2 --features runtime --lib -- --include-ignored
+```
+
+### Standalone management component inventory and facility construction
+
+2026-11-25. Scope: the union of direct scene destinations in the installed
+1.0.4 `DaytimeMain.ks` and `NightMain.ks`, plus the facility upgrade called by
+`FacilityMain.ks`. The component names below come from the MonoScript references
+on the serialized levels, the managed assembly and, for `FacilityDetailsUI`,
+the component the original controller adds at runtime. A shared component
+on another level does not establish that a scene's controller works.
+
+| Original component and scene | In the standalone adapter before this construction pass | Observable behavior now |
+| --- | --- | --- |
+| `DailyMgr`, `DailyCtrl` (level 3) | Day/night menu, tutorial and original label selection exercised | Facility Management can dispatch to level 47. Both menus have their own script return label. |
+| `ScheduleMgr`, `ScheduleCtrl`, `ScheduleFacillityPanelCtrl` (level 3) | Both shifts, ordinary tasks and assignment to an existing paid room exercised | A newly constructed room keeps its physical slot when offered for allocation, including gaps. |
+| `ResultWorkCtrl/Mgr`, `ResultIncomeCtrl/Mgr` (level 3) | Default night, basic training and paid work have installed day-two fixtures | The previous settlement fixtures remain regression checks. |
+| `GameInShop`, `GameInShopMain`, `ShopItem`, `ItemInfoWnd` (level 8) | Purchase/cancel, equipment preview/restore, price and ownership exercised | The previous installed shop fixtures cover both callers. Continuous scroll dragging and the individual hair adjustments remain open. |
+| `SceneFacilityManagement` (level 47) | The standalone KAG dispatcher rejected the entire destination | Select among twelve physical slots, queue creation, replacement or demolition, cancel or reset. Fixed training facilities reject replacement. The installed room and available type lists have separate native toggle callbacks and use different data. |
+| `FacilityDataTable`, `FacilityManager` | Fixed room initialization, assignment and manual upgrades existed. No construction order was executed | A reservation leaves the current room and money alone. At the next day start, recheck funds per order, debit in order and install the room in its physical slot. An unaffordable order drops without charging. Demolition costs zero. |
+| `FacilityInfoUI`, nested `FacilityDetailsUI`, `uGUIListViewer` (level 47) | The schedule panel had a separate display. Level 47 had no controls | The physical room card shows a thumbnail, its name and reservation/deletion badge. Pencil edits target the displayed live or proposed instance. Empty edits keep the old name. The current-room inspector shows operating status and staff. The catalog shows minimum/maximum staff, construction cost, rank, and the type's recipes, categories, conditions and parameter bonuses. |
+| `FacilityPowerUpManager`, `SceneFacilityPowerUp` | Work 3000, material selection, confirmation, receipt and day-two fixture | Existing manual upgrade/receipt fixtures also exercise the list layout after loading the new canvas. |
+| `SaveAndLoadCtrl/Mgr` (level 3) | Slot listing, metadata, comment, delete and restore validation exist | Writing and restoring the complete standalone management state, including construction orders, remains open. |
+| `SceneUserEditMain/Manager` (level 12), `SceneEdit` (level 5), `CharacterSelectMain/Manager` (level 1) | Player editing, ordinary stock editing and supported picker modes have entries | This pass does not extend their mode coverage. |
+
+The following **eight destinations have no standalone dispatch entry**. Their
+deserialized components narrow down which implementation is missing. This is
+a count of destinations in the two scripts, not a count of all Unity
+components or original methods.
+
+| Level and destination | Original components whose scene behavior is missing |
+| --- | --- |
+| 7 · `SceneMaidManagement` | `MaidManagementMain` and character selection/status via `CharacterSelectManager`, `CharaSelectStatusMgr`, `StatusCtrl` |
+| 23 · `SceneDeskCustomize` | `DeskCustomizeMain`, `DeskCustomizeWindowManager` |
+| 49 · `SceneScenarioSelect` | `SceneScenarioSelect` and its character selection flow |
+| 27 · `ScenePhotoMode` | `PhotoWindowManager`, `ObjectManagerWindow`; rendering a save portrait exercises a different path |
+| 59 · `SceneCreativeRoom` | `CreativeRoomManager`, `CreativeRoomUIObjectSettings`, `CreativeRoomUISaveLoad` |
+| 2 · `SceneCompetitiveShow` | `CompetitiveShowMgr`, `MaidExaminationMgr` |
+| 21 · `SceneDanceSelect` | `DanceSelectManager` |
+| 54 · `SceneCasino` | `SceneCasino`; the daily menu already evaluates whether the button is available |
+
+The subsequent wardrobe pass below covers the fourth tab and editor-return
+callback. Continuous scrollbar dragging, animated feedback, window appearance
+and physical IME were not verified. The construction tests use an isolated
+save root and the installed game assets. They do not write to a user slot.
+
+| Installed release fixture | Observation |
+| --- | --- |
+| `installed_construction_controls_and_second_day` | Click protected slot, select empty slot 9, cancel then confirm café construction. The cost label reads 500,000. The existing-room list excludes the pending room. Browse catalog materials without reserving anything else. At day 2 the café occupies slot 9, cash is zero, and intervening slots remain empty. |
+| `installed_construction_replacement_demolition_and_lost_funds` | Overwrite an existing order, reduce available funds after reservation, process two orders, demolish the surviving bar for zero, and preserve peak facility count. |
+| `installed_room_name_edits_follow_live_and_reserved_instances` | Click the level's name-edit buttons. Commit Japanese text through the host broker, check trimming, blank input and Escape, then verify the queued café keeps its name after opening and the training room's new name reaches the upgrade selector. |
+| `installed_daily_facility_entry_and_return` | From the daytime and nighttime scripts' own facility menu labels, exercise the actual game update/dispatch, open level 47, check its native entrance camera, press/release OK, wait 499 + 1 ms and return to each original management menu. |
+
+The normal return fixture also reproduced a host error when the menu removed
+the world-fade layer before its first draw. Submission now tracks ownership
+after a successful frame and removes that layer once. The full release
+library run against the installed corpus passed 72 tests, with zero
+failures and zero ignored. This includes the old work-3000 selection and
+shop-to-day-two tests. No complete game replay or window was started.
+The standard desktop release binary linked with the workspace lockfile.
+Its `play <install> --detect-only` entry selected the `com3d2` adapter
+and the `COM3D2x64_Data` directory for the tested installation.
+
+### Standalone facility uniforms
+
+The fourth level-47 toggle calls `OpenFacilityCostumeSettingWindow`. Its list
+resolves each of the twelve physical slots to its proposed room when an order
+exists, or its live room otherwise. Pending demolitions drop out. Each room
+keeps its own Heroine, Default or Edit selection. Switching modes preserves
+the edited outfit. The default preview uses the thumbnail named by
+`facility_default_costume.nei`.
+
+Both installed callers jump through `label_edit`, issue `SceneEdit
+facility_costume`, then re-enter level 47 with `update_costume`. The adapter
+now takes this branch, gives the stock leader temporary clothing properties
+from the room, filters the editor by `facility_costume_mpn_enable_list.nei`,
+and writes changed temporary filenames back to the selected room on return.
+The ordinary recruitment/name-confirmation flow remains independent.
+The native custom portrait path uses a 630 × 890 card, a 90-update wait,
+`SE022.ogg` and the room GUID under the scoped Thumb directory. Real GPU
+capture and visual comparison for this particular editor mode are unverified.
+The fixture originally covered clothing selection. The subsequent level-5 pass below adds the per-part enable/disable panel (`着衣設定`). In the original, `CostumePartsEnabledCtrl.LoadMaidPropData` reads each room’s forced flag. `SetButtonActive` writes that flag back, and the all/clear buttons change the flags across the list.
+
+The installed `installed_facility_wardrobe_controls_and_props` fixture drives
+level-47 toggle, list, mode and editor-button input. It compares the stock and
+temporary skirt properties, then updates the proposed room, advances the day
+and checks that the opened facility owns the edited outfit.
+The installed release library suite passed all 73 tests, including the facility uniform fixture and the existing recruitment, management, and shop regressions.
+
+### Standalone level 5 force settings and level 19 credits
+
+The uniform editor's 着衣設定 category uses the installed category definitions,
+button mapping, colliders and four-column table. There are 25 enabled
+properties and 24 individual buttons. The hair-extension control shows the
+ribbon icon as well. In 1.0.4, every individual click also writes the ribbon
+flag. Select All and Deselect All call the same setter. Editing retains each
+menu filename independently of its forced flag. During work an unforced slot
+resets to the character's own clothing.
+
+Both daily scripts call level 19 with a period-specific return label. Its
+credits use the BGM and duration in `staffroll_data.nei`, staff entries and
+stop marker in `staffroll_stafflist.nei`, and the label and texture widgets
+from the level. Releasing Return starts the one-second exit fade. At natural
+completion the scroll stops at the logo and the controller holds for nine
+seconds before exiting. The standalone scene inventory now has seven direct
+destinations with dispatch entries out of sixteen.
+
+The installed release suite passed 74 tests, with zero failures and zero
+ignored. The day and night credits fixture submitted the original scene's
+scrolling text and an illustration to the host. It returned to the daytime
+menu on Return release and the nighttime menu at natural completion. The
+uniform fixture used the level's real hit rectangles to select all, clear
+all, and disable the skirt. It checked all 25 flags, retained the selected
+skirt filename after construction, assigned the character to the café, and
+checked the actual temporary property after both calls to
+`SetMaidCostumeFacility(0)`. No physical window or full-story replay formed
+part of this verification.
+
+### Standalone level 10 trophy collection
+
+On the 1.0.4 installation, both management scripts call `SceneTrophy` with
+their own return label. The dispatcher now handles eight of their sixteen
+direct destinations. Level 10 uses the serialized NGUI category and trophy
+grids, the shop category-button prefab and all three ranks of the trophy-row
+prefab. The installed base tables enable 15 heroine and 20 system trophies.
+The collection counts only enabled trophies towards each category and sums
+points only for owned trophies. A missing Extra category hides its counter.
+Each row uses its native title-mask flag and the current player's ownership
+to choose its text, medal opacity, card thumbnail and clickable area.
+
+The two-page tutorial uses the installed assets and player tutorial flag.
+Card inspection uses the small and full card textures, the serialized
+400 ms sine-eased fade, movement from the clicked thumbnail, and smooth
+scaling from 12 percent. The list supports clipped dragging, thumb dragging
+and row arrows. The card and tutorial isolate pointer input from the list.
+
+`installed_awards_categories_cards_and_both_callers` exercises the installed
+day and night scripts, first-visit tutorial, second help page, single owned
+card, masked title data, counts and points, zoom geometry at half time,
+dismissal, category switching, scrolling and each caller's return. It uses
+an isolated management fixture and headless host. Desktop-window appearance,
+inertial scrolling and physical input have not been compared against Unity.
+
+The release library suite passed all 75 tests against the installation,
+with zero failures and zero ignored. Both return labels reached their
+original management menu in the fixture.
+
+### Standalone management destinations after level 10
+
+2026-11-25, standalone COM3D2 1.0.4. Of the eight destinations previously
+missing from the day/night management dispatcher, four now have original-script
+input fixtures. This brings dispatch to 12 of 16 direct destinations. The
+following results concern ordinary management actions in the installed data.
+
+| Level and original controller | Installed-data release fixture and observed result | Outstanding coverage |
+| --- | --- | --- |
+| 49, `SceneScenarioSelect` | `installed_event_list_activation_and_return` takes the night cancel path back to its own menu. The day caller presents event 10 for an eligible Muku. Clicking the plate and confirming publishes `A1_KAN_0001` and `*top` to KAG. The adapter reads the event, condition and character lists and the serialized office/music settings. | Other event combinations, simultaneous fixed casts, physical appearance and full event playback. |
+| 7, `MaidManagementMain` | `installed_personnel_buttons_and_both_callers` checks the night hiring control is absent, edit is available, and cancel returns to the night menu. In the day caller, confirm on the installed 3,000,000 CR offer takes that exact amount, creates a second stock character in active slot zero and resumes the caller. | Status and class panels, thumbnail display, complete scrolling, dialogs and the editor round trip. Dismissal and reassignment of the leader have state handlers but no installed click fixture. |
+| 21, `DanceSelectManager` and `DanceSelect` | `installed_free_dance_song_cast_and_cancel` uses the night KAG free-dance entry, chooses viewing mode, clicks a song and a stock employee, and checks the original scene name in `tf`, the active actor and the cast count. Three back clicks unwind cast, song, and mode to the night menu. | Choreography playback, challenge and versus flows, dance settings, and visual transitions. |
+| 23, `DeskCustomizeMain`, `DeskItemWindow` and `DeskManager` | `installed_desk_seasonal_prop_and_return` selects item 100, instantiates its installed mesh as a world entity, changes seasonal visibility, focuses the camera and returns to the office. Re-entering and clearing visibility removes the world entity. The installed catalog enables 13 prefab items in one category. | Numeric transform editing, manipulation handles, complete window controls, and original slot persistence. The fixture checks world submissions and session state. Pixel comparison remains open. |
+| 27, `PhotoWindowManager` | No standalone dispatch. | Photo windows, object/character placement, save/load and screenshot actions. |
+| 59, `MyRoomCustom.CreativeRoomManager` | No standalone dispatch. | Room composition, placement UI, native room files and return. |
+| 2, `CompetitiveShowMgr` and `MaidExaminationMgr` | No standalone dispatch. | Character selection for the examination, eligibility, result presentation and continuation. |
+| 54, `SceneCasino` | No standalone dispatch. | Facility and dealer selection, exchange UI, coin thresholds and menu script return. |
+
+The fixtures drive an isolated management state with the original level data,
+hotspots and scripts. They do not open a desktop window or write a player slot.
+
+The final release library suite passed 79 tests with zero failed and zero
+ignored using the installed assets. The crate also passed its default-feature
+release check. The release desktop executable linked and `play --detect-only`
+identified the standalone installation as `COM3D2`.
+
+### Standalone title Config and static UI coverage
+
+For the installed standalone 1.0.4, the six ordinary title choices in
+`TitleMgr.OnClick` and the management script destinations are separate
+inventories. Before this fix, Start, Continue, End and Shop had dispatch.
+Config and Guest both reached the generic unsupported-title callback.
+`TitleCtrl.OnConfig` opens the persistent `ConfigMgr` system panel over
+the title. Guest calls `SaveAndLoadMgr.OpenLoadPanelKasiduki`, a distinct
+load mode which still lacks standalone title dispatch.
+
+The original `ConfigCtrl.Init` registers 32 callbacks, counting the two
+directions of a toggle separately. The title adapter wires eight of these:
+OK, master/BGM/system/voice/SE/environment volume, and message background
+transparency. Changes affect the current session. The other 24 bindings
+include screen settings, text and auto speeds, the dance channel and
+spatial-audio options. Native settings persistence remains open.
+
+For a wider static count, enumerate the 5,824 indexed `.ks` filenames in
+the installed base `GameData/script.arc`. Inspect line-command and bracket
+forms of `SceneCall` outside comment/label lines, accepting literal
+`name=Scene…` arguments. Of 29 unique literal targets, 17 match the
+standalone KAG scene dispatcher. The other 12 are:
+
+| Family | Literal targets without standalone dispatch |
+| --- | --- |
+| Management and editors | `SceneCompetitiveShow`, `SceneCreativeRoom`, `ScenePhotoMode` |
+| Casino | `SceneCasino`, `SceneCasinoShop`, `SceneCasinoSlot`, `SceneBlackJack` |
+| Other destinations | `SceneFreeModeSelect`, `SceneKasizukiMainMenu`, `SceneToTitle`, `SceneYotogi`, `SceneYotogiOld` |
+
+Eleven indexed scripts contain a nonliteral scene name. The count excludes
+`script_old_2.arc`, indirect calls from managed components and controls
+inside a dispatched scene. It does not establish reachability in any one
+playthrough. The four unresolved direct day/night management destinations
+are included in the 12. In addition, level 7 explicitly rejects its status
+and class panels. No exhaustive count of all nested controls is available.
+
+The release library suite passed all 80 tests, including
+`installed_title_config_modal_sound_and_return`. That fixture clicks the
+title Config button, checks the changed mixer value, attempts a click on
+the underlying Start button, and closes and reopens the panel to check
+the thumb position. In two muted headless desktop runs from the normal
+`play` entry, frame 810 showed SceneTitle with Config open (157 widgets).
+After clicking the master slider and native OK, frame 852 showed SceneTitle
+with Config closed (13 widgets) and focus on Config. Both runs used isolated
+writable data and the installed 1.0.4 game files.
+
+### Standalone management menu coverage, 16 direct destinations
+
+The standalone adapter now dispatches the four remaining destinations in
+`DaytimeMain.ks` and `NightMain.ks`. The denominator counts distinct
+destinations directly requested by these two management menus. Each fixture
+starts at the installed day or night menu label and clicks the serialized
+management button with a temporary player state.
+
+| Installed scene | Interaction covered by the fixture |
+| --- | --- |
+| 27, photography | Load the first available photo backdrop as geometry, hide and restore the toolbar, switch to the night rotary backdrop, cancel the exit dialog and then confirm it. |
+| 59, creative room | Build the default room from ten boundary quads. Use the installed size sliders, save a rectangular room into a temporary native slot, edit another axis and reload the saved geometry. |
+| 2, competitive show | Follow the single eligible entrant through character selection, timed judging, the installed personality motion and the acknowledgment that resumes the caller. |
+| 54, casino | Build the casino through facility management, select a dealer, check the insufficient-chip dialog, cancel one exchange, then buy 310 chips for 310,000 CR and leave the casino. |
+
+Scope below these entries includes photo posing and composition files, placed
+objects and custom panel materials in room saves, additional competitive-show
+award combinations, and the separate blackjack, slot and casino shop scenes.
+The room loader rejects unsupported object or material data before applying
+it. Physical input and desktop pixels were outside this fixture run.

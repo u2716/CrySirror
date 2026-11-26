@@ -111,3 +111,20 @@ The JSON report records device, resolution, warmup, actual GPU frame samples,
 probe update budget and rays per pixel. This measures the selected workload;
 probe and per-pixel settings do not imply equal image quality. It is neither
 a universal speedup claim nor an interactive FPS measurement.
+
+### Isolated World photographs
+
+The Rust host method `begin_world_photo` takes a client’s visible subject
+entity IDs, a camera and an output size up to one megapixel. The native
+wgpu presenter draws the extracted pose, materials and client lights to an
+independent transparent target. The result is a client-owned RGBA image
+job on the existing bounded capture/readback queue. The main view keeps
+its camera, temporal history, and color target. Hosts without a presenter
+report unsupported. The COM3D2 installed portrait test exercises Metal.
+This Rust-only extension has no reflected script or project-schema change.
+
+A toon material may bind a raw `outline_texture` for the inverted hull. It
+uses the free normal-map slot and row 2 of the toon lookup for a separate
+outline lighting ramp. Existing materials default to their authored constant
+outline colour. A textured hull and a material-wide colour table require the
+same lookup row and cannot be combined.

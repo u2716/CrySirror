@@ -622,6 +622,15 @@ fn fs_outline(i: VertexOut) -> @location(0) vec4<f32> {
     let light = toon_light();
     let ambient = toon_encode(sh_irradiance(n) * frame.env.x / PI);
     let p = material.effect_params;
+    if material.raster.y > 0.5 {
+        let edge = textureSample(t_normal, s_material, material_uv(i.uv)).rgb;
+        let edge_ramp = toon_lookup(2.0, dot(n, l) * 0.495 + 0.5).rgb;
+        var attenuation = 1.0;
+        if frame.sun_color.w > 0.0 {
+            attenuation = mix(1.0, sun_shadow(i.world, max(dot(n, normalize(-frame.sun_dir.xyz)), 0.0), i.clip.xy), frame.sun_color.w);
+        }
+        return vec4<f32>(toon_decode(edge * edge_ramp * light * (2.0 * attenuation)), attenuation);
+    }
     var c = ramp * toon_outline_color().rgb * light * 2.0 + ambient * 2.0;
     if p[3].z > 0.5 {
         // Ramp-shaded (Unity) toon: the outline is shaded like the surface.
@@ -645,11 +654,27 @@ fn fs_main(i: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec
         surface.color = vec4<f32>(mix(layer_b.rgb * material.base_color.rgb, surface.color.rgb, w), surface.color.a);
         surface.emission = vec3<f32>(0.0);
     }
+    // Slope layers (effect 9, or 8 with a tint): the emissive-slot texture
+    // × tint on upward-facing surfaces, the base on walls. Height-mask
+    // layers (effect 8, mode 2): the base where the occlusion-slot mask's
+    // green channel rises above the vertex mask (`_AUX` w).
+    let mask_layer = material.surface.y == 8.0 && material.effect_params[1].w > 1.5;
+    let layer_mask = textureSample(t_occlusion, s_material, uv).g;
+    if material.surface.y == 9.0 || (material.surface.y == 8.0 && material.effect_params[1].w > 0.5) {
+        var w = clamp(1.0 - normalize(i.normal).y, 0.0, 1.0);
+        if mask_layer {
+            let soft = max(material.effect_params[2].x, 1e-4);
+            w = clamp((layer_mask - (1.0 + soft) * i.aux.w + 2.0 * soft) / (2.0 * soft), 0.0, 1.0);
+        }
+        let top = layer_b.rgb * material.effect_params[1].rgb * material.base_color.rgb;
+        surface.color = vec4<f32>(mix(top, surface.color.rgb, w), surface.color.a);
+        surface.emission = vec3<f32>(0.0);
+    }
     let base=surface.color;
     let tn = decode_normal(textureSample(t_normal, s_material, uv));
     let specular_color = textureSample(t_specular, s_material, uv).rgb * material.surface.w;
     let occ_sample = textureSample(t_occlusion, s_material, uv);
-    let occ_tex = select(occ_sample.r, 1.0, material.surface.y == 6.0);
+    let occ_tex = select(occ_sample.r, 1.0, material.surface.y == 6.0 || mask_layer);
     // Toon: raw base, shadow (slot 3) and highlight (slot 6) samples.
     var toon_base = textureSample(t_base, s_material, uv);
     let toon_blend = textureSample(t_emissive, s_material, uv);

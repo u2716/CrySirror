@@ -110,3 +110,69 @@ Main menu: with Enter at frames 200, 500, 1000 and 1040 the headless run showed 
 Exact dequantization: with `a · (1 + v · 2⁻²¹) + b` (kind 4) and `a · (1 + (4v + I) · 2⁻²³) + b` (kind 6), `examples/extremes` gives the crate y 0.004…0.999 m and x −0.502…0.500 m, and the hero y −0.005…1.904 m with fingertips at (±0.684, 0.947). `examples/column` finds the `train-wreck-wide` valley floor at −125.4 m below the river's −124.6 m. `background_census` decodes all 334 level and 1,164 actor packages, and the skin decoder consumes every skinned fragment's streams exactly. Headless captures of the menu and the prologue matched the earlier fitted results.
 
 Skeleton and clips: `examples/clip_pose proto.pak proto.pak idle` reads the 230-joint player rig (hash `0xef94465d`) and its one-frame `idle` clip (51 joints with channels, no unsupported commands); the posed ankles sit at 0.12 m and the hands at hip height (0.91 m). The 48-bit constant quaternions swap the reconstructed component into the index slot (1,719 of 2,072 non-w-largest samples match the default pose, 193 when inserted). A headless follow-camera capture of `train-wreck-climb` shows the player standing in the idle pose with the frosted clothes skinned to the rig, where it had stood in its bind pose. `background_census` still decodes all packages.
+
+Player state machine (2026-11-25): `examples/anim_states anim-player.bin idle run idle-run-f run-idle` lists 988 states with the native transitions (`run` → `run-idle` 0.2 s, `idle-run-f` → `run` on `auto` 0.2 s, `run-idle` → `idle` on `auto` 2 s). `FRAMES=1 examples/clip_pose proto.pak proto.pak walk-fwd` gives an alternating looping gait (ankles ±0.45 m, swing lift 0.26 m). In `train-wreck-climb` with W held the log shows `player animation idle-hurt` then `walk-hurt`, following the scripts' `walk-hurt` movement type; the capture shows the player inside the hanging passenger car among its seats and luggage instead of on the valley floor 80 m below.
+
+Log-space rotations (2026-11-25): with the `CalcInfluences` formulas, `FRAMES=1 examples/clip_pose proto.pak proto.pak walk` reports no unsupported opcodes; the left wrist stays at 0.85–0.87 m height and 0.26–0.29 m from the body axis over the cycle (the constant `idle` pose has 0.91 m and 0.26 m), the `l_shoulder` rotation equals `idle`'s to within 0.04 per component up to sign, and the knee flexes about 23° at frame 0. Before the change the wrist stayed 0.56 m out at 0.97 m (arms raised). In `museum-steam-vault`, with W held from frame 1000 and Shift from frame 1100, the log shows `player animation walk` then `move`; the frame-1060 capture shows the walk with arms at the sides. The frame-1160 capture shows the follow camera inside the player model and the railing during the run.
+
+Blend trees and controller (2026-11-25):
+
+- **Offline evaluation:** `examples/anim_tree anim-player.bin` evaluates all 988 states without errors. `anim_tree anim-player.bin run no-weapon idle run run@28=0.5` gives `idle` plus `idle-base-big-add` (additive), `move`, and `move` 0.5 / `move-lean-r` 0.5. With `walk-hurt` the same states give `idle-hurt` and `walk-hurt-long`.
+- **Museum run:** in `museum-steam-vault` with W, Shift, release, Space, Shift+W and Space, the log shows the states `ambient-casual`, `idle-run-f`, `run`, `run-idle`, `idle`, `jump-in-place`, `jump-in-place-land`, `idle-run-f`, `run-jump-long`, `jump-long` (0.8 m above the floor), `jump-long-land-run`, `run-idle` and `idle`. The rig loads 138 of the 206 blend-tree clips.
+- **Captures:** the frame-1180 capture shows the run behind the railing and the frame-1460 capture the long-jump pose, with the camera behind the player.
+- **Known defect:** stretched triangles at the shoulder and hip remain.
+
+NPC animation (2026-11-25):
+
+- **Offline evaluation:** `MODULE=anim-npc examples/anim_tree anim-npc.bin` evaluates all 264 states.
+- **Museum binding:** in `museum-steam-vault` the log shows `ally continue-flynn-steam-vault-1`, and `flynn-heist` binds to `flynn-base` with the sets `*flynn-heist-anim-set*` and `*flynn-anim-set*`. Flynn's layers are `idle` plus the additive `look-add--left-right` and `look-add--up-down` at their centre phase.
+- **Capture:** the frame-940 capture shows Flynn standing on the lower walkway with his arms at his sides, and the player in `ambient-casual` after ten seconds at rest, framed from the continue camera's direction.
+
+Helper groups (2026-11-25):
+
+- **Offline measure:** `examples/skin_stretch hero-heist.pak proto.pak proto.pak walk` counts the triangles stretched more than 4× in the frame-0 pose. Before the helper groups followed their limbs it reported 33 of 28,055, with the elbow, shoulder-twist and knee helpers at the top. Afterwards it reports 20, made up of crotch triangles between the thighs and small lip triangles.
+- **Capture:** the frame-1180 museum capture shows no spikes at the arms or hips.
+
+Script animation (2026-11-25):
+
+- **Stub run:** `examples/script_run GAME_DIR --all 300` with the stub `World` reporting `animate` lists 7,776 calls. The first is in `train-wreck-weather`, which animates `train-wreck-car-a-1`, `train-wreck-car-b-1`, `train-wreck-car-b-undercarriage-1` and `shift-01-ladder-1`.
+- **Prologue run:** booting through the intro into `train-wreck-climb` logs `animate` for `idle-00-car-a`/`-car-b`/`-undercarriage`/`-ladder` (10.07 s), `drake-platform-drop-door` (1.20 s) and `broken` (0 s). Before the data-base fix, three of these failed with "ND clip read" and two decoded to no channels.
+- **Offline decode:** `clip_pose train-wreck-car-b.pak anim-train-wreck-climb.pak idle-00-car-b` decodes 151 frames on 3 joints, and the `pistol-base` `idle` decodes on 9 joints.
+- **Capture:** the prologue capture shows the car, the undercarriage and the ladder posed on the cliff face.
+
+Root motion and rig libraries (2026-11-25):
+
+- **Offline decode:** `clip_pose` reports `walk` 1.90 m/s, `move` 4.00 m/s, `move^turn-180^move` ending at quaternion (0, 1, 0, 0) and `jump-long` ending at (−0.005, −3.25, 6.98).
+- **Prologue capture:** after the change the hanging car stands over the cliff with the player inside it.
+- **Bench-climb track:** boot, then two Page Down presses (`train-wreck-climb` → `load-tw-a-high` → `train-wreck-treadmill`). Before the shared libraries this aborted with "asset cache exceeds 256 MiB" (255 MiB generated). Afterwards the run completes and logs `rig library Player: 138 clips, 15631 KiB` once, plus the treadmill animations `idle-04-car-a`/`-car-b`, `shift-03-door`, `drake-tight-motor` and `drake-tight-beam`. The museum run still shows the player states and Flynn's idle.
+
+Cameras and prop collision (2026-11-25):
+
+- **Prologue run:** the log shows `camera ada068bf` (`cam-railing-center-intro-1`, whose spawner exists) followed by `camera release None`.
+- **Prologue capture:** the final capture still shows the camera against the player inside the hanging car.
+- **Museum and treadmill:** the museum run is unchanged, and the bench and treadmill runs complete with exit code 0.
+
+Collision, edges and hanging (2026-11-25):
+
+- **Offline collision:** `examples/collision_census train-wreck-car-b.pak wrk-passenger-car-02.pak train-wreck-b.pak train-wreck-b-ingame10.pak` reads car-b as 372 hull + 2,325 mesh triangles with 438 edges and 132 corners, the passenger car as 16 objects, and the `train-wreck-b` level as 1,236 triangles from (13.64, −64.09, −96.97), equal to its MOPP offset, with 35 edges in its `-ingame10` feature database.
+- **Material programs:** `examples/material_samplers train-wreck-b.pak` reports slope layering for `snow-mod-cliff-cheap` (side 1, top sampler 2), `cliffwall-snow`, `cliffwall-snow-cheap` and `snow-boulder-med` (computed top) and `tree-bark-cheap` (side 1, top 2); `examples/normal_check` gives a mean cosine of 0.857 between decoded vertex normals and triangle normals. `cargo test -p crysirror-naughty-dog` covers the fragment-program decode and recognizer and the hull triangulation.
+- **Prologue run:** the log shows `player hangs from edge 7 of Some(400)` (`trn-wrk-rail`). The follow camera stays 4 m out for the whole run, where every direction was blocked within 0.8 m before. The frame-3600 capture shows the player hanging from the car's end rail over the cliff.
+- **Input tracks:** holding D logs `ledge-shimmy-right` and then `ledge-grab`, moving the root 0.3 m along the rail. Holding W logs `ledge-climb-up`, `ledge-climb-up-2`, `climb-onto-1-75m^idle` and `idle`, and the capture shows the player over the rail on the car's end platform.
+- **Camera animation:** the log shows `camera animation 27f169e6` and `camera clip camera-train-wreck-exterior-small: 1201 frames`.
+- **Snow capture:** a free-camera capture shows snow on cliff tops and rock on the walls, where before the rock was bare and the noblend snow ground was white. The light-blue flat region behind the cliffs (the wide backdrop) is unchanged.
+- **Height-mask layers:** `examples/material_samplers` on `train-wreck-wide`, `ice-cave-temple` and `menu-temple` reports `Mask { sampler: 2, softness: 0.1 }` blends (rock → unit 2, mask → unit 0, snow → unit 3 in `rock-to-snow`). The free-camera backdrop capture shows snow on the mountain faces, where before the rock was bare.
+- **Edge jumps:** from the prologue hang, D with Space logs `ledge-jump-begin`, `-mid`, `-end` and `ledge-grab` 1.1 m to the right along the rail; Space alone finds no edge above; C logs `fall` without an immediate re-grab.
+
+Trigger regions (2026-11-25):
+
+- **Offline:** `examples/trigger_regions train-wreck-climb-fg-ingame10.pak continue-player car-b-seat cam-car-b-interior` reads 69 regions; every seat and interior camera spawner lies in `climb-car-1` (parent `train-wreck-car-b-1`), `continue-player-climb-1` in `rs-stick-to-move-drake-1`, and `continue-player-treadmill-1` in `rs-task-bench-climb-complete-1`, as the static analysis of the EBOOT tests predicts.
+- **Prologue run:** on the climb track the log shows `region enter` for `rs-stick-to-move-drake-1`, `rs-disable-circle-1`, `rs-camera-cut-compensate-1`, `rgn-fall-to-death-treadmill-1`, `rs-kill-journal-2` and `rs-cam-railing-center-1` at the start and `region exit rs-cam-railing-center-1` after climbing onto the platform, with no script errors.
+
+Materials (2026-11-25):
+
+- **Captures:** after the change the prologue capture shows the car metal matte with normal-map relief and the rock faces without the white grazing-angle sheen they had before. Painting the river material red in a test build left the pale flat region seen from 25–30 m above the cliffs unchanged: it is sky beyond the authored canyon geometry, not the river (`trnwrk-wide-river-water`, 509 × 1505 m at y −125), and does not appear from the player's position.
+
+Render settings (2026-11-25):
+
+- **Title screen:** the main menu capture against a capture of the original title screen gives mean RGB (68, 58, 33) against (57, 60, 32) and luminance p10/p50/p90 17/44/121 against 21/43/104; before the change the capture measured (141, 135, 90) and 74/125/203. The gold statue shows its gold `color-01` layer over `colordrk` by the mask, where before it rendered white.
+- **Prologue:** the camera at the hanging car lies in `regiongroup-train-wreck-climb-states-1` (`camera` category, record `#f8cd5e96`); the capture shows the blue canyon fog (0.17, 0.31, 0.52) and the earlier exposure. With fog the menu measures 23/40/93 against the original's 21/43/104.

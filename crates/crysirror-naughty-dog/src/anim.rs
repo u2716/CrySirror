@@ -8,7 +8,7 @@
 //! 16-byte validity mask comes a command program whose opcodes are the
 //! EBOOT's animation command table (`sub_2D7058` names them): each command
 //! is `u8 argument count, u8 opcode, u16 arguments…`, and data offsets are
-//! relative to clip + 0x60. Commands write a joint-parameter buffer of 48
+//! relative to the program (block + 0x10). Commands write a joint-parameter buffer of 48
 //! bytes per animated joint (scale +0, quaternion +0x10, translation
 //! +0x20); outputs past the animated joints go to a scratch slot.
 //!
@@ -34,13 +34,18 @@
 //!
 //! - `Dec3VecRange` items: per-component widths from a `[a, b, a + b, c]`
 //!   table after the 16-byte records, `minimum + q · step` (see
-//!   [`range_record`]).
+//!   [`range_record`]), plus the predictor the width flags select.
 //!
 //! - `PostDecompressQuatLog`/`LogPca`: the range vectors are half-angle
-//!   logarithms, `q = exp(v)` (on `idle^roll-fw` they give a 116° elbow
-//!   bend and 30° finger curls). Their per-item parameters (8 and 16 bytes:
-//!   not a 48-bit or 16-bit-per-component centre quaternion) are not
-//!   applied (SATD-nd-retail-runtime).
+//!   logarithms turned into `e = (s(t)·v, c(t))`, `t = v·v`, with the
+//!   decoder's cubic sine and cosine series, then `q = q0 ⊗ e` (Log) or
+//!   `q = P ⊗ e ⊗ Q` (LogPca) with per-item quaternions from the
+//!   parameter block (see [`log_params`]).
+//!
+//! The op handlers live in the `CalcInfluences` SPU job (loaded at LS
+//! 0x4000; 62-entry handler table at listing 0xA850, op 27 at 0x30C0, op
+//! 29 at 0x6C80, op 30 at 0x6E90); the formulas were checked by running
+//! those handlers on controlled keys.
 //!
 //! Not decoded: the non-uniform key caches; those joints keep the rest
 //! pose.
@@ -49,8 +54,6 @@ use anyhow::{Context, Result, ensure};
 use glam::{Quat, Vec3};
 
 pub const MAGIC: u32 = 0x4344_0107;
-/// Offsets in the clip program are relative to clip + 0x60.
-const DATA_BASE: usize = 0x60;
 const SLOT: usize = 32;
 
 /// One joint's local channels per frame; `None` where the clip leaves the
@@ -70,6 +73,14 @@ pub struct Clip {
     pub fps: f32,
     /// Per animated joint.
     pub joints: Vec<JointTrack>,
+    /// Horizontal root-motion speed (metres per second) of the `align`
+    /// channel, 0 without one.
+    pub root_speed: f32,
+    /// Per-frame `align` (the character root) and `apReference` (the
+    /// action-pack reference) transforms in clip space: translation,
+    /// rotation. Empty without the channel.
+    pub align: Vec<(Vec3, Quat)>,
+    pub ap_reference: Vec<(Vec3, Quat)>,
     /// Commands whose channels were skipped or decoded with an inferred rule.
     pub unsupported: Vec<&'static str>,
 }
@@ -122,14 +133,36 @@ fn s3_key(v: u64, a: u32, b: u32, c: u32) -> Quat {
     Quat::from_array(q).normalize()
 }
 
-/// `exp` of a pure quaternion `(v, 0)`.
+/// The decoder's `exp` of a half-angle log `v`: cubic series in `t = v·v`
+/// for `cos|v|` and `sin|v| / |v|` (constants at `CalcInfluences` listing
+/// 0xA7F0 and 0xA800). It is not renormalised.
 fn quat_exp(v: Vec3) -> Quat {
-    let a = v.length();
-    if a < 1e-9 {
-        return Quat::from_xyzw(v.x, v.y, v.z, 1.).normalize();
-    }
-    let s = a.sin() / a;
-    Quat::from_xyzw(v.x * s, v.y * s, v.z * s, a.cos())
+    let t = v.length_squared();
+    let c = 1. + t * (-0.5 + t * (0.041_523_72 + t * -0.001_271_407_7));
+    let s = 1. + t * (-0.166_666_67 + t * (0.008_317_291 + t * -0.000_185_261_76));
+    Quat::from_xyzw(v.x * s, v.y * s, v.z * s, c)
+}
+
+/// Per-item quaternions of a `PostDecompressQuatLog` (`pca` false: `q0`)
+/// or `LogPca` (`(P, Q)`) parameter block, as `s16 / 32768`. Log blocks
+/// are 16 bytes per item pair with interleaved halfwords
+/// `[x0 x1 y0 y1 z0 z1 w0 w1]`; LogPca blocks are 16 bytes per item,
+/// `[Px Qx Py Qy Pz Qz Pw Qw]`.
+fn log_params(data: &[u8], at: usize, count: usize, pca: bool) -> Result<Vec<(Quat, Quat)>> {
+    let h = |o: usize| -> Result<f32> { Ok(f32::from(i16::from_be_bytes(data.get(o..o + 2).context("ND log parameters")?.try_into()?)) / 32768.) };
+    (0..count)
+        .map(|i| {
+            if pca {
+                let b = at + 16 * i;
+                let c = |k: usize| h(b + 4 * k);
+                let d = |k: usize| h(b + 4 * k + 2);
+                Ok((Quat::from_xyzw(c(0)?, c(1)?, c(2)?, c(3)?), Quat::from_xyzw(d(0)?, d(1)?, d(2)?, d(3)?)))
+            } else {
+                let b = at + 16 * (i / 2) + 2 * (i % 2);
+                Ok((Quat::from_xyzw(h(b)?, h(b + 4)?, h(b + 8)?, h(b + 12)?), Quat::IDENTITY))
+            }
+        })
+        .collect()
 }
 
 /// Bits `p..p + w` (MSB first) of a 128-bit record as a float with sign,
@@ -146,12 +179,23 @@ fn small_float(r: u128, p: u32, w: u32) -> f32 {
 /// minimum. The field starts (bits 21, 42, 64, 86, 107) are where 98–99.5 %
 /// of 4,000 records have plausible exponents; the minimum lies within
 /// millimetres of the joints' rest translations; the per-component bit
-/// widths `[a, b, a + b, c]` follow the records (they sum to every item's
-/// size). Which field steps which component is inferred.
+/// widths `[a, b, a + b, c]` follow the records (their low six bits sum to
+/// every item's size; the top two bits are flags, set only on items a
+/// `PostDecompressQuatLog` later converts). A flag `f` (1–3) on the
+/// width byte of component x, y or z (bytes 0, 1, 3) adds component `f − 1`
+/// of the previous item's decoded vector of the same frame: a predictor
+/// chaining the log rotations. Which field steps which component is inferred.
 fn range_record(r: u128) -> ([f32; 3], [f32; 3]) {
     let header = ((r >> 107) & 0x1f_ffff) as u32;
     let s0 = f32::from_bits((header >> 13) << 23 | (header & 0x1fff) << 10);
     ([s0, small_float(r, 21, 21), small_float(r, 42, 22)], [small_float(r, 64, 22), small_float(r, 86, 21), small_float(r, 107, 21)])
+}
+
+/// The `JOINT_HIERARCHY` hash an `ANIM` payload's clip animates.
+pub fn hierarchy(p: &Loaded, payload: usize) -> Result<u32> {
+    let cd = p.ptr(payload + 8)?;
+    ensure!(p.u32(cd)? == MAGIC, "ND clip magic");
+    p.u32(cd + 4)
 }
 
 /// Decode the clip of an `ANIM` payload for a skeleton with `animated`
@@ -168,13 +212,14 @@ pub fn decode(p: &Loaded, payload: usize, name: &str, animated: usize) -> Result
     let fps = f32::from_bits(u32_at(0x1c)?);
     let program_block = u32_at(0x30)? as usize;
     let first_frame = u32_at(0x38)? as usize;
-    let base = DATA_BASE;
+    // Data offsets are relative to the program (the block + 0x10): 0x60
+    // in the player rig's clips, 0x50 in `anim-train-wreck-climb` props.
+    let base = program_block + 0x10;
     // Per frame, per joint-parameter offset: the value written.
     let mut constants: Vec<(usize, Value)> = Vec::new();
     let mut keys: Vec<Vec<Option<Value>>> = Vec::new();
     let mut outputs: Vec<(usize, usize)> = Vec::new();
     let mut unsupported = Vec::new();
-    let mut inferred: Vec<&'static str> = Vec::new();
     let mut sizes: Vec<u8> = Vec::new();
     let list = |off: usize, n: usize| -> Result<Vec<usize>> { (0..n).map(|i| Ok(usize::from(u16_at(base + off + 2 * i)?))).collect() };
     let mut at = program_block + 0x10;
@@ -192,7 +237,13 @@ pub fn decode(p: &Loaded, payload: usize, name: &str, animated: usize) -> Result
             21..=24 => {
                 let outs = list(args[2], count)?;
                 let values = base + args[2] + (2 * count).div_ceil(16) * 16;
+                // Lists are padded to a multiple of 8 with a repeated
+                // output whose values may lie past the clip: stop there.
                 for (i, o) in outs.into_iter().enumerate() {
+                    let width = [12, 6, 16, 6][usize::from(op - 21)];
+                    if values + width * (i + 1) > size {
+                        break;
+                    }
                     let v = match op {
                         21 => Value::Vec(Vec3::new(f32::from_bits(u32_at(values + 12 * i)?), f32::from_bits(u32_at(values + 12 * i + 4)?), f32::from_bits(u32_at(values + 12 * i + 8)?))),
                         22 => Value::Vec(Vec3::new(half(u16_at(values + 6 * i)?), half(u16_at(values + 6 * i + 2)?), half(u16_at(values + 6 * i + 4)?))),
@@ -267,37 +318,45 @@ pub fn decode(p: &Loaded, payload: usize, name: &str, animated: usize) -> Result
                 let widths = records + 16 * count;
                 for i in 0..count {
                     let w = data.get(widths + 4 * i..widths + 4 * i + 4).context("ND range widths")?;
-                    let (wa, wb, wc) = (u32::from(w[0]), u32::from(w[1]), u32::from(w[3]));
+                    let (wa, wb, wc) = (u32::from(w[0] & 0x3f), u32::from(w[1] & 0x3f), u32::from(w[3] & 0x3f));
                     if wa + wb + wc != u32::from(sizes.get(first + i).copied().unwrap_or(0)) {
                         continue;
                     }
                     let r = u128::from_be_bytes(data.get(records + 16 * i..records + 16 * i + 16).context("ND range record")?.try_into()?);
                     let (step, min) = range_record(r);
+                    let flags = [w[0] >> 6, w[1] >> 6, w[3] >> 6];
                     for (f, k) in keys.iter_mut().enumerate() {
                         let v = item_bits[f].get(first + i).copied().unwrap_or(0);
                         let q = [(v >> (wb + wc)) & ((1 << wa) - 1), (v >> wc) & ((1 << wb) - 1), v & ((1 << wc) - 1)];
+                        let previous = match (i > 0).then(|| k.get(first + i - 1)).flatten() {
+                            Some(Some(Value::Vec(p))) => *p,
+                            _ => Vec3::ZERO,
+                        };
+                        let value = Vec3::from_array(std::array::from_fn(|c| {
+                            let predicted = if flags[c] == 0 { 0. } else { previous[usize::from(flags[c]) - 1] };
+                            min[c] + q[c] as f32 * step[c] + predicted
+                        }));
                         if let Some(slot) = k.get_mut(first + i) {
-                            *slot = Some(Value::Vec(Vec3::from_array(std::array::from_fn(|c| min[c] + q[c] as f32 * step[c]))));
+                            *slot = Some(Value::Vec(value));
                         }
                     }
                 }
             }
             // PostDecompressQuatLog / LogPca(count, buffer, parameters, key
-            // slot): range-decoded vectors become rotations `exp(v)` with
-            // `v` the half-angle log. The per-item parameters (8 and 16
-            // bytes) are not applied.
+            // slot): `q0 ⊗ exp(v)` / `P ⊗ exp(v) ⊗ Q` in place.
             29 | 30 => {
                 let first = args[3] / SLOT;
+                let params = log_params(data, base + args[2], count, op == 30)?;
                 for k in keys.iter_mut() {
-                    for i in 0..count {
+                    for (i, (p, q)) in params.iter().enumerate() {
                         if let Some(slot) = k.get_mut(first + i) {
                             if let Some(Value::Vec(v)) = slot {
-                                *slot = Some(Value::Quat(quat_exp(*v)));
+                                let e = quat_exp(*v);
+                                *slot = Some(Value::Quat(if op == 29 { *p * e } else { *p * e * *q }));
                             }
                         }
                     }
                 }
-                inferred.push(if op == 29 { "PostDecompressQuatLog parameters" } else { "PostDecompressQuatLogPca parameters" });
             }
             // KeyCacheUniformLerp / Slerp(count, buffer, outputs, key slot).
             15 | 16 => {
@@ -347,13 +406,224 @@ pub fn decode(p: &Loaded, payload: usize, name: &str, animated: usize) -> Result
             }
         }
     }
-    unsupported.extend(inferred);
     unsupported.sort_unstable();
     unsupported.dedup();
-    Ok(Clip { name: name.to_owned(), hierarchy: u32_at(4)?, frames, fps, joints, unsupported })
+    let align = raw_channel(p, payload, crate::dc::sid("align")).unwrap_or_default();
+    let ap_reference = raw_channel(p, payload, crate::dc::sid("apReference")).unwrap_or_default();
+    let root_speed = match (align.first(), align.last()) {
+        (Some(a), Some(b)) if align.len() > 1 => {
+            let d = b.0 - a.0;
+            (d.x * d.x + d.z * d.z).sqrt() / ((align.len() - 1) as f32 / fps.max(1.))
+        }
+        _ => 0.,
+    };
+    Ok(Clip { name: name.to_owned(), hierarchy: u32_at(4)?, frames, fps, joints, root_speed, align, ap_reference, unsupported })
+}
+
+/// `ANIM_RAWCHANNELS` (`ANIM` +0xc): `{count, fps, entry pointers}`, an
+/// entry `{StringId, data}`. A channel's data holds the first and last
+/// transforms (two 11-float `{quaternion, scale, translation, 0}` records)
+/// and at +88 `{samples, u16 record bytes, u16 components, u16 count, u16
+/// flags}`: one record per frame, 12 bytes (translation; components 4) or
+/// 28 bytes (quaternion then translation; components 6). `walk` advances
+/// 0.0633 m per frame (1.9 m/s), `move` 4.0 m/s, `move^turn-180^move`
+/// turns 180°, `jump-long` drops 3.25 m over 6.98 m.
+fn raw_channel(p: &Loaded, payload: usize, name: u32) -> Option<Vec<(Vec3, Quat)>> {
+    let raw = p.ptr(payload + 0xc).ok()?;
+    let count = p.u32(raw).ok()? as usize;
+    if count > 64 {
+        return None;
+    }
+    for i in 0..count {
+        let entry = p.ptr(raw + 8 + 4 * i).ok()?;
+        if p.u32(entry).ok()? != name {
+            continue;
+        }
+        let data = p.ptr(entry + 4).ok()?;
+        let samples = p.ptr(data + 88).ok()?;
+        let (stride, components) = (usize::from(p.u16(data + 92).ok()?), p.u16(data + 94).ok()?);
+        let frames = usize::from(p.u16(data + 98).ok()?);
+        let rotation = components & 2 != 0;
+        if frames == 0 || frames > 1 << 14 || stride != if rotation { 28 } else { 12 } {
+            return None;
+        }
+        let f = |at: usize| p.f32(at).ok();
+        return (0..frames)
+            .map(|k| {
+                let r = samples + stride * k;
+                if rotation {
+                    let q = Quat::from_xyzw(f(r)?, f(r + 4)?, f(r + 8)?, f(r + 12)?).normalize();
+                    Some((Vec3::new(f(r + 16)?, f(r + 20)?, f(r + 24)?), q))
+                } else {
+                    Some((Vec3::new(f(r)?, f(r + 4)?, f(r + 8)?), Quat::IDENTITY))
+                }
+            })
+            .collect();
+    }
+    None
+}
+
+/// The names of an `ANIM` payload's raw channels with their sample
+/// layout `(stride, components, frames)`.
+pub fn raw_channels(p: &Loaded, payload: usize) -> Vec<(u32, u16, u16, u16)> {
+    let Ok(raw) = p.ptr(payload + 0xc) else { return Vec::new() };
+    let count = p.u32(raw).map_or(0, |c| c as usize).min(64);
+    (0..count)
+        .filter_map(|i| {
+            let entry = p.ptr(raw + 8 + 4 * i).ok()?;
+            let data = p.ptr(entry + 4).ok()?;
+            Some((p.u32(entry).ok()?, p.u16(data + 92).ok()?, p.u16(data + 94).ok()?, p.u16(data + 98).ok()?))
+        })
+        .collect()
+}
+
+/// The float samples of raw channel `name` (`stride / 4` floats each).
+pub fn raw_samples(p: &Loaded, payload: usize, name: u32) -> Vec<Vec<f32>> {
+    let found = || -> Option<Vec<Vec<f32>>> {
+        let raw = p.ptr(payload + 0xc).ok()?;
+        let count = (p.u32(raw).ok()? as usize).min(64);
+        let entry = (0..count).filter_map(|i| p.ptr(raw + 8 + 4 * i).ok()).find(|e| p.u32(*e).ok() == Some(name))?;
+        let data = p.ptr(entry + 4).ok()?;
+        let samples = p.ptr(data + 88).ok()?;
+        let (stride, frames) = (usize::from(p.u16(data + 92).ok()?), usize::from(p.u16(data + 98).ok()?));
+        if stride == 0 || stride % 4 != 0 || frames > 1 << 14 {
+            return None;
+        }
+        (0..frames).map(|k| (0..stride / 4).map(|j| p.f32(samples + stride * k + 4 * j).ok()).collect()).collect()
+    };
+    found().unwrap_or_default()
+}
+
+/// The clip name of a clip mirrored by [`mirror`].
+pub const MIRROR_SUFFIX: &str = "@mirror";
+
+/// The left/right partner of each joint by name (`l_…`/`r_…`, `…_l`/`…_r`);
+/// central joints are their own partners.
+pub fn joint_partners(names: &[String]) -> Vec<usize> {
+    let swap = |n: &str| -> Option<String> {
+        if let Some(rest) = n.strip_prefix("l_") {
+            Some(format!("r_{rest}"))
+        } else if let Some(rest) = n.strip_prefix("r_") {
+            Some(format!("l_{rest}"))
+        } else if let Some(stem) = n.strip_suffix("_l") {
+            Some(format!("{stem}_r"))
+        } else {
+            n.strip_suffix("_r").map(|stem| format!("{stem}_l"))
+        }
+    };
+    names.iter().enumerate().map(|(j, n)| swap(n).and_then(|m| names.iter().position(|x| *x == m)).unwrap_or(j)).collect()
+}
+
+/// A clip mirrored across the character's YZ plane (x is left): each
+/// joint takes its partner's pose reflected, `W′ⱼ = R·W_p·R·Cⱼ` with `R`
+/// the x reflection and `Cⱼ = (R·B_p·R)⁻¹·Bⱼ` from the bind pose, so the
+/// bind pose maps onto itself whatever the joints' local axes. `align`
+/// and `apReference` are reflected the same way. The mirrored states'
+/// clips (`ledge-shimmy-left` plays `ledge-grab-shuffle-r-hurt`) are
+/// built this way; the native `SKELETON_FLIPDATA` joint-pair programs are
+/// not decoded (SATD-nd-retail-runtime).
+pub fn mirror(clip: &Clip, skel: &crate::skeleton::Skeleton) -> Clip {
+    use glam::Mat4;
+    let n = skel.names.len();
+    let partner = joint_partners(&skel.names);
+    let order = skel.order();
+    let r = Mat4::from_scale(Vec3::new(-1., 1., 1.));
+    let world_of = |local: &dyn Fn(usize) -> (Vec3, Quat, Vec3)| {
+        let mut w = vec![Mat4::IDENTITY; n];
+        for &j in &order {
+            let (t, q, sc) = local(j);
+            let l = Mat4::from_scale_rotation_translation(sc, q, t);
+            w[j] = skel.parents[j].map_or(l, |p| w[p] * l);
+        }
+        w
+    };
+    let bind = world_of(&|j| skel.rest[j]);
+    let correction: Vec<Mat4> = (0..n).map(|j| (r * bind[partner[j]] * r).inverse() * bind[j]).collect();
+    let frames = clip.frames.max(1);
+    let track = |j: usize| clip.joints.get(j);
+    let animated: Vec<bool> = (0..n).map(|j| [j, partner[j]].iter().any(|&k| track(k).is_some_and(|t| t.translation.is_some() || t.rotation.is_some() || t.scale.is_some()))).collect();
+    let mut joints: Vec<JointTrack> = (0..clip.joints.len().max(n)).map(|_| JointTrack::default()).collect();
+    for f in 0..frames {
+        let local = |j: usize| {
+            let (mut t, mut q, mut sc) = skel.rest[j];
+            if let Some(tr) = track(j) {
+                t = tr.translation.as_ref().and_then(|v| v.get(f.min(v.len().saturating_sub(1)))).copied().unwrap_or(t);
+                q = tr.rotation.as_ref().and_then(|v| v.get(f.min(v.len().saturating_sub(1)))).copied().unwrap_or(q);
+                sc = tr.scale.as_ref().and_then(|v| v.get(f.min(v.len().saturating_sub(1)))).copied().unwrap_or(sc);
+            }
+            (t, q, sc)
+        };
+        let world = world_of(&local);
+        let mirrored: Vec<Mat4> = (0..n).map(|j| r * world[partner[j]] * r * correction[j]).collect();
+        for j in (0..n).filter(|j| animated[*j]) {
+            let l = skel.parents[j].map_or(mirrored[j], |p| mirrored[p].inverse() * mirrored[j]);
+            let (sc, q, t) = l.to_scale_rotation_translation();
+            let jt = &mut joints[j];
+            jt.translation.get_or_insert_with(Vec::new).push(t);
+            jt.rotation.get_or_insert_with(Vec::new).push(q.normalize());
+            if track(j).is_some_and(|t| t.scale.is_some()) || track(partner[j]).is_some_and(|t| t.scale.is_some()) {
+                jt.scale.get_or_insert_with(Vec::new).push(sc);
+            }
+        }
+    }
+    let reflect = |(t, q): (Vec3, Quat)| (Vec3::new(-t.x, t.y, t.z), Quat::from_xyzw(q.x, -q.y, -q.z, q.w));
+    Clip {
+        name: format!("{}{MIRROR_SUFFIX}", clip.name),
+        joints,
+        align: clip.align.iter().copied().map(reflect).collect(),
+        ap_reference: clip.ap_reference.iter().copied().map(reflect).collect(),
+        ..clip.clone()
+    }
 }
 
 /// Every `ANIM` item of a relocated package, by name.
 pub fn items(p: &Loaded) -> impl Iterator<Item = (&str, usize)> {
     p.directory.items.iter().filter(|i| i.kind == "ANIM").map(|i| (i.name.as_str(), i.payload_offset as usize))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::skeleton::Skeleton;
+
+    fn rig() -> Skeleton {
+        // A root and two arms whose local axes are not mirror images.
+        let rest = vec![
+            (Vec3::ZERO, Quat::IDENTITY, Vec3::ONE),
+            (Vec3::new(0.3, 1.4, 0.), Quat::from_rotation_z(0.4), Vec3::ONE),
+            (Vec3::new(-0.3, 1.4, 0.), Quat::from_rotation_z(-0.4) * Quat::from_rotation_x(std::f32::consts::PI), Vec3::ONE),
+        ];
+        Skeleton { hash: 1, names: vec!["root".into(), "l_arm".into(), "r_arm".into()], parents: vec![None, Some(0), Some(0)], animated: 3, inverse_bind: vec![[0.; 16]; 3], rest }
+    }
+
+    fn clip(rotations: [Quat; 2]) -> Clip {
+        Clip {
+            name: "lift".into(),
+            hierarchy: 1,
+            frames: 2,
+            fps: 30.,
+            joints: vec![JointTrack::default(), JointTrack { rotation: Some(rotations.to_vec()), ..Default::default() }, JointTrack::default()],
+            root_speed: 0.,
+            align: vec![(Vec3::new(0.2, 0., 0.), Quat::from_rotation_y(0.3)); 2],
+            ap_reference: Vec::new(),
+            unsupported: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn mirroring_keeps_the_bind_pose_and_inverts_itself() {
+        let skel = rig();
+        let lift = Quat::from_rotation_z(0.4) * Quat::from_rotation_y(0.8);
+        let c = clip([skel.rest[1].1, lift]);
+        let m = mirror(&c, &skel);
+        assert_eq!(m.name, "lift@mirror");
+        // Frame 0 is the bind pose: the right arm keeps its rest rotation.
+        let r = m.joints[2].rotation.as_ref().expect("right arm track")[0];
+        assert!(r.dot(skel.rest[2].1).abs() > 0.9999);
+        // The left arm's motion moves to the right arm, and back again.
+        assert!(m.joints[2].rotation.as_ref().unwrap()[1].dot(skel.rest[2].1).abs() < 0.999);
+        let back = mirror(&Clip { name: "lift".into(), ..m.clone() }, &skel);
+        assert!(back.joints[1].rotation.as_ref().unwrap()[1].dot(lift).abs() > 0.9999);
+        assert!((m.align[0].0.x + 0.2).abs() < 1e-6);
+    }
 }

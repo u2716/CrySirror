@@ -2188,13 +2188,16 @@ dependencies = [
  "crysirror-runtime",
  "crysirror-tjs2",
  "crysirror-unity",
+ "crysirror-wgpu",
  "encoding_rs",
  "glam 0.27.0",
+ "pollster 0.3.0",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
  "unicode-segmentation",
+ "wgpu",
 ]
 
 [[package]]
@@ -2517,6 +2520,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "crc32fast",
  "crysirror-codec-emote",
  "crysirror-core",
  "crysirror-formats-arc",
@@ -2536,6 +2540,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "web-time",
 ]
 
 [[package]]
@@ -3072,6 +3077,7 @@ dependencies = [
  "glam 0.27.0",
  "serde",
  "serde_json",
+ "unicode-segmentation",
 ]
 
 [[package]]

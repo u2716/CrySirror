@@ -65,6 +65,11 @@ Other opcodes report "Unknown opcode". After a native call the interpreter reads
 | `fade-to-black` / `fade-to-white` | 0x13d3f4 / 0x13d3ac | `(alpha, seconds)` screen fade |
 | `set-black-fade` / `set-white-fade` | 0x13d344 / 0x14aee4 | `(seconds, on)` |
 | `player-disable-controls` | — | a control mask; `player-controls-all`/`-none` (`script-funcs.bin`) return 0xffff / 0 |
+| `symbol-eq?` / `lerp-scale` / `random-float` | 0x2dbf60 / 0x1416cc / 0x141654 | equality; `clamp((x − a)/(b − a))` mapped onto `c…d`; uniform [0, 1) |
+| `get-locator-distance` | 0x14f7b0 | distance between two locator records |
+| `set-visible` | 0x13ae98 | `(object, on)`, any non-zero shows |
+| `object-on-object?` | 0x143c54 | `(object, support)`: the object stands on the support's rigid body (here the player's platform or grip body) |
+| `get-object-id` / `get-object-state` | 0x144838 / 0x1429e8 | the process id word (+76; here the name) / its state |
 
 `camera-fade-out` (0x13b210) fades a named camera object, not the screen.
 
@@ -94,9 +99,9 @@ Other opcodes report "Unknown opcode". After a native call the interpreter reads
 
 Texture descriptors carry the source file name (`…/name-color.tga/….ndb`); materials are matched to their colour map by that name.
 
-## Trigger regions (in progress)
+## Trigger regions
 
-`player-in-region?` (0x674a04) and `object-in-region?` (0x140b58) ask `sub_F7D94` whether an object is in a region; that calls `sub_115EE0(region manager, region, position)`, which tests each region of that name with `sub_114D60`. A region record holds its name (+0), `StringId` (+4), a parent spawner (+0x10, so the volume moves with that spawner, for example `train-wreck-car-b-1`), a shape list (+0x18), entry and tag counts (+0x1c/+0x1e), tags (+0x20, including script lambdas that send events) and entries (+0x24). `sub_114D60` walks the runtime region's shape list (`next` at +0, a `u16` type at +0xc with types 0, 1 and 3, a `u16` count at +0xe, and for type 1 112-byte face records from +0x50) and runs AltiVec plane tests. Those runtime objects are built at login from the package record, whose +0x18 block does not have this layout, so the login conversion still has to be decoded.
+`src/trigger.rs` documents the layout. A region is tested in its parent spawner's live frame, and holds nothing while that parent is not spawned; a region without a parent is tested in level space. It is the union of its shape nodes: six-face plane sets (`max(n·p + d) < 0`), spheres and cylinders, while quads never hold a point. Flag bit 0 disables a region. The player is tested only against regions of the `player` category (the grid bucket, equal to the `apply-to` entry). `player-in-region?` and `object-in-region?` (`(object, region)`) use this test with threshold 0. Each frame the player's region set is compared with the last: an entered region runs its tag-0x1157c38c lambda and a left region its tag-0x5b4bfb24 lambda (`sub_115828`), with the package mapped into the script VM. 48 of the 69 `train-wreck-climb-fg` regions have enter scripts, including the `rs-task-…-complete` regions. The level origin is taken as zero, and region events to a region's own process (+0xc) and the object enter/exit cache (+0x12c) are not modelled.
 
 ## Vertex dequantization and skinning
 
@@ -108,7 +113,64 @@ Skeletons: `JOINT_HIERARCHY` `{8, joint count, JH block, flip data, names, 0, �
 
 ## Animation clips
 
-`ANIM` items hold the clip at +8 (ICE "CD" clip data, magic `0x43440107`; `ANIM_RAWCHANNELS` carry only the `align` and `apReference` channels). Clip header: hierarchy hash +4 (the skeleton's JH hash: the player clips name `0xef94465d`, the 230-joint rig in `actor27.psarc/proto.pak`, 204 animated joints, with 1,548 clips), size +8, frame count `u16` +0xe, frames per second +0x1c, program block +0x30, first frame record +0x38. The program after the block's 16-byte mask is a list of `{u8 argument count, u8 opcode, u16 arguments}` with the EBOOT's animation command numbering (`sub_2D7058` names: 11 `CopyUniformDataToKeyCache`, 15/16 `KeyCacheUniformLerp/Slerp`, 21–24 constant vector/quaternion decompression, 26 `Dec3VecFloat16`, 27 `Dec3VecRange`, 28 `DecompressQuatSmallestThree`, 29/30 `PostDecompressQuatLog[Pca]`); data offsets are relative to clip + 0x60 and outputs are offsets into a 48-byte-per-joint buffer (scale, quaternion, translation). Decoding rules and their evidence are in `src/anim.rs`. `Dec3VecRange` records are 16 bytes (a 21-bit unsigned step, two signed steps, a three-float minimum, field starts at bits 21, 42, 64, 86 and 107) followed by a 4-byte `[a, b, a + b, c]` width table per item; `DecompressQuatSmallestThree` descriptors use the same width form. `PostDecompressQuatLog` (8 parameter bytes per item, not a 48-bit quaternion) and `PostDecompressQuatLogPca` (16 bytes per item) are not decoded; `idle` (one constant frame) decodes completely, `walk-fwd` except its log-space rotations.
+`ANIM` items hold the clip at +8 (ICE "CD" clip data, magic `0x43440107`; `ANIM_RAWCHANNELS` carry only the `align` and `apReference` channels). Clip header: hierarchy hash +4 (the skeleton's JH hash: the player clips name `0xef94465d`, the 230-joint rig in `actor27.psarc/proto.pak`, 204 animated joints, with 1,548 clips), size +8, frame count `u16` +0xe, frames per second +0x1c, program block +0x30, first frame record +0x38. The program after the block's 16-byte mask is a list of `{u8 argument count, u8 opcode, u16 arguments}` with the EBOOT's animation command numbering (`sub_2D7058` names: 11 `CopyUniformDataToKeyCache`, 15/16 `KeyCacheUniformLerp/Slerp`, 21–24 constant vector/quaternion decompression, 26 `Dec3VecFloat16`, 27 `Dec3VecRange`, 28 `DecompressQuatSmallestThree`, 29/30 `PostDecompressQuatLog[Pca]`); data offsets are relative to the program (block + 0x10: 0x60 in the player clips, 0x50 in the `anim-train-wreck-climb` prop clips), lists are padded to multiples of 8 with a repeated output, and outputs are offsets into a 48-byte-per-joint buffer (scale, quaternion, translation). Decoding rules and their evidence are in `src/anim.rs`. `Dec3VecRange` records are 16 bytes (a 21-bit unsigned step, two signed steps, a three-float minimum, field starts at bits 21, 42, 64, 86 and 107) followed by a 4-byte `[a, b, a + b, c]` width table per item; `DecompressQuatSmallestThree` descriptors use the same width form.
+
+The SPU handlers are in the `CalcInfluences` job (loaded at local store 0x4000; dispatcher at listing 0x946C, 62-entry handler table at 0xA850 indexed by the opcode above; `Dec3VecRange` 0x30C0, `PostDecompressQuatLog` 0x6C80, `PostDecompressQuatLogPca` 0x6E90), and their formulas were checked by executing those handlers on controlled inputs:
+
+- `Dec3VecRange` widths use the low six bits of bytes 0, 1 and 3. The top two bits of each are a predictor `f`: when non-zero, component `f − 1` of the previous item's decoded vector of the same frame is added to that component.
+- `PostDecompressQuatLog(count, keys, parameters, key slot)` turns each key vector `v` into `e = (s·v, c)` with `t = v·v`, `c = 1 − t/2 + 0.04152372 t² − 0.0012714077 t³` and `s = 1 − t/6 + 0.0083172908 t² − 0.00018526176 t³` (constants at listing 0xA7F0/0xA800), then `q = q0 ⊗ e`. The parameters are 16 bytes per pair of items with interleaved `s16 / 32768` halfwords `[x0 x1 y0 y1 z0 z1 w0 w1]`. Nothing is relative to the rest pose and the result is not renormalised.
+- `PostDecompressQuatLogPca` gives `q = P ⊗ e ⊗ Q`, with 16 bytes per item `[Px Qx Py Qy Pz Qz Pw Qw]` (`s16 / 32768`).
+
+Every opcode of `idle`, `walk`, `move` and `walk-hurt` decodes.
+
+## Player animation state machine
+
+State records are 0x48 bytes: +0 name, +4 id, +0x10 tree, +0x14 logical animation, +0x30 transitions, and +0x38/+0x3c script lambdas. The +0x3c lambda returns non-zero for mirrored states (`ledge-shimmy-left` 1, `-right` 0; both trees name `ledge-grab-shuffle-r-hurt`). Mirrored clips are built from the bind pose: each joint takes its `l_`/`r_` partner's pose reflected across the YZ plane, `W′ⱼ = R·W_p·R·(R·B_p·R)⁻¹·Bⱼ`. `SKELETON_FLIPDATA` holds 39 joint pairs, each with a 32-bit component code (`0x0ed8bed8`, `0x0ed8fa9c`, `0x0a9889ef`), and is not decoded.
+
+### States
+
+`dc1.psarc/anim-player.bin` `anim-actor` `anim-player`: state count +0x30, inline 0x48-byte states +0x34, initial state +0x38 (`idle`); layout in `src/anim_state.rs`. 988 states; transitions `{request, flags, blend record, target, 0, 0, fade, -1, 0}` with `auto` taken at the end of the state's animation. Blend trees are nested blend nodes (type `0xb249ac72`), layer/select nodes (`0x1c3f471c`) and `anim-node-animation` leaves; the `run` tree's select node lists clips by movement type (`run-tense`, `walk-balance`, `walk-hurt`, `run-hurt-long`, …), the options of the `move` `player-overlay-info` that `set-walk-type`/`set-run-type` choose. Hurt clips live in `actor27.psarc/anim-proto-hurt.pak`. The `align` raw channel gives root motion (`move` 2.8 m/s, `walk` 1.5, `walk-hurt` 0.8, `run-hurt-long` 3.9).
+
+Blend-tree nodes (`src/anim_tree.rs`):
+
+- **Blend** `{left, right, flags, lambda, 1.0}`: the lambda `(node, info, phase, instance)` returns the right child's weight.
+- **Select** `{default, alternatives, flags, lambda, 0}`: the lambda `(node, info, instance)` returns the child to evaluate. DC arrays carry no length.
+
+The 6,131 tree lambdas only read two per-actor blocks and call `lerp-scale` (PPU 0x1416cc: `t = clamp((x − a)/(b − a), 0, 1)`, `c(1 − t) + d t`) and `minmax` (0x14ab64: `min(max(x, lo), hi)`).
+
+- **Instance block:** +48 is the movement-type index and +52 the weapon index.
+  - Movement types: the 39 records of `#b35a5e92`, 0x6c bytes each, with the `StringId` at +0x40, the name at +0x48 and the index at +0x4c. `run` 0, `walk` 2, `run-tense` 3, `run-stealth` 7, `run-mo` 9, `run-hurt` 11, `walk-hurt` 14, `relaxed-run` 38.
+  - Weapons: the `weapon-base` `player-overlay-info`: binoculars, no-weapon, pistol, long-gun, grenade, crossbow, rpg.
+- **Info block (locomotion states):** +28/+32 lean right/left, +40 uphill (`run-incline`), +44 downhill spine, +48/+52 stairs up/down. +0x228 is a cycle phase. These meanings are inferred from the clips the blends lead to.
+
+Every state evaluates. With zero inputs: `idle` is `idle` plus the additive `idle-base-big-add`, `walk-hurt` turns it into `idle-hurt` and `run` into `walk-hurt-long`, and a lean of 0.5 blends `move-lean-r`. Clips named `…-add` hold local deltas (near-identity rotations, untouched joints unanimated) and play as additive layers.
+
+The PPU locomotion controller is reproduced from the transition table in `src/player.rs`. Jumps, falls and landings have no incoming transitions and are entered directly.
+
+Animation leaves are `{clip, ?, ?, phase lambda, ?, clip lambda}`. The phase lambda `(node, info, instance, state phase, 0)` returns the sample phase; look sweeps read it from the info block (NPC +140 left–right, +144 up–down; aim +92/+96). The clip lambda `(node, info, instance)` replaces the clip (`face-reaction`).
+
+`anim-npc.bin` has the same `anim-actor` layout: 264 states, initial `s_ambient-gunout-idle`. Its lambdas also call `angle-mod` (PPU 0x2db59c: `fmod(x, 360)` brought into [−180, 180] with the TOC constants 360, 180 and −180).
+
+NPC leaves are logical animations that `anim-sets.bin` `anim-set`s (`{array, count}` of `{logical, clip}`) map to the character's clips. Example: `*flynn-anim-set*` maps 274 of its 276 leaves into `anim-flynn.pak`, and `*flynn-heist-anim-set*` overrides 4 of them. No module or EBOOT string links characters to sets. The `*NAME-anim-set*` names match 11 art-group and character names, which is the rule used here.
+
+Task continuation records (subnode +0x28) are `{string, StringId}` slots: the player's spawner at +0, allies' at +0x08 to +0x48 (`continue-flynn-…` in 24 records, `continue-rescuer-…`, `continue-ally-…`) and the camera's at +0x50.
+
+## Script animation
+
+- **`animate` / `wait-animate`:** `(animate object clip key value …)` plays a clip once on an object: a process (it plays on the process's spawner entities), a spawner name, or `player`. The level scripts use three keys: 2 (blend-in seconds), 4 (blend-out seconds) and 7 (a locator record from `get-ap-ref-locator`/`get-spawner-locator`). Other keys are ignored. `wait-animate` suspends the track until the clip ends.
+- **`get-animation-phase`:** `(get-animation-phase object)` returns the phase (0–1).
+- **`get-object-locator` / `get-ap-ref-locator`:** `(get-object-locator object)` and `(get-ap-ref-locator ? object)` return that object's locator record `{x, y, z, 1, qx, qy, qz, qw}`.
+- **Where clips come from:** the entity rig's packages, then the `pak22.txt` `actor` packages of the task's levels (`anim-train-wreck-climb` for the prologue cars). The clip is decoded for that rig's skeleton and played from a single-clip library.
+- **Root motion:** `ANIM_RAWCHANNELS` channels hold the first and last transforms (two 11-float `{quaternion, scale, translation, 0}` records) and at +88 `{samples, u16 record bytes, u16 components, u16 count, u16 flags}`. Records are 12 bytes (translation, components 4) or 28 bytes (quaternion then translation, components 6), one per frame. `walk` moves 1.9 m/s, `move` 4.0 m/s, `move^turn-180^move` turns 180° and `jump-long` drops 3.25 m. A script animation places clip space at `locator · apReference(0)⁻¹`, or at the entity's start times `align(0)⁻¹`, and moves the entity along `align`.
+- **Clips from other rigs:** story clips for the player (`anim-train-wreck`) name the `npc-normal-base` hierarchy (`6077142a`, 124 joints), while the player models skin to the `proto.pak` rig (230 joints, 106 joint names shared). Such clips decode with the rig whose hash they name and bind to the entity by joint name.
+- **Prologue:** `train-wreck-climb` plays `idle-00-car-a`, `idle-00-car-b`, `idle-00-undercarriage` and `idle-00-ladder` (10.07 s), the 1.2 s `drake-platform-drop-door` and the single-frame `broken` pose. Props hold the last frame of a finished animation.
+
+## Scripted cameras
+
+- **`camera-enable`:** `(camera-enable 'cam-name …)` selects a camera spawner (`cam-railing-center-intro-1`). The camera looks along the spawner's local +z: from the climb start camera, +z points at the player's spawn with a dot product of 0.996. Up is local +y, and the spawner's `fov` property (75–110 in `train-wreck-climb-fg`) is horizontal.
+- **Release:** `camera-disable` / `camera-abandon` / `camera-disable-all` return to the follow camera. In `train-wreck-climb` the intro camera is released right after it is enabled.
+- **Camera animations:** `(camera-animation-enable name clip blend)` (`DcCameraAnimationEnable` → `sub_366730`) keeps up to 10 named camera animations (64-byte records); a running one keeps its phase, and the scripts call it every frame while it should run. `camera-animation-disable` (`sub_364550`) ends one. The clips are in the level's `camera-…` actor package (`camera-train-wreck.pak`: `camera-train-wreck-treadmill`, `-exterior-small`, …); their camera channel is raw channel `0x306c3455` (no string with that id is stored): per frame `[fov°, ?, ?, quaternion, translation]` (components 7) or `[quaternion, translation]` (components 6). They loop and offset the active camera in camera space, relative to their first frame; that application is inferred. `sub_36624C` beside them is a separate procedural shake.
+- **Object-relative cameras:** camera spawners parented to a moved object (the `cam-car-b-…` cameras of `train-wreck-car-b-1`) follow its pose like other child spawners (below). `camera-local-space` (in `ss-sham`, `ss-train`, `ss-warzone` only) is not implemented.
 
 ## Foreground (art-group) meshes
 
@@ -116,4 +178,31 @@ Art-group meshes use the same descriptors as level geometry (above); their `vis_
 
 ## Spawners
 
-Spawner (+0x40) points to a parent spawner; locators of children are in the parent's frame. Flag 0x40000000 is set on continue points, companion placements and cameras and is treated as no-auto-birth; the flag test in the ELF has not been located.
+Spawner (+0x40) points to a parent spawner; locators of children are in the parent's frame. Children follow their parent object when it moves: script root motion places `train-wreck-car-b-1` about 1.1 m from its spawner (`idle-00-car-b`: `apReference` holds the inverse of the spawner rotation exactly, `align(0)` a further 0.67 m), and its rail, seats, shimmy rails and child cameras keep their spawner offsets from it (`child = parent now · parent spawner⁻¹ · child spawner`). The player stands and hangs on such bodies and rides their motion. Flag 0x40000000 is set on continue points, companion placements and cameras and is treated as no-auto-birth; the flag test in the ELF has not been located.
+
+## Collision and climb edges
+
+`src/collision.rs` documents the layouts. Art groups carry `COLLISION_DATA_FOREGROUND` (Havok 6.1 packfiles bound to joints, so the bind pose places them in the art-group frame); levels carry `COLLISION_DATA_HAVOK_BG` triangle subparts in the render meshes' metre space. PAT bits 0–5 are the surface type; the flag bits come from the name table at EBOOT 0xd6c9e0. Climb edges are built offline: levels store them in `FEATURE_DB_2`, props behind their collision wrapper (+0x10). `train-wreck-car-b` reads 2,697 collision triangles (extents −2.50…2.52 × −0.17…5.76 × −12.44…13.58 m), 438 edges and 132 corners; the `train-wreck-climb-fg` level holds no edges, its prologue edges belong to the car's props. Packages without native collision fall back to their render triangles for the viewer's ground.
+
+## Material layering
+
+`src/rsx.rs` decodes RSX fragment programs. The shader table is `MATERIAL_TABLE_1` +0x1c; each program stores its size at +0 and its microcode at +0x10, with instruction words half-swapped. Passes bind texture units through their parameter table at pass data +0x14: 16-byte records `{u16 register, u16, u32 class, u32 value, u32 name}`, with the count in the low half of word 2 and names in a package string pool. A record of class 0x0202 binds the k-th material sampler (sampler k + 1) to the unit in its high half. Class 0x0201 binds global buffers: the light pre-pass on 12/13 and the screen shadow. In `rock-to-snow`, rock is unit 2, mask unit 0 and snow unit 3. The recogniser follows weights as affine sums of the world normal's y (`TEX2`, from `v2 · c[8…10]`), the vertex mask (`COL0.x`, attribute 0x15) and texture channels, and finds two-layer blends:
+
+- **Slope:** `mix(top, side, saturate(1 − n.y))`. `trnwrk-snow-mod-cliff-cheap` puts rock under snow on the same UV (`TEX0 = v1.xyxy`). The `cliffwall-snow` and `snow-boulder` programs use a computed light grey on top (0.5 plus three saturated terms in gamma space). `trnwrk-tree-bark-cheap` carries snow on its bark.
+- **Height mask:** the side layer is weighted `saturate((mask.g − (1 + s)·m + 2s) / 2s)`, with `m` the vertex mask and `s` = `g_fBlendSoftness` (0.1). It appears in `trn-wide-mountains-snow/rock-to-snow`, 13 `ice-cave-temple` materials and the `menu-temple` gold and plaster blends.
+
+Shading follows the native passes: diffuse light from the pre-pass and probes, with specular only through a `…-spec-mask` sampler, so materials without one reflect nothing (the shared PBR environment reflection is off for them). The first non-placeholder `…-normal` sampler perturbs the normal; DXT5 normal maps hold X in alpha and Y in green (mean channels `(0, 136, 0, 139)`), DXT1 ones XYZ in RGB. Water binds an environment reflection map (`…-env-reflection`, 128² lat-long) that its program adds at 0.6 along the reflection vector over the scrolling colour; here a smooth specular reflects the environment instead.
+
+Pass 5 holds the albedo alone. Materials whose pass 0 binds none (`snow-ground-main-noblend`) take it from there.
+
+## Hanging and climbing
+
+The hang and climb clips locate the edge by `apReference` relative to `align`: with `AP = align(0) · apReference(0)`, the root stands at `edge · AP⁻¹ · align(t)`, where the edge frame has +z into the wall (against the edge's wall normal) and +y up. `ledge-grab-idle-hurt` holds the edge 1.53 m above and 0.5 m ahead of the root. The chest step (`ledge-grab^ledge-grab-chest-hurt`) ends, and the knee step (`ledge-grab-chest^ledge-grab-knee-hurt`) begins, with the root 0.6 m below and 0.34–0.37 m behind the edge. State flow from `anim-player.bin`: requests `ledge-shimmy-left`/`-right`/`ledge-grab` from the hang; `ledge-climb-up` → `ledge-climb-up-2` (`auto`), whose `idle`/`run` requests lead to `climb-onto-1-75m^idle`/`^run` and then `idle`/`run` (`auto`). The PPU controller that issues these requests and its edge queries (`sub_4FC568`) are not decompiled. Here a continue spawner within 0.3 m of an edge starts hanging (the spawner marks the grab point; `continue-player-climb-1` lies 0.11 m from `trn-wrk-rail` edge 7). Shimmy root motion slides the grip along the edge and across its `prev`/`next` links. The climb is offered when a standable surface lies within 0.35 m of the edge height 0.45 m beyond it. An airborne player grabs an edge within 0.45 m of the hang reach that faces it. The reach, offer and grab distances are not native. Jumps between edges (`ledge-jump-begin` → `-mid` → `-end`, `auto`) use clips the EBOOT names directly (`ledge-jump-up-short`/`-long`, `-right-short`/`-long`, …). Their `apReference` locates the target edge, 2.43 m (short) or 3.90 m (long) above the root at the start, against 1.53 m in the hang. Here the tree's default clip plays, and the root eases from the hang to the target edge's hang over 0.9 s.
+
+## Render settings
+
+`src/render_settings.rs` documents the layout. `render-settings.bin` holds 238 `render-settings-2` records named `*AREA-render-settings-NN*`. Its `render-settings-menu-entries` lists every field as `{":name", offset, type, step, step, min, max}`, in groups for lighting, shadow, fog, wind, sky, post and tonemap. The EBOOT's writer (`sub_123C1C`) places lighting at 0, post at 0x440 and tonemap at 0x4b0. Trigger regions select a record with a `render-settings` entry, and cutscenes use `set-render-settings` (`scenes.bin`). The tonemap group holds Hable's constants, a light range of ±4 stops, an adaption time and a key, `tonemap-manual-exposure-value`. Two records differ sharply:
+- `*menu-temple-render-settings-01*`: key 0.052, shoulder 2, toe 0.75, bias −2.6;
+- the train-wreck records: key 0.4–0.7, shoulder 0.42–0.6, bias 0.5.
+
+Render-settings regions belong to the `camera` category (0x89335b6e) and are tested at the camera's eye. The prologue's `regiongroup-train-wreck-climb-states-1` selects `#f8cd5e96`. Here the camera adapts with a constant compensation of 0.5 stops under the record's curve and bias: the menu matches the original at 0.46, while the record's key would blow out the prologue (`log2(0.7 / 0.18)` + 2.25 ≈ 4.2 stops). The native exposure modes (the caller of `sub_ABB33C`, mode 3 reading +0x638…+0x644) are not decoded, and the probe scale (2) was fitted on the menu. Regions that pick their record by script lambda (`train-wreck`) are not evaluated. The `:fog` group sits at 0x3d0, the only offset where every record's fields fall in their menu ranges. The menu temple's fog is warm (0.33, 0.31, 0.25) over 150 m; train-wreck's is blue (0.17, 0.31, 0.52) over 800 m above 260 m. It maps to the shared exponential fog: opacity `density` over `distance-range`, thinning over `height-range`. The native fog curve is not recovered. With fog the menu measures luminance p10/p50/p90 22/39/91 against the original's 21/43/104.

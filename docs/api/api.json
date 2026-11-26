@@ -214,6 +214,11 @@
           "rust_type": "Option<String>"
         },
         {
+          "doc": "Ordered, session-local overrides from a selected KiriKiri launcher.",
+          "name": "launcher_overlay",
+          "rust_type": "Option<LauncherOverlay>"
+        },
+        {
           "doc": "Engine-published protected-bootstrap profile (`hxv4_bootstrap_profile` for `Plugins.linkZ`, or `cxdec_bootstrap_profile` for the startup `Storages.setupArchiveData` facade) the natives must match.",
           "name": "bootstrap_profile",
           "rust_type": "Option<String>"
@@ -6494,7 +6499,7 @@
           "returns": "void"
         },
         {
-          "doc": "Append committed Unicode up to max_length scalars. Multiline fields also accept newline and tab; single-line fields reject controls.",
+          "doc": "Insert committed Unicode at the active selection, or append in a plain field, up to max_length scalars.",
           "name": "insertText",
           "params": [
             {
@@ -6505,7 +6510,26 @@
           "returns": "void"
         },
         {
-          "doc": "Remove the final Unicode scalar from a client-owned text field.",
+          "doc": "Enable caret editing and select a UTF-16 range in an owned field. End -1 extends to the end. Start -1 collapses at the caret.",
+          "name": "setTextSelection",
+          "params": [
+            {
+              "name": "id",
+              "type": "number"
+            },
+            {
+              "name": "start",
+              "type": "number"
+            },
+            {
+              "name": "end",
+              "type": "number"
+            }
+          ],
+          "returns": "void"
+        },
+        {
+          "doc": "Delete the active selection or previous grapheme in a range editor, or the final scalar in a plain field.",
           "name": "backspace",
           "params": [
             {
@@ -7780,6 +7804,11 @@
     {
       "api": "Ui.insertText",
       "op": "insert_text",
+      "system": "ui"
+    },
+    {
+      "api": "Ui.setTextSelection",
+      "op": "set_text_selection",
       "system": "ui"
     },
     {
@@ -22090,6 +22119,12 @@
           "doc": "Colour adjustments before tonemapping; `null` is neutral.",
           "name": "grading",
           "rust_type": "Option<ColorGrading>"
+        },
+        {
+          "default": null,
+          "doc": "Curve of the `filmic` tonemap; `null` keeps the published one.",
+          "name": "filmic_curve",
+          "rust_type": "Option<FilmicCurve>"
         }
       ],
       "name": "Environment",
@@ -22773,6 +22808,12 @@
         },
         {
           "default": null,
+          "doc": "Raw hull colour texture. Lookup row 2 supplies its independent lighting ramp.",
+          "name": "outline_texture",
+          "rust_type": "Option<T>"
+        },
+        {
+          "default": null,
           "doc": "",
           "name": "shadow_texture",
           "rust_type": "Option<T>"
@@ -23131,7 +23172,13 @@
           "default": null,
           "doc": "Baked diffuse irradiance from the primitive's `_AUX` vertex stream (linear RGB, scaled by `intensity`) replaces the environment and GI-volume irradiance; direct lights still apply. Primitives without `_AUX` receive white irradiance × `intensity`.",
           "name": "baked_vertex_irradiance",
-          "rust_type": "intensity: f32"
+          "rust_type": "intensity: f32, slope_layer: Option<[f32; 3]>, mask_layer: Option<MaskLayer>"
+        },
+        {
+          "default": null,
+          "doc": "Two albedo layers by surface slope: the base texture on walls, the emissive-slot texture (white when unbound) × `tint` on upward-facing surfaces, mixed as `mix(top, base, saturate(1 − n.y))` with `n` the interpolated world normal; the emissive slot then contributes no emission.",
+          "name": "slope_layer_blend",
+          "rust_type": "tint: [f32; 3]"
         },
         {
           "default": null,
@@ -29567,6 +29614,12 @@
           "doc": "",
           "name": "set_text",
           "rust_type": "id: u32, text: String, font: Option<String>"
+        },
+        {
+          "default": null,
+          "doc": "Enable caret editing and set the selection in UTF-16 code units. An end of -1 selects to the end. A start of -1 deselects.",
+          "name": "set_text_selection",
+          "rust_type": "id: u32, start: i64, end: i64"
         }
       ],
       "name": "UiCommand",
@@ -30502,7 +30555,7 @@
       "used_by": "UiEvent.widget client/local identity"
     }
   ],
-  "fingerprint": "9640ededc06f0fce",
+  "fingerprint": "3832b7ea7ef5e8ae",
   "generated_by": "crysirror-engine api_doc (tests/api_docs.rs)",
   "globals": [
     {

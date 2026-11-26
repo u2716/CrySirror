@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Retail SceneEdit creation screen. Category and slider definitions live in the mounted NEIs.
+pub(super) mod costume;
 use super::*;
 use crate::{
     chara::Maid,
@@ -7,7 +8,7 @@ use crate::{
 };
 use std::collections::BTreeMap;
 
-const CATEGORIES: [&str; 9] = [
+const CATEGORIES: [&str; 10] = [
     "頭",
     "髪",
     "身体",
@@ -17,6 +18,7 @@ const CATEGORIES: [&str; 9] = [
     "プリセット",
     "ランダム",
     "プロフィール",
+    "着衣設定",
 ];
 const PANELS: [&str; 3] = [
     "ScrollPanel-Category",
@@ -41,19 +43,25 @@ struct Part {
 #[derive(Clone)]
 enum Action {
     Category(usize),
+    Force(usize),
+    ForceAll(bool),
     Part(usize),
     Slider(&'static str),
     Wear(usize),
+    Profile(stock_profile_ui::Control),
     Finish,
     Family,
     First,
 }
 #[derive(Default)]
 pub(super) struct StockEditor {
+    pub profile: stock_profile_ui::Profile,
+    costume: costume::Panel,
     groups: BTreeMap<String, Vec<Part>>,
     pub grids: [Grid; 3],
     selected: [Option<usize>; 2],
     pub naming: bool,
+    pub facility_costume:bool,
     pub confirming: Option<quit_dialog::QuitDialog>,
     pub pose: (String, String),
     repeat_pose: Option<u64>,
@@ -98,9 +106,11 @@ impl StockEditor {
         tag: &BTreeMap<String, String>,
         now: u64,
     ) -> Result<String> {
+        self.facility_costume=tag.contains_key("facility_costume");
+        let enabled=if self.facility_costume{crate::tjs::retail::wardrobe::enabled(&mut state.retail)?}else{Vec::new()};
         ensure!(
             !tag.contains_key("vr_mode")
-                && (tag.contains_key("main") || tag.contains_key("original")),
+                && (tag.contains_key("main") || tag.contains_key("original") || self.facility_costume),
             "unsupported SceneEdit mode"
         );
         let id = state
@@ -115,11 +125,14 @@ impl StockEditor {
         );
         let t = state.retail.table("edit_category_define.nei")?;
         self.groups.clear();
+        self.costume = costume::Panel::default();
+        if self.facility_costume { self.costume.configure(state, &enabled)?; }
         let mut parts = BTreeMap::new();
         for r in 1..t.rows {
             if !t.exists(0, r) || t.string(2, r) == "Color" {
                 continue;
             }
+            if self.facility_costume && !enabled.iter().any(|n|n.eq_ignore_ascii_case(&t.string(0,r))) {continue;}
             let cat = t.string(1, r);
             let group = t.string(3, r);
             let title = t.string(4, r);
@@ -257,17 +270,23 @@ impl StockEditor {
         host: &mut dyn HostServices,
         client: ClientId,
         model: &Maid,
+        status: &crate::params::MaidStatus,
     ) -> Result<()> {
+        self.profile = stock_profile_ui::Profile::default();
+        self.profile.widgets = widgets.extract_if(.., |w| stock_profile_ui::uses(&w.path)).collect();
+        self.profile.limits = assets.profile_limits;
+        ensure!(self.profile.limits.iter().all(|&n| n > 0), "missing stock profile UIInput");
         self.modal_widgets = widgets
             .extract_if(.., |w| w.path.contains("/FFNameDialog/"))
             .collect();
+        self.costume.take_widgets(widgets, assets);
         self.base = widgets.len();
         self.grids = assets.stock_grids.clone();
         self.templates = [
             assets.scene(op, host, client, "StockCategoryButton")?,
             assets.scene(op, host, client, "StockSlider")?,
         ];
-        self.rebuild(widgets, model)
+        self.rebuild(widgets, model, status)
     }
 
     fn entries(&self, column: usize, model: &Maid) -> Result<Vec<(Action, String, Option<i32>)>> {
@@ -275,12 +294,14 @@ impl StockEditor {
             return Ok(CATEGORIES
                 .iter()
                 .enumerate()
+                .filter(|(_,n)| if **n == "着衣設定" { self.facility_costume } else { !self.facility_costume || self.groups.get(**n).is_some_and(|g|!g.is_empty()) })
                 .map(|(i, n)| (Action::Category(i), n.to_string(), None))
                 .collect());
         }
         let Some(cat) = self.selected[0] else {
             return Ok(vec![]);
         };
+        if matches!(CATEGORIES[cat], "プロフィール" | "着衣設定") { return Ok(vec![]); }
         let groups = self
             .groups
             .get(CATEGORIES[cat])
@@ -326,7 +347,7 @@ impl StockEditor {
             .collect()
     }
 
-    fn rebuild(&mut self, widgets: &mut Vec<Widget>, model: &Maid) -> Result<()> {
+    fn rebuild(&mut self, widgets: &mut Vec<Widget>, model: &Maid, status: &crate::params::MaidStatus) -> Result<()> {
         widgets.truncate(self.base);
         self.actions.clear();
         for column in 0..3 {
@@ -386,6 +407,16 @@ impl StockEditor {
                 self.actions.push((Action::Finish, r));
             }
         }
+        if self.selected[0].is_some_and(|i| CATEGORIES[i] == "プロフィール") {
+            let start = widgets.len();
+            self.profile.draw(widgets, status);
+            for w in widgets[start..].iter().rev() {
+                if let (Some(control), Some(rect)) = (stock_profile_ui::control(&w.path), w.collider) {
+                    self.actions.push((Action::Profile(control), rect));
+                }
+            }
+        }
+        if self.costume_selected() { self.costume.draw(widgets, &mut self.actions)?; }
         if self.naming {
             self.actions.clear();
             for mut w in self.modal_widgets.iter().cloned() {
@@ -424,9 +455,13 @@ impl StockEditor {
             .map(|(action, rect)| {
                 let key = match action {
                     Action::Category(i) => CATEGORIES[*i],
+                    Action::Force(i) => &self.costume.parts[*i].mpn,
+                    Action::ForceAll(true) => "SelectAll",
+                    Action::ForceAll(false) => "DeselectAll",
                     Action::Part(i) => &group.unwrap()[*i].title,
                     Action::Slider(name) => name,
                     Action::Wear(i) => &group.unwrap()[self.selected[1].unwrap()].items[*i].0,
+                    Action::Profile(c) => c.name(),
                     Action::Finish => "OK",
                     Action::Family => "family",
                     Action::First => "first",
@@ -441,9 +476,10 @@ impl StockEditor {
             .flatten()
             .and_then(|id| s.bodies.get(&id))
             .map(|body| &body.menu_files);
-        json!({"hits":hits,"worn":worn,"height":s.maid(0).map(|m|m.body.height),"first_name_call":s.maid(0).map(|m|m.is_first_name_call),"confirm":self.confirming.is_some()})
+        json!({"hits":hits,"name":s.maid(0).map(|m|[&m.last_name,&m.first_name]),"free_comment":s.maid(0).map(|m|&m.free_comment),"worn":worn,"height":s.maid(0).map(|m|m.body.height),"first_name_call":s.maid(0).map(|m|m.is_first_name_call),"confirm":self.confirming.is_some()})
     }
     pub fn clip(&self, path: &str) -> Option<[f32; 4]> {
+        if costume::item_path(path).is_some() { return Some(self.costume.layout.clip); }
         let col = path
             .strip_prefix("stock-grid/")?
             .split('/')
@@ -452,12 +488,19 @@ impl StockEditor {
             .ok()?;
         Some(self.grids.get(col)?.clip)
     }
+    fn costume_selected(&self) -> bool {
+        self.selected[0].is_some_and(|i| CATEGORIES[i] == "着衣設定")
+    }
     pub fn update(
         &mut self,
         state: &mut TjsState,
         widgets: &mut Vec<Widget>,
         input: InputFrame,
         released: u64,
+        op: &mut Opener,
+        assets: &mut Assets,
+        host: &mut dyn HostServices,
+        client: ClientId,
     ) -> Result<bool> {
         let id = state
             .active_maids
@@ -465,6 +508,9 @@ impl StockEditor {
             .copied()
             .flatten()
             .context("lost editor character")?;
+        if self.profile.input(host, client, input, state.maids.get_mut(&id).context("missing editor status")?)? {
+            self.rebuild(widgets, &state.retail.stock_models[&id], &state.maids[&id])?;
+        }
         let point = [input.pointer_x as f32, input.pointer_y as f32];
         let hit = self.actions.iter().position(|(_, r)| inside(*r, point));
         if input.buttons_pressed & buttons::MOUSE_LEFT != 0 {
@@ -478,6 +524,7 @@ impl StockEditor {
                     .iter()
                     .position(|g| inside(g.clip, point))
                     .map(|c| (c, point[1], self.scroll[c]));
+                if self.costume_selected() && inside(self.costume.layout.clip, point) { self.drag = Some((3, point[1], self.costume.scroll)); }
             }
         }
         if let Some((i, r)) = self.slider
@@ -488,13 +535,13 @@ impl StockEditor {
             };
             let value = ((point[0] - r[0]) / r[2].max(1.)).clamp(0., 1.);
             crate::tjs::retail::edit_slider(state, id, name, value)?;
-            self.rebuild(widgets, &state.retail.stock_models[&id])?;
+            self.rebuild(widgets, &state.retail.stock_models[&id], &state.maids[&id])?;
         } else if let Some((col, y, initial)) = self.drag
             && (point[1] - y).abs() > 4.
         {
-            self.scroll[col] = initial + y - point[1];
+            if col == 3 { self.costume.scroll = initial + y - point[1]; } else { self.scroll[col] = initial + y - point[1]; }
             self.pressed = None;
-            self.rebuild(widgets, &state.retail.stock_models[&id])?;
+            self.rebuild(widgets, &state.retail.stock_models[&id], &state.maids[&id])?;
         }
         if released & buttons::MOUSE_LEFT == 0 {
             return Ok(false);
@@ -508,6 +555,7 @@ impl StockEditor {
                 Action::Category(c) => {
                     self.selected = [Some(c), None];
                     self.scroll[1..].fill(0.);
+                    if self.costume_selected() { self.costume.open(state, id, op, assets, host, client)?; }
                 }
                 Action::Part(i) => {
                     self.selected[1] = Some(i);
@@ -519,6 +567,10 @@ impl StockEditor {
                         [self.selected[1].context("missing item group")?];
                     crate::tjs::retail::edit_wear(state, id, &group.items[index].0)?;
                 }
+                Action::Force(i) => self.costume.toggle(state, Some(i), !self.costume.parts[i].active)?,
+                Action::ForceAll(active) => self.costume.toggle(state, None, active)?,
+                Action::Profile(c) => self.profile.activate(c, self.actions[i].1, state, id, host, client)?,
+                Action::Finish if self.facility_costume=>return Ok(true),
                 Action::Finish => self.naming = true,
                 Action::Family | Action::First => {
                     state
@@ -527,12 +579,12 @@ impl StockEditor {
                         .context("missing editor status")?
                         .is_first_name_call = matches!(self.actions[i].0, Action::First);
                     self.naming = false;
-                    self.rebuild(widgets, &state.retail.stock_models[&id])?;
+                    self.rebuild(widgets, &state.retail.stock_models[&id], &state.maids[&id])?;
                     return Ok(true);
                 }
                 Action::Slider(_) => return Ok(false),
             }
-            self.rebuild(widgets, &state.retail.stock_models[&id])?;
+            self.rebuild(widgets, &state.retail.stock_models[&id], &state.maids[&id])?;
         }
         Ok(false)
     }

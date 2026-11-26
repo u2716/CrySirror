@@ -510,6 +510,7 @@ fn engine_material(
     doc: &mut glb::Document,
     table: Option<&[[u8; 4]; 256]>,
     layers: &[&TextureLayer],
+    palettes: Option<&TexturePalettes>,
     dropped: &mut Vec<String>,
 ) -> PbrMaterial {
     let shader = m.shader.as_str();
@@ -522,7 +523,7 @@ fn engine_material(
         out.base_color_factor = [0.5, 0.5, 0.5, 1.];
     }
     if let Some((name, offset, scale)) = m.texture("_MainTex") {
-        out.base_color_texture = images.embed_layered(doc, name, "_MainTex", layers);
+        out.base_color_texture = images.embed_layered(doc, name, "_MainTex", layers, palettes);
         // Unity samples `uv * scale + offset` bottom-up; the importer flips V.
         out.uv_scale = scale;
         out.uv_offset = [offset[0], 1. - scale[1] - offset[1]];
@@ -535,13 +536,15 @@ fn engine_material(
     match shader {
         "CM3D2/Toony_Lighted_Outline"
         | "CM3D2/Toony_Lighted_Trans"
+        | "CM3D2/Toony_Lighted_Outline_Tex"
+        | "CM3D2/Toony_Lighted_Hair_Outline_Tex"
         | "CM3D2/Toony_Lighted_Hair_Outline"
         | "CM3D2/Toony_Lighted_Hair"
         | "CM3D2/Toony_Lighted_Outline_Trans"
         | "CM3D2/Toony_Lighted"
         | "CM3D2/Toony_Lighted_Trans_NoZ"
         | "CM3D2/Lighted"
-        | "CM3D2/Lighted_Trans" => out.toon = Some(toon_shading(m, images, doc, table, layers)),
+        | "CM3D2/Lighted_Trans" => out.toon = Some(toon_shading(m, images, doc, table, layers, palettes)),
         "Diffuse" => {}
         "CM3D2/Man" => {
             // A translucent silhouette (`_Color` alpha = CMSystem.ManAlpha).
@@ -574,6 +577,7 @@ pub fn toon_parameters(
     let hair = shader.contains("Hair");
     crysirror_scene::material::ToonShading {
         lookup_texture: None,
+        outline_texture: None,
         shadow_texture: None,
         highlight_texture: None,
         blend_texture: None,
@@ -637,23 +641,39 @@ fn toon_shading(
     doc: &mut glb::Document,
     table: Option<&[[u8; 4]; 256]>,
     layers: &[&TextureLayer],
+    palettes: Option<&TexturePalettes>,
 ) -> crysirror_scene::material::ToonShading<usize> {
     let mut out = toon_parameters(&m.shader, &|n| m.color(n), &|n| m.float(n));
     let toony = m.shader.starts_with("CM3D2/Toony");
-    let use_table = toony && table.is_some() && m.float("_UseMulticolTex").unwrap_or(0.) != 0.;
-    let ramp = if toony { m.texture("_ToonRamp").and_then(|(n, ..)| images.decode(n)) } else { None };
-    let rate = if toony { m.texture("_ShadowRateToon").and_then(|(n, ..)| images.decode(n)) } else { None };
-    let lut = toon_lookup(ramp.as_ref(), rate.as_ref(), table.filter(|_| use_table), !toony);
+    let use_table = toony && !m.shader.ends_with("_Outline_Tex") && table.is_some() && m.float("_UseMulticolTex").unwrap_or(0.) != 0.;
+    let ramp = if toony { m.texture("_ToonRamp").and_then(|(n, ..)| images.decode_property(n, "_ToonRamp", palettes)) } else { None };
+    let rate = if toony { m.texture("_ShadowRateToon").and_then(|(n, ..)| images.decode_property(n, "_ShadowRateToon", palettes)) } else { None };
+    let mut lut = toon_lookup(ramp.as_ref(), rate.as_ref(), table.filter(|_| use_table), !toony);
+    if m.shader.ends_with("_Outline_Tex") {
+        let ramp = m.texture("_OutlineToonRamp").and_then(|(n, ..)| images.decode_property(n, "_OutlineToonRamp", palettes));
+        for (x, pixel) in lut.rgba[512*4..].chunks_exact_mut(4).enumerate() {
+            let u = x as f32 / 255.;
+            let color = ramp.as_ref().map_or([0.5,0.5,0.5,1.], |r| sample_bilinear(r, u, u));
+            pixel.copy_from_slice(&color.map(|v| (v * 255.).round() as u8));
+        }
+        out.outline_texture = m.texture("_OutlineTex").and_then(|(n, ..)| images.embed_layered(doc, n, "_OutlineTex", layers, palettes))
+            .or_else(|| {
+                let gray = crysirror_image::ImageSurface {width:1, height:1, rgba:vec![128,128,128,255]};
+                let png = crysirror_image::encode_png(&gray).ok()?;
+                doc.images.push((png, "image/png"));
+                Some(doc.images.len()-1)
+            });
+    }
     out.lookup_texture = crysirror_image::encode_png(&lut).ok().map(|png| {
         doc.images.push((png, "image/png"));
         doc.images.len() - 1
     });
     out.color_table = use_table && out.lookup_texture.is_some();
     if toony {
-        out.shadow_texture = m.texture("_ShadowTex").and_then(|(n, ..)| images.embed_layered(doc, n, "_ShadowTex", layers));
+        out.shadow_texture = m.texture("_ShadowTex").and_then(|(n, ..)| images.embed_layered(doc, n, "_ShadowTex", layers, palettes));
     }
     if m.shader.contains("Hair") {
-        out.highlight_texture = m.texture("_HiTex").and_then(|(n, ..)| images.embed(doc, n));
+        out.highlight_texture = m.texture("_HiTex").and_then(|(n, ..)| images.embed_layered(doc, n, "_HiTex", layers, palettes));
     }
     out
 }
@@ -678,7 +698,7 @@ fn sample_bilinear(img: &crysirror_image::ImageSurface, u: f32, v: f32) -> [f32;
 /// Loads each `.tex`/PNG once and embeds the encoded image.
 struct Images<'e> {
     external: &'e mut dyn FnMut(&str) -> Result<Vec<u8>>,
-    cache: HashMap<String, Option<usize>>,
+    cache: HashMap<(String, bool), Option<usize>>,
     decoded: HashMap<String, Option<crysirror_image::ImageSurface>>,
 }
 impl Images<'_> {
@@ -699,15 +719,22 @@ impl Images<'_> {
         self.decoded.insert(name.to_owned(), surface.clone());
         surface
     }
+    fn decode_property(&mut self, name: &str, property: &str, palettes: Option<&TexturePalettes>) -> Option<crysirror_image::ImageSurface> {
+        let mut image = self.decode(name)?;
+        if let Some(palette) = palettes.and_then(|p| p.get(property)) {
+            palette.apply(&mut image);
+        }
+        Some(image)
+    }
     /// [`Self::embed`] with the `property` layers of `layers` composed over it.
-    fn embed_layered(&mut self, doc: &mut glb::Document, name: &str, property: &str, layers: &[&TextureLayer]) -> Option<usize> {
+    fn embed_layered(&mut self, doc: &mut glb::Document, name: &str, property: &str, layers: &[&TextureLayer], palettes: Option<&TexturePalettes>) -> Option<usize> {
         let mut mine: Vec<&TextureLayer> = layers.iter().copied().filter(|l| l.property == property).collect();
-        if mine.is_empty() {
-            return self.embed(doc, name);
+        if mine.is_empty() && !palettes.is_some_and(|p| p.contains_key(property)) {
+            return self.embed(doc, name, property == "_MainTex");
         }
         // MulTexProc: layers in order; a layer's LaySets in insertion order.
         mine.sort_by_key(|l| l.layer);
-        let Some(mut base) = self.decode(name) else {
+        let Some(mut base) = self.decode_property(name, property, palettes) else {
             doc.dropped.push(format!("texture `{name}.tex`: layered base not decodable"));
             return None;
         };
@@ -768,8 +795,9 @@ impl Images<'_> {
             }
         }
     }
-    fn embed(&mut self, doc: &mut glb::Document, name: &str) -> Option<usize> {
-        if let Some(hit) = self.cache.get(name) {
+    fn embed(&mut self, doc: &mut glb::Document, name: &str, srgb: bool) -> Option<usize> {
+        let key = (name.to_owned(), srgb);
+        if let Some(hit) = self.cache.get(&key) {
             return *hit;
         }
         let file = format!("{name}.tex");
@@ -796,7 +824,7 @@ impl Images<'_> {
                 None
             }
         };
-        self.cache.insert(name.to_owned(), index);
+        self.cache.insert(key, index);
         index
     }
 }
@@ -805,6 +833,36 @@ impl Images<'_> {
 /// (`<stem>.tex`) through `external`, the game's flat archive namespace.
 pub fn convert_mesh(bytes: &[u8], external: &mut dyn FnMut(&str) -> Result<Vec<u8>>) -> Result<glb::Document> {
     convert_mesh_with(bytes, external, &MaterialEdits::default())
+}
+
+/// A per-texture colour lookup applied before material sampling and layer composition.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TexturePalette {
+    pub colors: [[u8; 4]; 256],
+    /// Single-channel source render textures sample with an opaque alpha.
+    pub opaque_source: bool,
+}
+
+pub type TexturePalettes = BTreeMap<String, TexturePalette>;
+
+impl TexturePalette {
+    fn apply(&self, image: &mut crysirror_image::ImageSurface) {
+        // Unity 5.6 InfinityColor fragment program: sample the colour table at
+        // (base.r * 0.995, 0.5) with bilinear repeat, preserving base alpha.
+        let lut: [[u8; 3]; 256] = std::array::from_fn(|r| {
+            let u = r as f32 / 255. * 0.995 * 256. - 0.5;
+            let i = u.floor() as i32;
+            let f = u - i as f32;
+            let a = self.colors[i.rem_euclid(256) as usize];
+            let b = self.colors[(i + 1).rem_euclid(256) as usize];
+            std::array::from_fn(|k| (f32::from(a[k]) + (f32::from(b[k]) - f32::from(a[k])) * f).round() as u8)
+        });
+        for pixel in image.rgba.chunks_exact_mut(4) {
+            let rgb = lut[pixel[0] as usize];
+            pixel[..3].copy_from_slice(&rgb);
+            if self.opaque_source { pixel[3] = 255; }
+        }
+    }
 }
 
 /// Material changes a game applies to a loaded mesh (`TBody.ChangeMaterial`,
@@ -819,6 +877,8 @@ pub struct MaterialEdits {
     pub colors: Vec<(usize, String, [f32; 4])>,
     /// `_MultiColTex` colour tables by material (`MaidParts` parts colour).
     pub color_tables: BTreeMap<usize, [[u8; 4]; 256]>,
+    /// Per-property palette bindings in the Unity 5.6 texture cache.
+    pub texture_palettes: BTreeMap<usize, TexturePalettes>,
     /// `_UseMulticolTex` set by a texture change, by material.
     pub multicolor: BTreeMap<usize, bool>,
     /// `TBody.MulTexSet` layers, composed in layer order over the texture of
@@ -953,7 +1013,7 @@ pub fn convert_parsed(
     for (index, m) in mesh.materials.iter().enumerate() {
         let mut dropped = Vec::new();
         let layers: Vec<&TextureLayer> = edits.layers.iter().filter(|l| l.material == index).collect();
-        let engine = engine_material(m, &mut images, &mut doc, edits.color_tables.get(&index), &layers, &mut dropped);
+        let engine = engine_material(m, &mut images, &mut doc, edits.color_tables.get(&index), &layers, edits.texture_palettes.get(&index), &mut dropped);
         doc.dropped.extend(dropped);
         doc.materials.push(glb::Material {
             name: m.name.clone(),
@@ -1172,6 +1232,30 @@ pub fn convert_animation(bytes: &[u8], clip: &str) -> Result<glb::Document> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn per_texture_palettes_keep_independent_colors_and_source_alpha() -> Result<()> {
+        use crysirror_image::ImageSurface;
+        let original = ImageSurface { width: 1, height: 1, rgba: vec![137, 12, 85, 91] };
+        let bytes = crysirror_image::encode_png(&original)?;
+        let mut external = |_: &str| Ok(bytes.clone());
+        let mut images = Images { external: &mut external, cache: HashMap::new(), decoded: HashMap::new() };
+        let palette = |channel, opaque_source| {
+            let colors = std::array::from_fn(|i| {
+                let mut color = [0u8; 4];
+                color[channel] = i as u8;
+                color
+            });
+            TexturePalette { colors, opaque_source }
+        };
+        let colors = BTreeMap::from([
+            ("_MainTex".into(), palette(0, false)), ("_ShadowTex".into(), palette(2, true)),
+        ]);
+        assert_eq!(images.decode_property("shared", "_ShadowTex", Some(&colors)).unwrap().rgba, [0,0,136,255]);
+        assert_eq!(images.decode_property("shared", "_MainTex", Some(&colors)).unwrap().rgba, [136,0,0,91]);
+        assert_eq!(images.decode_property("shared", "_HiTex", Some(&colors)).unwrap().rgba, original.rgba);
+        Ok(())
+    }
+
     fn string(out: &mut Vec<u8>, s: &str) {
         let mut n = s.len();
         loop {
@@ -1292,6 +1376,37 @@ mod tests {
         assert_eq!(model.meshes[0][0].morphs[0].name, "smile");
         assert_eq!(model.materials[0].alpha_mode, AlphaMode::Blend);
         assert!(model.materials[0].toon.is_some());
+    }
+
+    #[test]
+    fn textured_outline_materials_keep_surface_and_hull_ramps_separate() -> Result<()> {
+        let pixel = |color: [u8; 4]| crysirror_image::encode_png(&crysirror_image::ImageSurface {
+            width: 1, height: 1, rgba: color.to_vec(),
+        });
+        for shader in ["CM3D2/Toony_Lighted_Outline_Tex", "CM3D2/Toony_Lighted_Hair_Outline_Tex"] {
+            let mut mesh = Mesh::parse(&sample_mesh())?;
+            mesh.materials[0].shader = shader.to_owned();
+            let mut edits = MaterialEdits::default();
+            for (prop, name) in [("_MainTex","edge"),("_ToonRamp","surface"),("_OutlineTex","edge"),("_OutlineToonRamp","edge_ramp")] {
+                edits.textures.push((0, prop.to_owned(), name.to_owned()));
+            }
+            let doc = convert_parsed(mesh, &mut |n| match n {
+                "surface.tex" => pixel([110,120,130,255]),
+                "edge.tex" => pixel([55,40,20,255]),
+                "edge_ramp.tex" => pixel([220,210,200,255]),
+                _ => bail!("unavailable texture {n}"),
+            }, &edits)?;
+            let model = crate::pbr::load_pbr(&doc.to_glb()?, |_| bail!("external"))?;
+            let toon = model.materials[0].toon.as_ref().context("missing forward toon pass")?;
+            let ramp = &model.images[toon.lookup_texture.context("lookup texture")?].levels[0];
+            assert_eq!(&ramp[..4], &[110,120,130,255]);
+            assert_eq!(&ramp[512*4..512*4+4], &[220,210,200,255]);
+            let hull = &model.images[toon.outline_texture.context("outline texture")?];
+            assert!(model.images[model.materials[0].base_color_texture.context("main texture")?].srgb);
+            assert!(!hull.srgb);
+            assert_eq!(&hull.levels[0], &[55,40,20,255]);
+        }
+        Ok(())
     }
 
     #[test]

@@ -78,10 +78,42 @@ pub fn read(p: &Loaded, payload: usize) -> Result<Skeleton> {
             ensure!(steps <= count, "ND joint hierarchy cycle");
         }
     }
-    Ok(Skeleton { hash, names, parents, animated, inverse_bind, rest })
+    let mut skeleton = Skeleton { hash, names, parents, animated, inverse_bind, rest };
+    skeleton.constrain_helper_groups(&world);
+    Ok(skeleton)
 }
 
+/// Limb joint a parentless `SIDE_PART_helper_grp` follows.
+const HELPER_TARGETS: &[(&str, &str)] = &[("elbow", "elbow"), ("knee", "knee"), ("shoulder", "shoulder"), ("thigh", "upper_leg")];
+
 impl Skeleton {
+    /// The unanimated `*_helper_grp` joints are roots that the runtime
+    /// keeps on the limbs (ICE constraint/set-driven-key commands over JH
+    /// data that is not decoded); left at their bind position they tear
+    /// the skin at elbows, knees, shoulders and hips. Each is parented to
+    /// its limb joint by name, keeping its bind-pose offset (inferred,
+    /// SATD-nd-retail-runtime). The helpers under a group keep their bind
+    /// pose relative to it.
+    fn constrain_helper_groups(&mut self, world: &[Affine3A]) {
+        for j in 0..self.names.len() {
+            if self.parents[j].is_some() {
+                continue;
+            }
+            let Some(stem) = self.names[j].strip_suffix("_helper_grp") else { continue };
+            let Some((side, part)) = stem.split_once('_') else { continue };
+            let Some((_, target)) = HELPER_TARGETS.iter().find(|(p, _)| *p == part) else { continue };
+            let Some(t) = self.names.iter().position(|n| *n == format!("{side}_{target}")) else { continue };
+            if t == j {
+                continue;
+            }
+            let local = world[t].inverse() * world[j];
+            let (s, r, tr) = Mat4::from(local).to_scale_rotation_translation();
+            self.parents[j] = Some(t);
+            self.rest[j] = (tr, r.normalize(), s);
+        }
+    }
+
+
     /// Joints ordered so that every parent precedes its children.
     pub fn order(&self) -> Vec<usize> {
         let mut out = Vec::with_capacity(self.parents.len());

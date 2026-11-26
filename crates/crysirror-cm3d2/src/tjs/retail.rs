@@ -3,18 +3,25 @@
 //! belong to the mounted game and may differ between installations.
 use super::{Func, TjsState, Variant, arg_bool, arg_int, arg_string, boolean, int, maid};
 use crate::{files::GameFiles, native_key::NativeKeys, nei::Table};
-mod activities;
+pub(crate) mod activities;
 mod character;
 mod facility;
+pub(crate) mod wardrobe;
+pub(crate) mod construction;
+pub(crate) mod shop;
 mod day;
+mod daily;
+pub(crate) mod operations;
+pub(crate) use daily::close_daily;
 mod stock;
-pub(crate) use stock::{retail_maid,prop,edit_wear,edit_slider,apply_body as apply_live_body,select as select_stock};
+pub(crate) use stock::{examine,finish_profile,names as stock_names,retail_maid,prop,edit_wear,edit_slider,apply_body as apply_live_body,select as select_stock};
 mod stock_profile;
+pub(crate) mod personnel;
 pub(crate) use day::start_before_hiring;
 mod preset;
-pub(crate) use preset::apply_bytes as apply_preset_bytes;
+pub(crate) use preset::{apply_bytes as apply_preset_bytes, read_colors as read_retail_colors, stock_props};
 pub(crate) use character::MPN as RETAIL_MPN;
-mod scenario;
+pub(crate) mod scenario;
 mod selection;
 mod status;
 use anyhow::{Context, Result, bail, ensure};
@@ -36,6 +43,13 @@ struct Source {
     dir: String,
 }
 
+#[derive(Clone)]
+pub(crate) struct DeskPlacement {
+    pub visible: bool,
+    pub season: bool,
+    pub transform: [[f32; 3]; 3],
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct State {
     source: Option<Source>,
@@ -50,12 +64,25 @@ pub(crate) struct State {
     switch_depth: (usize, usize),
     pub(crate) stop_motions: bool,
     activities: activities::Activities,
+    pub(crate) show_in_progress: bool,
+    pub(crate) casino_coins: i64,
+    pub(crate) casino_dealers: BTreeMap<usize,usize>,
+    pub(crate) casino_slot: Option<usize>,
     events: scenario::Events,
     vr_karaoke: Option<bool>,
     selection: Option<selection::Manager>,
-    materials: BTreeSet<i32>,
+    pub(crate) materials: BTreeSet<i32>,
+    pub(crate) desk: BTreeMap<i32,DeskPlacement>,
+    pub(crate) upgrades: BTreeMap<String,operations::upgrade::Choice>,
+    pub(crate) upgrade_count: i32,
+    slot_communication: BTreeMap<usize, [bool; 2]>,
+    schedule_backup: Vec<daily::SlotBackup>,
+    pub(crate) business_name: Option<String>,
+    pub(crate) club_name: Option<String>,
     pub(crate) peak_facilities: usize,
-    facility_levels: BTreeMap<i32, i32>,
+    facility_exp: BTreeMap<i32, crate::params::Exp>,
+    pub(crate) construction: construction::Orders,
+    pub(crate) edit_facility: Option<usize>,
     facilities: Vec<facility::Facility>,
     pub(crate) stock_models: BTreeMap<usize, Arc<crate::chara::Maid>>,
     stock_names: Option<Arc<[Vec<String>;2]>>,
@@ -87,6 +114,7 @@ impl Default for Kasizuki {
 }
 
 impl State {
+    pub(crate) fn facility_index(&self,slot:usize)->Option<usize>{self.facilities.iter().enumerate().position(|(i,f)|f.slot.unwrap_or(i)==slot)}
     pub(crate) fn apply_model_colors(&self, id:usize, model:&mut crate::chara::Maid) {
         if let Some(colors)=self.appearances.get(&id).and_then(|a|a.colors) {
             for (i,c) in colors.into_iter().enumerate(){model.set_parts_color(i,c);}
@@ -244,6 +272,20 @@ impl State {
         Ok(())
     }
 
+    /// Maid.SetThumCard replaces the live icon and records the card revision.
+    pub(crate) fn set_stock_thumbnail(
+        &mut self,
+        guid: &str,
+        icon: Arc<dyn crysirror_core::image_processing::ImageResource>,
+    ) -> Result<()> {
+        let status = self
+            .characters
+            .get_mut(guid)
+            .context("missing photographed stock character")?;
+        status.thumbnail_icon = Some(icon);
+        status.thumbnail_card_time = Local::now().format("%Y%m%d%H%M%S%3f").to_string();
+        Ok(())
+    }
     pub(crate) fn table(&mut self, name: &str) -> Result<Arc<Table>> {
         if let Some(table) = self.tables.get(name) {
             return Ok(table.clone());
@@ -260,6 +302,29 @@ impl State {
         self.tables.insert(name.to_owned(), table.clone());
         Ok(table)
     }
+}
+
+/// Original ReplaceFileNameCallBack checks slot zero before ReplacePersonal
+/// selects the highest numbered placeholder and replaces that token only.
+pub(crate) fn replace_script_name(s: &mut TjsState, name: &str) -> Option<Result<String>> {
+    s.retail.source.as_ref()?;
+    Some((|| {
+        if s.maid(0).is_none() { return Ok(name.to_owned()); }
+        let (slot,token)=[(4,"?4"),(3,"?3"),(2,"?2"),(1,"?1"),(0,"?0"),(0,"?")].into_iter()
+            .find(|(_,token)|name.contains(token)).context("missing personality placeholder")?;
+        let Some(m)=s.maid(slot) else { return Ok(name.to_owned()); };
+        let personal=m.personal;
+        let sub=s.retail.characters.get(&m.guid_id).and_then(|c|c.sub_name.clone());
+        let replacement=if let Some(key)=sub {
+            let t=s.retail.table("maid_status_submaid_list.nei")?;
+            let r=(1..t.rows).find(|&r|t.string(1,r)==key).context("missing sub-character for filename")?;
+            t.string(2,r)
+        } else {
+            let t=s.retail.table("maid_status_personal_list.nei")?;
+            t.string(3,row_id(&t,personal)?)
+        };
+        Ok(name.replace(token,&replacement))
+    })())
 }
 
 fn row_id(table: &Table, id: i32) -> Result<usize> {
@@ -321,6 +386,20 @@ fn threshold_name(table: &Table, value: i32) -> Result<String> {
     let name = table.string(1, row);
     ensure!(!name.is_empty(), "empty threshold name");
     Ok(name)
+}
+
+pub(crate) fn daily_status(state: &mut TjsState, night: bool) -> Result<bool> {
+    ensure!(!state.retail.compatibility && state.retail.legacy_files.is_empty()
+        && state.player.flag("2.0モード") != 1, "unsupported linked DailyCtrl profile");
+    state.retail.upgrades.clear();
+    for (count, id) in [(5, 1160), (10, 1170)] {
+        if state.retail.peak_facilities >= count { award(state, id)?; }
+    }
+    if !night { operations::open_schedule(state)?; return Ok(false); }
+    let table = state.retail.table("facility.nei")?;
+    Ok((1..table.rows).any(|r| table.exists(0,r) &&
+        matches!(table.string(2,r).as_str(), "カジノ" | "高級カジノ") &&
+        facility::built(state, &table, table.int(0,r))))
 }
 
 fn building(s: &mut TjsState, a: &[Variant], upward: bool) -> Result<Variant> {
@@ -1089,9 +1168,13 @@ mod tests {
                 .or_default()
                 .communication[0] = true;
             s.retail.facilities.push(facility::Facility {
+                slot:None,
+                name:None,
                 type_id: 120,
                 assigned: [BTreeSet::from(["character-1".into()]), BTreeSet::new()],
-                costume: facility::Costume::Default,
+                before_assignment: Default::default(),
+                costume: wardrobe::Wardrobe{mode:wardrobe::Mode::Default,..Default::default()},
+                recipes: Default::default(),
             });
         }
         assert!(t.eval_bool("SetCommunicationChara()")?);
@@ -1099,9 +1182,7 @@ mod tests {
         t.eval("SetMaidCostumeFacility(0)")?;
         let appearance = &t.runtime.host().state.retail.appearances[&1];
         assert!(appearance.slots.values().any(|p| p.temp.is_some()));
-        t.runtime.host_mut().state.retail.facilities[0].costume = facility::Costume::Edited(
-            BTreeMap::from([("wear".into(), Some("custom.menu".into()))]),
-        );
+        t.runtime.host_mut().state.retail.facilities[0].costume = wardrobe::Wardrobe{mode:wardrobe::Mode::Edited, edits:Some(BTreeMap::from([("wear".into(), Some("custom.menu".into()))])),..Default::default()};
         t.eval("SetMaidCostumeFacility(0)")?;
         assert_eq!(
             t.runtime.host().state.retail.appearances[&1].slots["wear"]
@@ -1205,7 +1286,7 @@ mod tests {
         Ok(())
     }
     #[cfg(feature="runtime")]
-    fn installed_tjs() -> Result<(tempfile::TempDir,Tjs)> {
+    pub(super) fn installed_tjs() -> Result<(tempfile::TempDir,Tjs)> {
         use crysirror_core::state::ClientId;
         use crysirror_resource::{ArchiveMount, DecodeContext, FormatRegistry};
         let root =
@@ -1329,6 +1410,35 @@ mod tests {
             let model=&s.retail.stock_models[&id];
             assert!(model.visible && model.slots.values().any(|s|s.model.is_some()));
             assert!(s.bodies[&id].loaded_slots.contains("body"));
+            if name == "Muku" {
+                let hair = &model.slots["hairF"];
+                for property in ["_MainTex","_ToonRamp","_ShadowTex","_HiTex"] {
+                    assert_eq!(hair.texture_colors.get(&(0, property.to_owned())), Some(&2), "{property} uses HAIR");
+                }
+                for property in ["_OutlineTex", "_OutlineToonRamp"] {
+                    assert_eq!(hair.texture_colors.get(&(0, property.to_owned())), Some(&7), "{property} uses HAIR_OUTLINE");
+                }
+                assert!(hair.multicolor.is_empty());
+                assert_eq!(model.parts_color[2].main_hue, 10);
+            }
+            let state = &mut t.runtime.host_mut().state;
+            stock::finish_profile(state,true)?;
+            assert!(state.retail.main_characters.contains(&id));
+            let updated = &state.maids[&id];
+            let feature_id = match name { "Muku"=>360, "Majime"=>480, "Rindere"=>600, _=>unreachable!() };
+            assert!(!updated.feature.contains(&feature_id));
+            assert!(!updated.skill_data.is_empty() && !updated.profile.is_empty());
+            assert!(updated.profile.contains(&updated.body.bust.to_string()));
+            let before = updated.clone();
+            stock::finish_profile(state,true)?;
+            assert_eq!(state.maids[&id], before, "repeated profile update for {name}");
+            state.maids.get_mut(&id).unwrap().charm = 300;
+            stock::finish_profile(state, true)?;
+            assert!(state.maids[&id].feature.contains(&feature_id), "{name} feature at 300 charm");
+            state.maids.get_mut(&id).unwrap().charm = 0;
+            stock::finish_profile(state, false)?;
+            assert!(!state.maids[&id].feature.contains(&feature_id));
+            assert!(!state.retail.main_characters.contains(&id));
         }
         t.eval("CreateNewMaid('紗姫')")?;
         assert!(t.eval_bool("GetMaidStatus(0,'名前')=='紗姫' && GetMaidStatus(0,'ヒロインタイプ')=='サブ'")?);
@@ -1345,4 +1455,37 @@ mod tests {
         Ok(())
     }
 
+}
+
+#[cfg(all(test,feature="runtime"))]
+#[test]
+#[ignore="requires COM3D2_ROOT standalone NEI tables"]
+fn daily_installed_facility_reassignment_and_trophies() -> Result<()> {
+    let (_tmp,mut vm) = tests::installed_tjs()?;
+    let s = &mut vm.runtime.host_mut().state;
+    s.player.schedule_slot[39].maid_guid = "character-0".into();
+    s.maids.get_mut(&0).unwrap().noon_work_id = 3001;
+    s.retail.facilities.push(facility::Facility {
+                slot:None,
+        type_id:100,
+        assigned:[BTreeSet::from(["character-0".into(),"character-1".into(),"removed".into()]),Default::default()],
+        ..Default::default()
+    });
+    close_daily(s,false)?;
+    assert_eq!(s.retail.facilities[0].assigned[0],BTreeSet::from(["character-0".to_owned()]));
+    assert_eq!(s.retail.facilities[0].before_assignment[0],BTreeSet::from(["character-1".to_owned()]));
+    s.player.schedule_slot[1].maid_guid = "character-1".into();
+    s.maids.get_mut(&1).unwrap().noon_work_id = 2001;
+    close_daily(s,false)?;
+    assert_eq!(s.retail.facilities[0].assigned[0].len(),2);
+    assert!(s.retail.facilities[0].before_assignment[0].is_empty());
+    for m in s.maids.values_mut() { m.personal = 100; }
+    s.retail.peak_facilities = 5;
+    daily_status(s,false)?;
+    assert!(s.player.have_trophy.contains(&1160));
+    assert!(!s.player.have_trophy.contains(&1170));
+    s.retail.peak_facilities = 10;
+    daily_status(s,false)?;
+    assert!(s.player.have_trophy.contains(&1170));
+    Ok(())
 }

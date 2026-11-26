@@ -61,7 +61,10 @@ seconds so repeated draws can reuse the decode. When a new result would
 exceed the budget, it can reclaim the least recently used automatic entries
 immediately. Explicit tickets, live streaming leases and payloads still held
 by consumers retain their residency. If reclaiming every eligible entry would
-still leave too little space, admission fails and the cache keeps its entries.
+still leave too little space, admission fails, reports resident and incoming
+byte counts, and keeps all cached entries. An automatic request denied for
+this reason can decode again on a later lookup once enough space is available.
+Oversized payloads and decoder errors retain their failure status.
 
 Reuse shared caches and size classes before creating new per-VM copies. Keep
 keys, saves, original input data and native policy separate from disposable

@@ -142,9 +142,20 @@ pub struct Material {
     pub name: String,
     /// Texture IDs of pass 0's samplers (`VRAM_DESC` word 3).
     pub samplers: Vec<u32>,
+    /// Every pass's samplers, pass 0 first.
+    pub passes: Vec<Vec<u32>>,
+    /// The two-layer blend pass 0's fragment program computes, if any.
+    pub layers: Option<crate::rsx::LayerBlend>,
+    /// Pass 0's named fragment-program constants.
+    pub parameters: Vec<(String, [f32; 4])>,
 }
 
 impl Material {
+    /// A named fragment-program constant.
+    pub fn parameter(&self, name: &str) -> Option<[f32; 4]> {
+        self.parameters.iter().find(|(n, _)| n == name).map(|(_, v)| *v)
+    }
+
     /// Base-colour texture: the first sampler that is not a placeholder
     /// (`skip`: single-colour textures and lightmaps). Background materials
     /// bind a shared placeholder at sampler 0 and the albedo at 1, prop
@@ -386,16 +397,26 @@ fn material(p: &Loaded, m: usize) -> Result<Material> {
     let name = cstring(p, p.ptr(m)?)?;
     let passes = p.u32(m + 0xc)?;
     ensure!((1..=64).contains(&passes), "ND material pass count");
-    let data = p.ptr(p.ptr(p.ptr(m + 0x10)?)? + 0x10)?;
-    let count = usize::from(p.u16(data + 0xc)?);
-    ensure!(count <= 16, "ND sampler count");
-    let samplers = if count == 0 {
-        Vec::new()
-    } else {
+    let pass_samplers = |pass: usize| -> Result<Vec<u32>> {
+        let data = p.ptr(pass + 0x10)?;
+        let count = usize::from(p.u16(data + 0xc)?);
+        ensure!(count <= 16, "ND sampler count");
+        if count == 0 {
+            return Ok(Vec::new());
+        }
         let table = p.ptr(data + 0x18)?;
-        (0..count).map(|s| p.u32(p.ptr(table + 16 * s)?)).collect::<Result<Vec<_>>>()?
+        (0..count).map(|s| p.u32(p.ptr(table + 16 * s)?)).collect()
     };
-    Ok(Material { name, samplers })
+    let list = p.ptr(m + 0x10)?;
+    let samplers = pass_samplers(p.ptr(list)?)?;
+    let layers = p
+        .ptr(p.ptr(list)? + 0x10)
+        .and_then(|data| Ok((crate::rsx::pass_program(p, data)?, crate::rsx::sampler_units(p, data)?)))
+        .ok()
+        .and_then(|(code, units)| crate::rsx::layer_blend(&code, &units));
+    let passes = (0..passes as usize).map(|i| p.ptr(list + 4 * i).and_then(pass_samplers)).collect::<Result<Vec<_>>>().unwrap_or_else(|_| vec![samplers.clone()]);
+    let parameters = p.ptr(p.ptr(list)? + 0x10).and_then(|data| crate::rsx::pass_parameters(p, data)).unwrap_or_default();
+    Ok(Material { name, samplers, passes, layers, parameters })
 }
 
 /// First word of the collision-mesh collections in actor packages (the

@@ -905,6 +905,18 @@ fn com3d2_opening_activates_and_animates_npc() -> anyhow::Result<()> {
 #[cfg(feature="runtime")]
 #[ignore="needs COM3D2_ROOT and COM3D2_MOTION_WARC"]
 fn com3d2_stock_editor_controls() -> anyhow::Result<()> {
+    exercise_stock_editor(false)
+}
+
+#[test]
+#[cfg(feature="runtime")]
+#[ignore="needs COM3D2_ROOT, COM3D2_MOTION_WARC and a graphics device"]
+fn com3d2_stock_editor_portraits() -> anyhow::Result<()> {
+    exercise_stock_editor(true)
+}
+
+#[cfg(feature="runtime")]
+fn exercise_stock_editor(capture: bool) -> anyhow::Result<()> {
     use anyhow::Context;
     use crysirror_core::{service::{buttons,InputFrame},vfs::MemoryProvider};
     use crysirror_runtime::Runtime;
@@ -919,6 +931,14 @@ fn com3d2_stock_editor_controls() -> anyhow::Result<()> {
 @AllProcPropSeqStart maid=0 sync
 @SceneCall name=SceneEdit label=*returned main
 *returned
+@CharaActivate maid=0 main=Muku
+@ItemSet maid=0 category=handitem item=HandItemR_Houki_I_.menu temp
+@PropSet maid=0 category=Hara val=25 temp
+@AllProcPropSeqStart maid=0 sync
+@wait time=1000 skip=false
+@ItemReset maid=0 category=handitem
+@PropReset maid=0 category=Hara
+@AllProcPropSeqStart maid=0 sync
 @s
 "#.to_vec())?;
     rt.mount_provider(ClientId(1),"fixture",Arc::new(fixture))?;
@@ -933,6 +953,11 @@ fn com3d2_stock_editor_controls() -> anyhow::Result<()> {
         }
     }
     assert!(award_visible, "stock editor fixture did not draw the awarded trophy");
+    let light = rt.host.engine.world.pbr_scene(None)?.context("missing editor world")?.environment;
+    assert_eq!(light.ambient, Some([0.;3]));
+    let sun = light.sun.context("missing editor light")?;
+    assert!((sun.intensity-0.95).abs()<1e-5 && (sun.shadow_strength-0.098).abs()<1e-5);
+    assert!(sun.direction[2] < -0.76 && sun.direction[1] < -0.64);
     let before=native(&rt);
     assert_eq!(before["scene"],"SceneEdit","{before}");
     assert!(before["club_meshes"].as_u64().unwrap()>0);
@@ -970,6 +995,34 @@ fn com3d2_stock_editor_controls() -> anyhow::Result<()> {
     pick(&mut rt,"sintyou")?;
     assert!(thigh(&rt).context("edited stock thigh scale")? > original_scale);
     assert_ne!(native(&rt)["stock_editor"]["height"],before["stock_editor"]["height"]);
+    pick(&mut rt,"プロフィール")?;
+    let visible_text = |rt: &Runtime, expected: &str| -> anyhow::Result<bool> {
+        Ok(rt.host.engine.layers.frame([1920,1080])?.into_iter().any(|p| {
+            p.opacity > 0 && serde_json::to_value(p.paint).ok().is_some_and(|paint| paint["text"].as_str() == Some(expected))
+        }))
+    };
+    rt.host.text_input.set_presenter_available(true);
+    rt.host.text_input.focus(true);
+    pick(&mut rt,"LastName")?;
+    assert!(rt.host.text_input.commit("山田")?);
+    rt.tick(16,InputFrame::default())?;
+    assert_eq!(native(&rt)["stock_editor"]["name"][0], "山田");
+    assert!(visible_text(&rt,"山田")?);
+    pick(&mut rt,"FirstName")?;
+    assert!(rt.host.text_input.commit("あいうえおかきくけ")?);
+    rt.tick(16,InputFrame::default())?;
+    assert_eq!(native(&rt)["stock_editor"]["name"][1], "あいうえおかきく");
+    pick(&mut rt,"RandomFirstName")?;
+    assert_ne!(native(&rt)["stock_editor"]["name"][1], "あいうえおかきく");
+    pick(&mut rt,"FreeTab")?;
+    pick(&mut rt,"FreeComment")?;
+    assert!(rt.host.text_input.commit("初日のメモ")?);
+    rt.tick(16,InputFrame::default())?;
+    assert_eq!(native(&rt)["stock_editor"]["free_comment"], "初日のメモ");
+    assert!(visible_text(&rt,"初日のメモ")?);
+    pick(&mut rt,"ProfileTab")?;
+    assert!(native(&rt)["stock_editor"]["hits"].get("FreeComment").is_none());
+    assert!(!visible_text(&rt,"初日のメモ")?);
     pick(&mut rt,"OK")?;
     pick(&mut rt,"family")?;
     assert_eq!(native(&rt)["stock_editor"]["first_name_call"],false);
@@ -977,5 +1030,51 @@ fn com3d2_stock_editor_controls() -> anyhow::Result<()> {
     click(&mut rt,1064,640)?;
     rt.tick(350,InputFrame::default())?;
     assert_eq!(native(&rt)["stock_editor"]["confirm"],false);
+    pick(&mut rt,"OK")?;
+    pick(&mut rt,"first")?;
+    if !capture { return Ok(()); }
+    rt.set_canvas_image_presenter(true);
+    let gpu = pollster::block_on(crysirror_wgpu::Gpu::request(&wgpu::Instance::default(), None))?;
+    let renderer = crysirror_wgpu::Renderer::new(Arc::new(gpu), wgpu::TextureFormat::Rgba8UnormSrgb);
+    click(&mut rt,1163,640)?;
+    for i in 0..600 {
+        rt.tick(16,InputFrame::default()).with_context(|| format!("portrait frame {i}"))?;
+        rt.prepare_world_photos(|scene, size, assets| renderer.world_photo(scene, size, assets));
+        if native(&rt)["scene"]=="SceneADV" {break;}
+        std::thread::yield_now();
+    }
+    rt.tick(16,InputFrame::default())?;
+    assert!(native(&rt)["script"].as_str().unwrap().contains("*returned"), "{}",native(&rt));
+    let broom = |rt: &Runtime| rt.host.engine.world.entities(ClientId(1)).into_iter()
+        .find(|(_,_,part)| part.name.ends_with("/HandItemR") && part.visible)
+        .and_then(|(_,_,part)|part.animation.as_ref()?.attach.clone());
+    for _ in 0..25 {
+        if broom(&rt).is_some() { break; }
+        rt.tick(16,InputFrame::default())?;
+    }
+    assert_eq!(broom(&rt).as_deref(),Some("_IK_handR"), "world entities {:?}", rt.host.engine.world.entities(ClientId(1)).iter().map(|(_,_,e)| (&e.name,e.visible)).collect::<Vec<_>>());
+    assert_eq!(weight(&rt),Some(0.25));
+    for _ in 0..65 { rt.tick(16,InputFrame::default())?; }
+    assert!(weight(&rt).is_some_and(|v|v>0.65 && v<0.85));
+    assert!(broom(&rt).is_none(), "temporary broom was still on the character after ItemReset");
+    let storage = crysirror_core::service::HostServices::storage(&mut rt.host,ClientId(1))?;
+    use crysirror_core::path::{Mount,VfsPath};
+    let thumbs = storage.list(Mount::Save,"Thumb")?;
+    assert_eq!(thumbs.len(),3,"{thumbs:?}");
+    let mut card = None;
+    for (prefix, expected) in [("icon_thum_",[90,90]),("_tmp_thum_",[630,890]),("_tmp_kasizuki_",[630,890])] {
+        let path = thumbs.iter().map(|s| s.rsplit('/').next().unwrap()).find(|s| s.starts_with(prefix)).context("missing portrait")?;
+        let bytes = storage.read(&VfsPath::new(Mount::Save,&format!("Thumb/{path}"))?)?;
+        let image = crysirror_image::DecoderRegistry::default().decode(path,&bytes)?;
+        assert_eq!([image.width,image.height],expected);
+        let colored = image.rgba.chunks_exact(4).filter(|p| p[3] > 127 && p[..3].iter().any(|&c|c>35)).count();
+        let clear = image.rgba.chunks_exact(4).filter(|p| p[3]==0).count();
+        assert!(clear>0 && colored>100, "{prefix}: {colored} subject pixels, {clear} transparent pixels");
+        if prefix=="_tmp_thum_" { card = Some(image.rgba); }
+        else if prefix=="_tmp_kasizuki_" {
+            let different = card.take().unwrap().chunks_exact(4).zip(image.rgba.chunks_exact(4)).filter(|(a,b)|a!=b).count();
+            assert!(different > 1000, "scripted camera and pose changed only {different} pixels");
+        }
+    }
     Ok(())
 }

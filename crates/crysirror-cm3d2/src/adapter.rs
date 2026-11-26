@@ -544,7 +544,7 @@ impl Game {
                     self.all_offset = [0., harem[1], 0.];
                 }
             }
-            AdvUi::ManOffset { man, target, split, per } => {
+            AdvUi::ManOffset { man, target, split, per, .. } => {
                 let target = if target.0 { self.man(target.1).cloned() } else { self.maid(target.1).cloned() };
                 if let (Some(t), Some(m)) = (target, self.man(man)) {
                     m.position = maid_offset(&t, split, &per).0;

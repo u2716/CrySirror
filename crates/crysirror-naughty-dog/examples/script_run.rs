@@ -85,6 +85,10 @@ impl World for Stub {
     fn sticks(&self, _: u32) -> [f32; 4] {
         [0.; 4]
     }
+    fn animate(&mut self, object: u32, clip: u32, options: &crysirror_naughty_dog::ss::Animate) -> bool {
+        println!("  [animate] {object:#010x} {clip:#010x} {options:?}");
+        true
+    }
 }
 
 /// Spawner records of a task subnode's levels (subnode level, caches,

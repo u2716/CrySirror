@@ -166,9 +166,18 @@ pub struct AnimationLayer {
     /// Clips contribute only to nodes they animate.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub blend_layer: u32,
+    /// The clip holds local deltas added on top of the blended pose of the
+    /// other layers (rotation `base · slerp(I, delta, weight)`, translation
+    /// `base + weight · delta`); it takes no part in their weight
+    /// normalisation.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub additive: bool,
 }
 fn is_zero(v: &u32) -> bool {
     *v == 0
+}
+fn is_false(v: &bool) -> bool {
+    !*v
 }
 
 /// Local transform components that replace the animated value of one node.
@@ -374,6 +383,7 @@ impl AnimationState {
                 fade: rate,
                 looping,
                 blend_layer: 0,
+                additive: false,
             });
         }
     }

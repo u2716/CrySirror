@@ -196,6 +196,7 @@ fn capture_pins_published_inputs_while_release_mutation_and_failed_presenter_rem
     rt.host
         .release_image_resource(owner, &path)
         .expect("releasing an owned retired path again is idempotent");
+    assert!(rt.assets.surface(owner, &path).is_some());
     submit(
         &mut rt,
         serde_json::json!({"canvases":[{"op":"clear","id":1,"color":[0,0,255,255]}]}),
@@ -247,4 +248,40 @@ fn frame_capture_reports_failure_when_its_presenter_is_removed() {
         frame.poll().unwrap(),
         ImageProcessState::Failed(reason) if reason.contains("presenter abandoned")
     ));
+}
+
+#[test]
+fn world_photo_freezes_owned_subjects_and_keeps_screen_captures_independent() {
+    use crysirror_core::graphics::WorldPhoto;
+    let (_root, mut rt) = runtime();
+    rt.set_canvas_image_presenter(true);
+    let subjects = serde_json::json!({"world":[{"op":"spawn","entity":{
+        "id":4,"name":"subject","geometry":{"kind":"cube"},"material":{}
+    }}]});
+    submit(&mut rt, subjects.clone());
+    rt.host.engine.submit(ClientId(2), &serde_json::from_value(subjects).unwrap()).unwrap();
+    submit(&mut rt, serde_json::json!({"world":[{"op":"set_environment","environment":{}}]}));
+    let shot = WorldPhoto {
+        entities: vec![4], eye: [0.,0.,2.], target: [0.;3], up: [0.,1.,0.],
+        fov_y_degrees: 30., near: 0.01, far: 5., size: [2,2],
+    };
+    assert!(rt.host.begin_world_photo(ClientId(2), shot.clone()).is_err());
+    assert!(rt.host.begin_world_photo(ClientId(1), WorldPhoto {
+        entities: vec![99], ..shot.clone()
+    }).is_err());
+    let mut frame = rt.host.begin_frame_capture(ClientId(1)).unwrap();
+    let mut photo = rt.host.begin_world_photo(ClientId(1), shot).unwrap();
+    submit(&mut rt, serde_json::json!({"world":[{"op":"despawn","id":4}]}));
+    rt.prepare_world_photos(|scene, size, _| {
+        assert_eq!(size, [2,2]);
+        assert_eq!(scene.instances.len(), 1);
+        assert_eq!(scene.instances[0].key, (1u64<<32) | 4);
+        assert!(!scene.environment.show_sky);
+        Ok(Arc::new(WorkerReader {
+            owner: std::thread::current().id(), bytes: [3u8; 16].into(),
+        }))
+    });
+    rt.prepare_frame_captures(|_| Ok(vec![7; 4*4*4])).unwrap();
+    assert_eq!(finish(&mut photo).rgba().as_ref(), &[3;16]);
+    assert_eq!(finish(&mut frame).rgba().as_ref(), &[7;64]);
 }

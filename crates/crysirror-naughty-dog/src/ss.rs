@@ -57,9 +57,53 @@ pub trait World {
     /// Fade the screen to `color` at `alpha` (1 opaque) over `seconds`.
     fn fade(&mut self, color: [f32; 3], alpha: f32, seconds: f32);
     fn camera(&mut self, name: u32, seconds: f32);
+    /// Release scripted camera `name` (`None`: every scripted camera).
+    fn camera_disable(&mut self, _name: Option<u32>) {}
+    /// Keep camera animation `name` (clip `clip`, blended in over
+    /// `seconds`) offsetting the active camera; enabling a running one
+    /// keeps its phase.
+    fn camera_animation(&mut self, _name: u32, _clip: u32, _seconds: f32) {}
+    /// Blend camera animation `name` out (`None`: every one).
+    fn camera_animation_disable(&mut self, _name: Option<u32>) {}
     fn player_controls(&mut self, enabled: bool);
     /// Left and right stick (x, y in −1…1) of a controller.
     fn sticks(&self, pad: u32) -> [f32; 4];
+    /// Play clip `clip` once on `object` (a spawner name or `player`).
+    /// False when the object is unknown.
+    fn animate(&mut self, _object: u32, _clip: u32, _options: &Animate) -> bool {
+        false
+    }
+    /// Phase (0–1) of the script animation `object` is playing; `None`
+    /// once it has ended (or none plays).
+    fn animation_phase(&self, _object: u32) -> Option<f32> {
+        None
+    }
+    /// Whether `object` (`player`, a spawner) stands in trigger region
+    /// `region` (a region name `StringId`).
+    fn in_region(&self, _object: u32, _region: u32) -> bool {
+        false
+    }
+    /// Show or hide a spawned object's entities. False when unknown.
+    fn set_visible(&mut self, _object: u32, _visible: bool) -> bool {
+        false
+    }
+    /// Whether `object` (`player`, a character) stands on `support`'s
+    /// collision body.
+    fn object_on_object(&self, _object: u32, _support: u32) -> bool {
+        false
+    }
+}
+
+/// Options of `(animate object clip key value …)`. The keys seen in the
+/// level scripts are 2 (blend-in seconds), 4 (blend-out seconds) and 7 (an
+/// action-pack reference locator, `get-ap-ref-locator` /
+/// `get-spawner-locator`); others are ignored.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Animate {
+    pub blend_in: Option<f32>,
+    pub blend_out: Option<f32>,
+    /// Position and rotation quaternion (x, y, z, w) to play at.
+    pub locator: Option<([f32; 3], [f32; 4])>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -70,6 +114,8 @@ enum Wait {
     Signal(u32),
     /// Until process variable `var` of `process` equals `value`.
     Var { process: usize, var: u32, value: u32 },
+    /// Until the script animation of an object ends.
+    Animation(u32),
 }
 
 struct Track {
@@ -121,6 +167,8 @@ pub struct Inner {
     /// Player movement types from `set-walk-type`/`set-run-type`.
     pub movement: [u32; 2],
     pub prints: Vec<String>,
+    /// State of the scripts' random numbers (xorshift).
+    rng: u32,
 }
 
 pub struct Runtime {
@@ -193,6 +241,7 @@ impl Runtime {
                 prints: Vec::new(),
                 pads: HashMap::new(),
                 movement: [0; 2],
+                rng: 0x2545_f491,
             },
         }
     }
@@ -298,6 +347,8 @@ impl Runtime {
             Wait::Frame(f) => self.inner.frame >= *f,
             Wait::Signal(s) => self.inner.signals.contains(s),
             Wait::Var { process, var, value } => self.inner.procs.get(*process).is_none_or(|p| p.vars.get(var).copied().unwrap_or(0) == *value),
+            // Resolved against the world in `run_track`.
+            Wait::Animation(_) => false,
         }
     }
 
@@ -305,7 +356,11 @@ impl Runtime {
         let mut guard = 0;
         loop {
             let t = &self.inner.procs[i].groups[gi].tracks[ti];
-            if !self.wait_done(&t.wait, now) {
+            let done = match t.wait {
+                Wait::Animation(object) => world.animation_phase(object).is_none(),
+                ref w => self.wait_done(w, now),
+            };
+            if !done {
                 return Ok(());
             }
             let mut thread = match self.inner.procs[i].groups[gi].tracks[ti].thread.take() {
@@ -486,6 +541,54 @@ impl Ctx<'_> {
     }
 }
 
+/// `ND_TRACE_NATIVES=substring` prints matching native calls (diagnostic).
+fn trace_natives() -> Option<&'static String> {
+    static FILTER: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    FILTER.get_or_init(|| std::env::var("ND_TRACE_NATIVES").ok()).as_ref()
+}
+
+impl Ctx<'_> {
+    fn next_random(&mut self) -> u32 {
+        let r = &mut self.inner.rng;
+        *r ^= *r << 13;
+        *r ^= *r >> 17;
+        *r ^= *r << 5;
+        *r
+    }
+
+    /// Members of an `entity-group` symbol (empty when it is none).
+    fn group_members(dc: &Dc, name: u32) -> Result<Vec<u32>> {
+        let Some(&group) = dc.symbols.get(&name) else { return Ok(Vec::new()) };
+        if dc.mem.type_of(group).ok() != Some(sid("entity-group")) {
+            return Ok(Vec::new());
+        }
+        let (count, array) = (dc.mem.u32(group)?, dc.mem.u32(group + 4)?);
+        ensure!(count <= 4096, "entity-group size");
+        (0..count).map(|i| dc.mem.u32(array + 8 * i + 4)).collect()
+    }
+
+    /// Call a native (by its script value) or a script lambda with `args`;
+    /// a lambda must not suspend.
+    fn invoke(&mut self, dc: &mut Dc, function: u32, args: &[u32]) -> Result<u32> {
+        let mut regs = [0u32; MAX_ARGS];
+        regs[..args.len().min(MAX_ARGS)].copy_from_slice(&args[..args.len().min(MAX_ARGS)]);
+        if function >= crate::script::NATIVE_BASE && function != crate::script::NULL_SYMBOL {
+            return Ok(self.call(dc, function - crate::script::NATIVE_BASE, &regs, args.len() as u32)?.0);
+        }
+        if function == 0 || function == crate::script::NULL_SYMBOL {
+            return Ok(0);
+        }
+        let mut thread = Thread::new(dc, function, args)?;
+        match thread.run(dc, self)? {
+            Outcome::Returned(v) => Ok(v),
+            other => {
+                self.inner.error(format!("group lambda ended with {other:?}"));
+                Ok(0)
+            }
+        }
+    }
+}
+
 impl Natives for Ctx<'_> {
     fn lookup(&self, s: u32) -> Option<u32> {
         self.inner.native_ids.get(&s).copied()
@@ -499,6 +602,10 @@ impl Natives for Ctx<'_> {
         let ok = |v: u32| Ok((v, Status::Continue));
         let b = |v: bool| Ok((u32::from(v), Status::Continue));
         let now = self.world.now();
+        if trace_natives().is_some_and(|f| name.contains(f.as_str())) {
+            let proc = self.proc.map(|p| (self.inner.procs[p].name, self.inner.procs[p].state.unwrap_or(0)));
+            eprintln!("[native {now:.2}] {proc:08x?}: ({name} {:08x?})", &a[..n.min(MAX_ARGS)]);
+        }
         match name {
             // (add-load-module 'name 'script): the host loads the module
             // after the calling lambda (`sub_1545A8` queues it).
@@ -597,6 +704,88 @@ impl Natives for Ctx<'_> {
                 }
                 Ok((0, Status::Abort))
             }
+            // (player-in-region? region) / (object-in-region? object region):
+            // `sub_F7D94`, see `crate::trigger`.
+            "player-in-region?" if n > 0 => b(self.world.in_region(sid("player"), a[0])),
+            "object-in-region?" if n > 1 => {
+                let object = if a[0] == sid("player") { a[0] } else { self.inner.process(a[0]).and_then(|p| self.inner.procs[p].spawner).unwrap_or(a[0]) };
+                b(self.world.in_region(object, a[1]))
+            }
+            // Entity groups (`entity-group` symbols: `{count, {ptr,
+            // member}…}`). (for-group group fn args…) calls `fn` (a native
+            // or lambda) with each member and the args (`sub_A1BF0`);
+            // (group-and group fn args…) is true while every call is
+            // (`sub_A1A40`).
+            "for-group" | "group-and" | "group-or" if n > 1 => {
+                let members = Self::group_members(dc, a[0])?;
+                let extra: Vec<u32> = a[2..n.min(MAX_ARGS)].to_vec();
+                let mut all = true;
+                let mut any = false;
+                for m in members {
+                    let args: Vec<u32> = std::iter::once(m).chain(extra.iter().copied()).collect();
+                    let v = self.invoke(dc, a[1], &args)?;
+                    all &= v != 0;
+                    any |= v != 0;
+                }
+                match name {
+                    "group-and" => b(all),
+                    "group-or" => b(any),
+                    _ => ok(0),
+                }
+            }
+            // (group-is-member-symbol? group symbol), `sub_A13BC`.
+            "group-is-member-symbol?" if n > 1 => b(Self::group_members(dc, a[0])?.contains(&a[1])),
+            // (group-random group): a member chosen at random.
+            "group-random" if n > 0 => {
+                let members = Self::group_members(dc, a[0])?;
+                if members.is_empty() {
+                    return ok(0);
+                }
+                let r = self.next_random();
+                ok(members[(r as usize) % members.len()])
+            }
+            // (symbol-eq? a b).
+            "symbol-eq?" => b(n > 1 && a[0] == a[1]),
+            // (lerp-scale a b c d x): `t = clamp((x − a) / (b − a), 0, 1)`,
+            // `c (1 − t) + d t` (`sub_1416CC`, shared with the trees).
+            "lerp-scale" if n == 5 => {
+                let f = |i: usize| Self::arg_f(a, i);
+                let t = ((f(4) - f(0)) / (f(1) - f(0))).max(0.);
+                let t = if t.is_nan() { 0. } else { t.min(1.) };
+                ok(((1. - t) * f(2) + t * f(3)).to_bits())
+            }
+            // (random-float): uniform in [0, 1) (`sub_90A9F0`).
+            "random-float" => {
+                let r = self.next_random();
+                ok(((r >> 8) as f32 / (1u32 << 24) as f32).to_bits())
+            }
+            // (get-locator-distance a b): distance between two locator
+            // records `{x, y, z, 1, …}`.
+            "get-locator-distance" => {
+                if n < 2 || a[0] == 0 || a[1] == 0 {
+                    return ok(0f32.to_bits());
+                }
+                let v = |at: u32| -> Result<[f32; 3]> { Ok([f32::from_bits(dc.mem.u32(at)?), f32::from_bits(dc.mem.u32(at + 4)?), f32::from_bits(dc.mem.u32(at + 8)?)]) };
+                let (p, q) = (v(a[0])?, v(a[1])?);
+                ok(((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) + (p[2] - q[2]).powi(2)).sqrt().to_bits())
+            }
+            // (set-visible object on?) (`sub_13AE98`: any non-zero shows).
+            "set-visible" if n == 2 => {
+                let object = self.inner.process(a[0]).and_then(|p| self.inner.procs[p].spawner).unwrap_or(a[0]);
+                b(self.world.set_visible(object, a[1] != 0))
+            }
+            // (object-on-object? object support): the object stands on the
+            // support's rigid body (`sub_143C54`).
+            "object-on-object?" if n == 2 => {
+                let object = |x: u32| self.inner.process(x).and_then(|p| self.inner.procs[p].spawner).unwrap_or(x);
+                b(self.world.object_on_object(object(a[0]), object(a[1])))
+            }
+            // (get-object-id object): the process's id word (+76); here the
+            // object's name.
+            "get-object-id" => ok(if n > 0 { a[0] } else { self.proc.map_or(0, |p| self.inner.procs[p].name) }),
+            // (get-object-state object): its state-script state, like
+            // `get-script-state` (`sub_1429E8`).
+            "get-object-state" => ok(self.target(a, argc, 0).and_then(|p| self.inner.procs[p].state).map(|s| dc.mem.u32(s)).transpose()?.unwrap_or(0)),
             "get-script-state" => ok(self.target(a, argc, 0).and_then(|p| self.inner.procs[p].state).map(|s| dc.mem.u32(s)).transpose()?.unwrap_or(0)),
             "get-current-time" => ok((now as f32).to_bits()),
             // (pad-get-info pad) → `{held, pressed, released, left x, y,
@@ -639,6 +828,49 @@ impl Natives for Ctx<'_> {
                 }
                 b(killed)
             }
+            // (animate object clip key value …) / (wait-animate …): the
+            // object is a process (its spawner) or a spawner name.
+            "animate" | "wait-animate" => {
+                if n < 2 {
+                    return ok(0);
+                }
+                let object = self.inner.process(a[0]).and_then(|p| self.inner.procs[p].spawner).unwrap_or(a[0]);
+                let mut options = Animate::default();
+                for k in (2..n.saturating_sub(1)).step_by(2) {
+                    match a[k] {
+                        2 => options.blend_in = Some(Self::arg_f(a, k + 1)),
+                        4 => options.blend_out = Some(Self::arg_f(a, k + 1)),
+                        7 if a[k + 1] != 0 => {
+                            let f = |i: u32| dc.mem.f32(a[k + 1] + 4 * i).unwrap_or(f32::NAN);
+                            let (pos, rot) = ([f(0), f(1), f(2)], [f(4), f(5), f(6), f(7)]);
+                            if pos.iter().chain(&rot).all(|v| v.is_finite()) {
+                                options.locator = Some((pos, rot));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                let started = self.world.animate(object, a[1], &options);
+                if name == "wait-animate" && started { Ok(self.suspend(Wait::Animation(object))) } else { b(started) }
+            }
+            // (get-animation-phase object): 0–1, 0 when nothing plays.
+            "get-animation-phase" => {
+                let object = self.inner.process(a[0]).and_then(|p| self.inner.procs[p].spawner).unwrap_or(a[0]);
+                ok(self.world.animation_phase(object).unwrap_or(0.).to_bits())
+            }
+            // (get-object-locator object) / (get-ap-ref-locator ? object):
+            // the object's locator; a process stands at its spawner and
+            // `player` where the player is.
+            "get-object-locator" | "get-ap-ref-locator" => {
+                let i = usize::from(name == "get-ap-ref-locator" && n > 1);
+                let object = self.inner.process(a[i]).and_then(|p| self.inner.procs[p].spawner).unwrap_or(a[i]);
+                let Some((pos, rot)) = self.world.locator(object) else { return ok(0) };
+                let at = dc.mem.alloc(32)?;
+                for (k, v) in pos.iter().chain(&[1.]).chain(&rot).enumerate() {
+                    dc.mem.write_u32(at + 4 * k as u32, v.to_bits())?;
+                }
+                ok(at)
+            }
             "get-spawner-locator" | "get-spawner-position" => {
                 let Some((pos, rot)) = self.world.locator(a[0]) else {
                     self.inner.error(format!("{name}: no spawner {:#010x}", a[0]));
@@ -666,6 +898,27 @@ impl Natives for Ctx<'_> {
             }
             "camera-enable" => {
                 self.world.camera(a[0], if n > 2 { Self::arg_f(a, 2) } else { 0. });
+                ok(0)
+            }
+            "camera-disable" | "camera-abandon" => {
+                self.world.camera_disable((n > 0 && a[0] != 0).then_some(a[0]));
+                ok(0)
+            }
+            "camera-disable-all" => {
+                self.world.camera_disable(None);
+                ok(0)
+            }
+            // (camera-animation-enable name clip blend): `DcCameraAnimationEnable`
+            // (`sub_366730`) keeps up to 10 named camera animations; the
+            // scripts call it every frame while one should run.
+            "camera-animation-enable" => {
+                let clip = if n > 1 && a[1] != 0 { a[1] } else { a[0] };
+                self.world.camera_animation(a[0], clip, if n > 2 { Self::arg_f(a, 2) } else { 0. });
+                ok(0)
+            }
+            // (camera-animation-disable name), `sub_364550`.
+            "camera-animation-disable" => {
+                self.world.camera_animation_disable((n > 0 && a[0] != 0).then_some(a[0]));
                 ok(0)
             }
             // The argument is a control mask (`player-controls-all` returns

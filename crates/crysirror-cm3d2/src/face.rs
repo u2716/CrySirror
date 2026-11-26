@@ -40,6 +40,7 @@ pub struct FaceState {
     /// `MabatakiVal`, next blink time (s).
     pub blink: f32,
     pub next_blink: f32,
+    pub blink_disabled: bool,
     /// `boMouthOpen` (drives `boBallGAG`).
     pub mouth_open: bool,
     /// `boLipsync` and its phase accumulators.
@@ -143,7 +144,7 @@ impl FaceState {
                 self.name = std::mem::take(&mut self.name2);
             }
         }
-        if !self.name3.is_empty() {
+        if !self.blink_disabled && !self.name3.is_empty() {
             if let Some(s) = sets.get(&self.name3) {
                 for (k, x) in s {
                     let e = values.entry(k.clone()).or_insert(0.);
@@ -151,10 +152,11 @@ impl FaceState {
                 }
             }
         }
+        if self.blink_disabled { self.blink = 0.; }
         let blink = if self.blink > 0. { (self.blink * self.blink * std::f32::consts::PI).sin() } else { 0. };
         self.blink -= dt * 2.;
         fix_face(&mut values, blink, self.lip_on.then_some(self.lip), self.mouth_open);
-        if !self.anime && self.next_blink < t {
+        if !self.blink_disabled && !self.anime && self.next_blink < t {
             let wait = 0.5 + self.rnd(80) as f32 * 0.1;
             self.next_blink = t + wait;
             self.blink = 1.;

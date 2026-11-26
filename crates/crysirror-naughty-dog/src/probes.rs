@@ -148,19 +148,38 @@ fn evaluate(sh: &[[f32; 3]; 9], n: [f32; 3]) -> [f32; 3] {
 }
 
 /// Engine material of a baked primitive: the base-colour image and the
-/// `baked_vertex_irradiance` effect.
-pub fn baked_material(base_color: Option<usize>) -> crysirror_asset::pbr::PbrMaterial {
+/// `baked_vertex_irradiance` effect, with an upper layer when the material
+/// has one: its image in the emissive slot, and for a height-mask layer the
+/// mask image in the occlusion slot.
+pub fn baked_material(base_color: Option<usize>, layer: Option<&Layer>) -> crysirror_asset::pbr::PbrMaterial {
+    let (slope_layer, mask_layer) = match layer {
+        Some(Layer { mask: None, tint, .. }) => (Some(*tint), None),
+        Some(Layer { mask: Some((_, softness)), tint, .. }) => (None, Some(crysirror_scene::effect::MaskLayer { tint: *tint, softness: *softness })),
+        None => (None, None),
+    };
     crysirror_asset::pbr::PbrMaterial {
         base_color_texture: base_color,
+        emissive_texture: layer.and_then(|l| l.top),
+        occlusion_texture: layer.and_then(|l| l.mask).and_then(|m| m.0),
         metallic_factor: 0.,
         roughness_factor: 1.,
-        effect: Some(crysirror_scene::effect::ShaderEffect::BakedVertexIrradiance { intensity: INTENSITY }),
+        effect: Some(crysirror_scene::effect::ShaderEffect::BakedVertexIrradiance { intensity: INTENSITY, slope_layer, mask_layer }),
         ..Default::default()
     }
 }
 
-/// Scale of the probe irradiance in the renderer (uncalibrated).
-pub const INTENSITY: f32 = 1.;
+/// An upper albedo layer: its image and tint, and for a height-mask blend
+/// the mask image and softness (else the layer follows the slope).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Layer {
+    pub top: Option<usize>,
+    pub tint: [f32; 3],
+    pub mask: Option<(Option<usize>, f32)>,
+}
+
+/// Scale of the probe irradiance in the renderer, calibrated with the
+/// render-settings exposure against the original title screen.
+pub const INTENSITY: f32 = 2.;
 
 /// Per-vertex irradiance (`_AUX`: RGB, 1) of a fragment placed by the
 /// row-major metre matrix `m`. Vertices without

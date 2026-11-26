@@ -1,5 +1,55 @@
 # API change log
 
+## `3832b7ea7ef5e8ae` (2026-11-25) — KiriKiri text selection
+
+`Ui.setTextSelection` adds UTF-16 caret and range editing. Plain fields
+keep their existing editing behavior. Rust callers matching `UiCommand`
+exhaustively must handle `SetTextSelection`. The previous fingerprint
+was `fea5db2c50352d1d`.
+
+## `fea5db2c50352d1d` (2026-11-25) — KiriKiri launcher overrides
+
+The combined reference adds the optional KiriKiri `launcher_overlay`
+configuration to the rendering API at `1dc311dc1a85ca09`. Existing projects
+can omit the field and keep their current launcher and archive handling.
+
+## `1c2e078251b5e7a6` (2026-11-22) · Text field selection
+
+`Ui.setTextSelection(id, start, end)` enables caret editing for an owned
+editable field. The two offsets are UTF-16 code units. End `-1` extends
+the selection to the end, and start `-1` collapses it at the caret.
+`Ui.insertText` replaces that range or inserts at the caret. Existing
+fields keep their original editing behavior until selection is requested.
+The corresponding `UiCommand::SetTextSelection` is appended to the enum.
+
+## `a6235515c431567d` (2026-11-22) · KiriKiri launcher overrides
+
+KiriKiri project configuration gains an optional `launcher_overlay`. Explicit
+launcher selection supplies an ordered set of mounted XP3 archives and the
+accepted protocols from the launcher's manifest. Existing project files omit
+the field. Rust callers can use `detect_source_with_entry` to preserve the
+selected executable. Directory callers continue to use `detect_source`.
+
+## `1dc311dc1a85ca09` (2026-11-25) — textured toon outlines
+
+`ToonShading.outline_texture` adds an optional raw hull colour texture with
+an independent lighting ramp in lookup row 2. Existing serialized materials
+use the default `null` and require no migration. Rust struct literals that
+enumerate every field need `outline_texture: None`. The previous fingerprint
+was `8206decff09b50e6`.
+
+## `8206decff09b50e6` (2026-11-25) — filmic tonemap curve
+
+`Environment.filmic_curve` (`FilmicCurve`) sets the `filmic` tonemap's Hable constants (shoulder, linear strength and angle, toe strength, numerator and denominator), white point and exposure bias in stops; omitted, the published curve with its 2× bias applies. Rust struct literals of `Environment` need `filmic_curve: None`. The previous fingerprint was `7a50ef09e7ce0526`.
+
+## `7a50ef09e7ce0526` (2026-11-25) — height-mask layers
+
+`baked_vertex_irradiance` takes an optional `mask_layer` (`MaskLayer { tint, softness }`): the emissive-slot texture × `tint` covers the base where the vertex mask in `_AUX` w rises above the occlusion-slot texture's green channel, with the base weighted `saturate((mask − (1 + s)·m + 2s) / 2s)`. The occlusion slot then gives no occlusion. Omitted, materials are unchanged; struct literals of `BakedVertexIrradiance` need `mask_layer: None`. The previous fingerprint was `653c879dbcdae8ea`.
+
+## `653c879dbcdae8ea` (2026-11-25) — slope layer blend
+
+`ShaderEffect.slope_layer_blend` mixes the base texture (walls) with the emissive-slot texture × `tint` (upward-facing surfaces) by `saturate(1 − n.y)` of the interpolated world normal. `baked_vertex_irradiance` takes an optional `slope_layer` tint for the same layering; omitted, materials are unchanged. Rust callers with exhaustive `ShaderEffect` matches need the new arm, and struct literals of `BakedVertexIrradiance` need `slope_layer: None`. The previous fingerprint was `9640ededc06f0fce`.
+
 ## `9640ededc06f0fce` (2026-11-24) — filmic tonemap
 
 `Environment.tonemap` accepts `filmic`: Hable's curve as published for Uncharted 2 (GDC 2010), with a fixed 2× exposure bias and white point 11.2. Existing environments keep their tonemap. Rust callers with exhaustive `Tonemap` matches need the new arm. The previous fingerprint was `01a2119f5ee7031e`.

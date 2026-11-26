@@ -21,6 +21,7 @@ pub(super) struct Actors {
     position: [f32; 3],
     rotation: [f32; 3],
     group_offset: [f32; 3],
+    group_rotation: [f32;3],
     last: Option<u64>,
 }
 
@@ -39,6 +40,14 @@ impl Motion {
         for e in &mut effects {
             match e {
                 AdvUi::Motion { man, slot, .. }
+                | AdvUi::RetailPropSet { man, slot, .. }
+                | AdvUi::RetailPropReset { man, slot, .. }
+                | AdvUi::ItemSet { man, slot, .. }
+                | AdvUi::ItemReset { man, slot, .. }
+                | AdvUi::ItemMask { man, slot, .. }
+                | AdvUi::ItemMaskMode { man, slot, .. }
+                | AdvUi::ItemChange { man, slot, .. }
+                | AdvUi::AllProcProp { man, slot }
                 | AdvUi::AutoTwist { man, slot, .. }
                 | AdvUi::MotionStop { man, slot, .. }
                 | AdvUi::BustMove { man, slot, .. }
@@ -56,6 +65,10 @@ impl Motion {
                 AdvUi::Ik { src, .. } if src.1 == 0 => {
                     src.1 = if src.0 { self.man } else { self.maid }.unwrap_or(0);
                 }
+                AdvUi::ManOffset { man, target, .. } => {
+                    if *man == 0 { *man = self.man.unwrap_or(0); }
+                    if target.1 == 0 { target.1 = if target.0 { self.man } else { self.maid }.unwrap_or(0); }
+                }
                 AdvUi::MaidOffset { list, .. } => {
                     for (s, _) in list {
                         if *s == 0 {
@@ -71,6 +84,90 @@ impl Motion {
 }
 
 impl Actors {
+    pub fn photo_blink(&mut self, enabled: bool) -> Result<()> {
+        self.actor(false, 0)
+            .context("missing portrait subject")?
+            .face
+            .blink_disabled = !enabled;
+        Ok(())
+    }
+    pub fn photo_gaze(
+        &mut self,
+        view: Option<&crysirror_core::graphics::WorldPhoto>,
+    ) -> Result<()> {
+        let index = *self
+            .slots
+            .get(&(false, 0))
+            .context("missing portrait subject")?;
+        self.tracking.photo_target =
+            view.map(|v| (index, glam::Vec3::new(-v.eye[0], v.eye[1], v.eye[2])));
+        self.tracking.gaze(index);
+        Ok(())
+    }
+    fn group_frame(&self)->([f32;3],[f32;3]){
+        let parent=crate::chara::unity_euler(self.rotation);
+        let pos=glam::Vec3::from_array(self.position)+parent*glam::Vec3::from_array(self.group_offset);
+        if self.group_rotation==[0.;3]{return (pos.to_array(),self.rotation);}
+        let (y,x,z)=(parent*crate::chara::unity_euler(self.group_rotation)).to_euler(glam::EulerRot::YXZ);
+        (pos.to_array(),[x,y,z].map(f32::to_degrees))
+    }
+    pub fn examination_head(&mut self,files:&GameFiles,op:&Opener,now:u64)->Result<[f32;3]> {
+        let index=*self.slots.get(&(false,0)).context("missing examination subject")?;
+        let actor=&self.characters[index];
+        let (pos,rot)=self.group_frame();let group=crate::chara::unity_euler(rot);
+        let translation=glam::Vec3::from_array(pos)+group*glam::Vec3::from_array(actor.position);
+        let world=glam::Mat4::from_rotation_translation(group*crate::chara::unity_euler(actor.rotation),translation);
+        Ok(self.tracking.bone_position(index,actor,"Bip01 Head",world,files,op,now)?.to_array())
+    }
+    pub fn photo_view(
+        &mut self,
+        kind: photo::Kind,
+        orbit: Orbit,
+        files: &GameFiles,
+        op: &Opener,
+        now: u64,
+    ) -> Result<crysirror_core::graphics::WorldPhoto> {
+        use glam::{Mat4, Quat, Vec3};
+        let index = *self
+            .slots
+            .get(&(false, 0))
+            .context("missing portrait subject")?;
+        let m = &self.characters[index];
+        let (eye, rotation, fov) = if let Some(offset) = kind.head_offset() {
+            let (pos,rot)=self.group_frame();
+            let group = crate::chara::unity_euler(rot);
+            let transform = Mat4::from_rotation_translation(
+                group * crate::chara::unity_euler(m.rotation),
+                Vec3::from_array(pos) + group * Vec3::from_array(m.position),
+            );
+            let (eye, q) = self.tracking.photo_transform(
+                index,
+                m,
+                transform,
+                self.view.body_shapes(index),
+                offset,
+                files,
+                op,
+                now,
+            )?;
+            (eye, q, 30.)
+        } else {
+            let q = Quat::from_rotation_y(orbit.2[0].to_radians())
+                * Quat::from_rotation_x(orbit.2[1].to_radians());
+            (Vec3::from_array(orbit.0) - q * Vec3::Z * orbit.1, q, 35.)
+        };
+        let mirror = |v: Vec3| [-v.x, v.y, v.z];
+        Ok(crysirror_core::graphics::WorldPhoto {
+            size: kind.size(),
+            eye: mirror(eye),
+            target: mirror(eye + rotation * Vec3::Z),
+            up: mirror(rotation * Vec3::Y),
+            fov_y_degrees: fov,
+            near: 0.01,
+            far: 5.,
+            entities: self.view.photo_parts(index),
+        })
+    }
     pub fn show_editor_stock(&mut self)->Result<()> {
         self.actor(false,0).context("missing live SceneEdit actor")?.visible=true;
         Ok(())
@@ -78,12 +175,13 @@ impl Actors {
     pub fn handles(op: &AdvUi) -> bool {
         matches!(
             op,
-            AdvUi::RetailDeactivate(_) | AdvUi::RetailSwap { .. } | AdvUi::RetailStock { .. } | AdvUi::AllProcProp { .. } | AdvUi::RetailNpc { .. }
+            AdvUi::RetailPropSet { .. } | AdvUi::RetailPropReset { .. } | AdvUi::ItemSet { .. } | AdvUi::ItemReset { .. } | AdvUi::ItemChange { .. } | AdvUi::ItemMask { .. } | AdvUi::ItemMaskMode { .. } | AdvUi::RetailDeactivate(_) | AdvUi::RetailSwap { .. } | AdvUi::RetailStock { .. } | AdvUi::AllProcProp { .. } | AdvUi::RetailNpc { .. }
                 | AdvUi::Ik { target: None, .. }
                 | AdvUi::CameraChase { .. }
                 | AdvUi::CameraChaseStop
                 | AdvUi::Eye { .. }
                 | AdvUi::Chinko { .. }
+                | AdvUi::AllOffset { .. }
                 | AdvUi::AllPos { .. }
                 | AdvUi::Offset { .. }
                 | AdvUi::Motion { .. }
@@ -95,13 +193,14 @@ impl Actors {
                 | AdvUi::FaceBlend { .. }
                 | AdvUi::HairPhysics { .. }
                 | AdvUi::MotionLayerStop { .. }
+                | AdvUi::ManOffset { .. }
                 | AdvUi::MaidOffset { .. }
                 | AdvUi::CharaVisible { .. }
                 | AdvUi::CharaVisibleAllOff { .. }
                 | AdvUi::CharaDeactivate { .. }
         )
     }
-    fn activate_stock(&mut self, script:&AdvKag, id:usize, slot:usize, visible:Option<bool>)->Result<()> {
+    pub(super) fn activate_stock(&mut self, script:&AdvKag, id:usize, slot:usize, visible:Option<bool>)->Result<()> {
         ensure!(slot < 18, "invalid stock maid slot {slot}");
         let vm = script.tjs.lock().map_err(|_|anyhow::anyhow!("TJS lock"))?;
         let model = vm.runtime.host().state.retail.stock_models.get(&id).context("missing stock model")?;
@@ -144,7 +243,7 @@ impl Actors {
             self.characters[i].visible = false;
         }
     }
-    fn actor(&mut self, man: bool, slot: usize) -> Option<&mut Maid> {
+    pub(super) fn actor(&mut self, man: bool, slot: usize) -> Option<&mut Maid> {
         self.characters.get_mut(*self.slots.get(&(man, slot))?)
     }
     fn activate(
@@ -303,6 +402,7 @@ impl Actors {
         now: u64,
     ) -> Result<Vec<AdvUi>> {
         let mut kag = AdvKag::motion(script.tjs.clone());
+        kag.retail_tags = true;
         kag.enabled = true;
         kag.load(files, op.storage.as_ref(), file, label)?;
         kag.exec();
@@ -348,6 +448,64 @@ impl Actors {
                 }
             }
             AdvUi::RetailStock {index,slot,visible} => self.activate_stock(script,index,slot,visible)?,
+            AdvUi::RetailPropSet {man, slot, category, value, temporary} => {
+                if let Some(&index) = self.slots.get(&(man,slot)) {
+                    let model = &mut self.characters[index];
+                    model.set_numeric_prop(&category, value, temporary)?;
+                    if !temporary && !man {
+                        let id = self.stock_indices.iter().find_map(|(&id,&actor)| (index==actor).then_some(id))
+                            .or_else(|| self.identities.get(&index).copied());
+                        if let Some(id)=id {
+                            let mut tjs=script.tjs.lock().map_err(|_|anyhow::anyhow!("TJS lock"))?;
+                            let state=&mut tjs.runtime.host_mut().state;
+                            if let Some(body)=state.bodies.get_mut(&id) {
+                                let name = retail::RETAIL_MPN.iter().find(|n| n.eq_ignore_ascii_case(&category)).context("unknown numeric property")?;
+                                if let Some((_,v))=body.props.get_mut(*name) {*v=model.value(name);}
+                            }
+                            if let Some(stock)=state.retail.stock_models.get_mut(&id) {
+                                std::sync::Arc::make_mut(stock).set_value(&category,value)?;
+                            }
+                        }
+                    }
+                }
+            }
+            AdvUi::RetailPropReset {man,slot,category} => {
+                if let Some(model)=self.actor(man,slot) {model.reset_numeric_prop(&category)?;}
+            }
+            AdvUi::ItemSet { man, slot, category, item, temp } => {
+                if let Some(&index) = self.slots.get(&(man, slot)) {
+                    let model = &mut self.characters[index];
+                    model.set_prop_file(&category, &item, temp)?;
+                    if !man && !temp {
+                        let id = self.stock_indices.iter().find_map(|(&id,&actor)| (actor==index).then_some(id))
+                            .or_else(|| self.identities.get(&index).copied());
+                        if let Some(id) = id {
+                            let mut tjs = script.tjs.lock().map_err(|_| anyhow::anyhow!("TJS lock"))?;
+                            let state = &mut tjs.runtime.host_mut().state;
+                            if let Some(body) = state.bodies.get_mut(&id) {
+                                body.menu_files.insert(category.clone(), item.clone());
+                            }
+                            if let Some(stock) = state.retail.stock_models.get_mut(&id) {
+                                std::sync::Arc::make_mut(stock).set_prop_file(&category, &item, false)?;
+                            }
+                        }
+                    }
+                }
+            }
+            AdvUi::ItemReset {man,slot,props} => {
+                if let Some(model)=self.actor(man,slot) {
+                    for name in props { model.reset_prop(&name)?; }
+                }
+            }
+            AdvUi::ItemChange {man,slot,category,name} => {
+                if let Some(model)=self.actor(man,slot) { model.item_change_temp(&category,&name)?; }
+            }
+            AdvUi::ItemMask {man,slot,body_slot,visible} => {
+                if let Some(model)=self.actor(man,slot) {model.set_mask(&body_slot,visible)?;}
+            }
+            AdvUi::ItemMaskMode {man,slot,mode} => {
+                if let Some(model)=self.actor(man,slot) {model.set_mask_mode(&mode)?;}
+            }
             AdvUi::AllProcProp {man,slot} => self.process_properties(script,files,op,man,slot)?,
 
             AdvUi::RetailNpc {
@@ -401,6 +559,10 @@ impl Actors {
                         *i = None;
                     }
                 }
+            }
+            AdvUi::AllOffset {position,rotation}=>{
+                if let Some(p)=position{self.group_offset=p;}
+                if let Some(r)=rotation{self.group_rotation=r;}
             }
             AdvUi::AllPos { position, rotation } => {
                 if let Some(p) = position {
@@ -520,6 +682,13 @@ impl Actors {
                     }
                 }
             }
+            AdvUi::ManOffset { man, target, split, per, extra_offsets } => {
+                if let Some(&index) = self.slots.get(&(true, man)) {
+                    ensure!(!extra_offsets, "unsupported retail supplemental bone offsets");
+                    let target = *self.slots.get(&target).context("missing character offset reference")?;
+                    self.characters[index].position = crate::adapter::maid_offset(&self.characters[target], split, &per).0;
+                }
+            }
             AdvUi::MaidOffset { list, split, multi } => {
                 let mut max_height = 0f32;
                 for (s, p) in list {
@@ -545,6 +714,7 @@ impl Actors {
         op: &Opener,
         now: u64,
         camera: &mut Orbit,
+        camera_offset: f32,
     ) -> Result<()> {
         if self.characters.is_empty() {
             return Ok(());
@@ -555,24 +725,26 @@ impl Actors {
             self.view.shape_rules = Some(crate::bone_shape::Rules::load(&assembly)?);
         }
         let dt = now.saturating_sub(self.last.replace(now).unwrap_or(now)) as f32 / 1000.;
-        let group_pos = std::array::from_fn(|i| self.position[i] + self.group_offset[i]);
+        let (group_pos,group_rot)=self.group_frame();
         if self.tracking.update(
             &mut self.characters,
             &self.slots,
             glam::Vec3::from_array(group_pos),
-            crate::chara::unity_euler(self.rotation),
+            crate::chara::unity_euler(group_rot),
             camera,
             files,
             op,
             now,
             dt,
         )? {
-            let mut command = crate::bg::orbit_camera(camera.0, camera.2, camera.1, 35.);
+            let mut command = crate::bg::orbit_camera_offset(camera.0, camera.2, camera.1, 35., camera_offset);
             command["op"] = json!("set_camera");
             host.submit_engine(client, 1, &serde_json::to_vec(&json!({"world":[command]}))?)?;
         }
         for m in self.characters.iter_mut().filter(|m| m.visible) {
-            m.morphs = m.face.update(dt, now as f32 / 1000., None, &m.blend_sets);
+            if !m.face.blink_disabled || !m.face.name2.is_empty() {
+                m.morphs = m.face.update(dt, now as f32 / 1000., None, &m.blend_sets);
+            }
         }
         let mut cmds = self
             .despawn
@@ -581,8 +753,8 @@ impl Actors {
             .collect::<Vec<_>>();
         cmds.extend(self.view.sync(
             &mut self.characters,
-            std::array::from_fn(|i| self.position[i] + self.group_offset[i]),
-            self.rotation,
+            group_pos,
+            group_rot,
             files,
             op.storage.as_ref(),
             now,
@@ -612,19 +784,26 @@ impl Actors {
     pub fn reset_for_day(&mut self, state: &mut crate::tjs::TjsState) {
         self.slots.retain(|&(man, slot), _| man || slot == 0);
         for slot in state.active_maids.iter_mut().skip(1) { *slot = None; }
-        self.position = [0.; 3];
-        self.rotation = [0.; 3];
-        self.group_offset = [0.; 3];
+        self.reset_positions();
         self.tracking = Default::default();
         for actor in &mut self.characters {
             actor.visible = false;
+            actor.tracking_rotations.clear();
+        }
+        self.motions.clear();
+    }
+    /// CharacterMgr.ResetCharaPosAll preserves assignments and ongoing motions.
+    pub(super) fn reset_positions(&mut self) {
+        self.position = [0.; 3];
+        self.rotation = [0.; 3];
+        self.group_offset = [0.; 3];
+        self.group_rotation = [0.;3];
+        for actor in &mut self.characters {
             actor.position = [0.; 3];
             actor.rotation = [0.; 3];
             actor.offset_position = [0.; 3];
             actor.hit_height = 0.;
-            actor.tracking_rotations.clear();
         }
-        self.motions.clear();
     }
     pub fn leave(&mut self, host: &mut dyn HostServices, client: ClientId) -> Result<()> {
         self.tracking.stop();

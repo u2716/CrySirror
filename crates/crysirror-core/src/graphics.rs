@@ -1,6 +1,19 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Backend-independent capability selection; no device pointers or SDK types.
+use alloc::vec::Vec;
 use crate::{Error, Result};
+/// A separate perspective camera photographing a client's selected World entities.
+#[derive(Clone, Debug)]
+pub struct WorldPhoto {
+    pub size: [u32; 2],
+    pub eye: [f32; 3],
+    pub target: [f32; 3],
+    pub up: [f32; 3],
+    pub fov_y_degrees: f32,
+    pub near: f32,
+    pub far: f32,
+    pub entities: Vec<u32>,
+}
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RenderingPath {
     #[default]

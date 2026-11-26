@@ -51,6 +51,8 @@ pub struct SpawnerRecord {
     pub position: [f32; 3],
     pub rotation: [f32; 4],
     pub properties: Vec<(u32, crate::ss::Property)>,
+    /// The parent spawner (+0x40) whose frame placed this one.
+    pub parent: Option<String>,
 }
 
 fn text_at(p: &mesh::Loaded, at: usize) -> String {
@@ -123,6 +125,7 @@ pub fn spawner_records(p: &mesh::Loaded, payload: usize) -> Result<Vec<SpawnerRe
             position,
             rotation,
             properties,
+            parent: p.ptr(s + 0x40).ok().filter(|a| *a != s).and_then(|a| p.ptr(a + 0x20).ok()).map(|a| text_at(p, a)),
         });
     }
     Ok(out)
@@ -327,6 +330,11 @@ fn texture_role(name: &str) -> u8 {
     }
 }
 
+/// Albedo of the snow the `cliffwall-snow` fragment programs compute:
+/// about 0.75 in the programs' gamma-space arithmetic (0.5 plus three
+/// saturated terms), 0.55 linear (approximated).
+const COMPUTED_SNOW: f32 = 0.55;
+
 /// [`document`] with the level's baked probes: meshes placed once get
 /// per-vertex irradiance in `_AUX` and the `baked_vertex_irradiance` effect.
 pub fn document_lit(name: &str, meshes: &[Mesh], source: &dyn AssetReader, directory: &Directory, max_texture: u32, probes: Option<&crate::probes::ProbeField>, rig: Option<&Rig>) -> Result<Document> {
@@ -361,30 +369,116 @@ pub fn document_lit(name: &str, meshes: &[Mesh], source: &dyn AssetReader, direc
             };
             // A sampler named as a colour map wins; otherwise the first
             // sampler that is neither a non-colour map nor a placeholder.
+            // Pass 0 of some snow materials binds no colour map; their
+            // single-texture pass (5) holds it.
             let role = |id: u32| textures.get(&id).map_or(0, |d: &VramDesc| texture_role(&d.name));
-            let chosen = group.material.samplers.iter().copied().find(|id| role(*id) == 2 && !tiny(*id)).or_else(|| group.material.base_color_with(|id| role(id) == 0 || tiny(id)));
-            let image = match chosen.and_then(|id| textures.get(&id)) {
+            let colour = |samplers: &[u32]| samplers.iter().copied().find(|id| role(*id) == 2 && !tiny(*id));
+            let layers = group.material.layers;
+            let sampler = |i: u8| group.material.samplers.get(usize::from(i)).copied().filter(|id| !tiny(*id));
+            let chosen = match layers {
+                Some(s) => sampler(s.side),
+                None => colour(&group.material.samplers).or_else(|| group.material.base_color_with(|id| role(id) == 0 || tiny(id))),
+            }
+            .or_else(|| group.material.passes.iter().skip(1).find_map(|p| colour(p)));
+            let mut image_of = |id: Option<u32>| -> Result<Option<usize>> {
+                let Some(desc) = id.and_then(|id| textures.get(&id)) else { return Ok(None) };
+                if let Some(&i) = images.get(&desc.id) {
+                    return Ok(Some(i));
+                }
+                let mut surface = desc.decode(source, directory.texture_base)?;
+                while surface.width > max_texture.max(1) || surface.height > max_texture.max(1) {
+                    surface = halve(&surface);
+                }
+                doc.images.push((crysirror_image::encode_png(&surface)?, "image/png"));
+                images.insert(desc.id, doc.images.len() - 1);
+                Ok(Some(doc.images.len() - 1))
+            };
+            let image = image_of(chosen)?;
+            // The upper layer: a sampler, or the light grey the
+            // `cliffwall-snow` programs compute (0.5 plus lighting terms;
+            // approximated, SATD-nd-retail-runtime); a height-mask blend
+            // also binds its mask.
+            let layer = match layers {
+                Some(l) => {
+                    let (top, tint) = match l.top {
+                        crate::rsx::Top::Sampler(i) => (image_of(sampler(i))?, [1.; 3]),
+                        // `g_cDiffuseIn`, the computed snow's colour (gamma
+                        // space), when the material sets it.
+                        crate::rsx::Top::Computed => (None, group.material.parameter("g_cDiffuseIn").map_or([COMPUTED_SNOW; 3], |c| [c[0], c[1], c[2]].map(|v| v.clamp(0., 1.).powf(2.2)))),
+                    };
+                    let mask = match l.weight {
+                        // The material's `g_fBlendSoftness` replaces the
+                        // program's inline default.
+                        crate::rsx::Weight::Mask { sampler: m, softness } => Some((image_of(group.material.samplers.get(usize::from(m)).copied())?, group.material.parameter("g_fBlendSoftness_fBlendOffset").map_or(softness, |v| v[0].max(1e-3)))),
+                        crate::rsx::Weight::Slope => None,
+                    };
+                    Some(crate::probes::Layer { top, tint, mask })
+                }
                 None => None,
-                Some(desc) => match images.get(&desc.id) {
-                    Some(&i) => Some(i),
-                    None => {
-                        let mut surface = desc.decode(source, directory.texture_base)?;
-                        while surface.width > max_texture.max(1) || surface.height > max_texture.max(1) {
-                            surface = halve(&surface);
-                        }
-                        doc.images.push((crysirror_image::encode_png(&surface)?, "image/png"));
-                        images.insert(desc.id, doc.images.len() - 1);
-                        Some(doc.images.len() - 1)
-                    }
-                },
             };
             // Baked lighting applies to meshes placed once (per-vertex data
             // cannot differ between instances of one glTF mesh).
             let bake = probes.filter(|p| !p.is_empty() && mesh.instances.len() == 1);
             let mut material = Material { name: group.material.name.clone(), base_color_texture: image, ..Default::default() };
-            if bake.is_some() {
-                material.engine = Some(crate::probes::baked_material(image));
+            let mut engine = if bake.is_some() {
+                crate::probes::baked_material(image, layer.as_ref())
+            } else if let Some(l) = layer {
+                // Without per-vertex data a height-mask blend falls back to
+                // the slope layering.
+                crysirror_asset::pbr::PbrMaterial {
+                    base_color_texture: image,
+                    emissive_texture: l.top,
+                    effect: Some(crysirror_scene::effect::ShaderEffect::SlopeLayerBlend { tint: l.tint }),
+                    ..Default::default()
+                }
+            } else {
+                crysirror_asset::pbr::PbrMaterial { base_color_texture: image, ..Default::default() }
+            };
+            // The native passes shade diffuse light (pre-pass and probes)
+            // and add specular only through a `…-spec-mask` map: without
+            // one the surface reflects nothing. The first `…-normal` map of
+            // the passes perturbs the normal (DXT5 maps hold X in alpha and
+            // Y in green).
+            // `default-…` maps are the shared flat placeholders. Water
+            // binds an environment reflection map (`…-env-reflection`) that
+            // its program adds at 0.6 along the reflection vector: here a
+            // smooth specular reflects the environment instead.
+            let named = |role: &str| {
+                group.material.passes.iter().flatten().copied().find(|id| {
+                    textures.get(id).is_some_and(|d: &VramDesc| {
+                        let file = d.name.rsplit('/').find(|p| p.contains('.')).unwrap_or(&d.name).to_ascii_lowercase();
+                        file.contains(role) && !file.starts_with("default-")
+                    })
+                })
+            };
+            let normal = named("-normal");
+            let spec = named("spec");
+            let reflective = named("env-reflection").is_some();
+            // `g_fSpecularScale_fSpecularExponentMax_fMetalness` scales the
+            // spec-mask highlight; the Blinn exponent maps to roughness
+            // `√(2 / (n + 2))` (kept above 0.25: the mask modulates it).
+            let specular = group.material.parameter("g_fSpecularScale_fSpecularExponentMax_fMetalness");
+            engine.metallic_factor = specular.map_or(0., |v| v[2].clamp(0., 1.));
+            engine.roughness_factor = if reflective {
+                0.12
+            } else {
+                match (spec, specular) {
+                    (Some(_), Some(v)) => (2. / (v[1].max(1.) + 2.)).sqrt().max(0.25),
+                    (Some(_), None) => 0.55,
+                    _ => 1.,
+                }
+            };
+            engine.specular_factor = match (spec.is_some() || reflective, specular) {
+                (true, Some(v)) => v[0].clamp(0., 1.),
+                (true, None) => 1.,
+                _ => 0.,
+            };
+            engine.specular_texture = image_of(spec)?;
+            if let Some(id) = normal {
+                engine.normal_encoding = if textures.get(&id).is_some_and(|d| d.format == crate::texture::Format::Dxt5) { crysirror_scene::material::NormalEncoding::Ag } else { crysirror_scene::material::NormalEncoding::Rgb };
+                engine.normal_texture = image_of(Some(id))?;
             }
+            material.engine = Some(engine);
             doc.materials.push(material);
             let material = doc.materials.len() - 1;
             for f in &mesh.fragments[group.fragments.clone()] {
@@ -396,10 +490,17 @@ pub fn document_lit(name: &str, meshes: &[Mesh], source: &dyn AssetReader, direc
                     Some(r) if f.skin.len() == f.positions.len() => f.skin.iter().map(|v| influences(v, r.skeleton.names.len())).unzip(),
                     _ => (Vec::new(), Vec::new()),
                 };
-                let aux = match bake {
+                let mut aux = match bake {
                     Some(field) => crate::probes::bake(field, &placement(mesh, 0), &f.positions, &normals, &f.triangles),
                     None => Vec::new(),
                 };
+                // A height-mask blend reads the vertex mask (attribute
+                // 0x15 x) in `_AUX` w.
+                if group.material.layers.is_some_and(|l| matches!(l.weight, crate::rsx::Weight::Mask { .. })) && f.masks.len() == aux.len() {
+                    for (a, m) in aux.iter_mut().zip(&f.masks) {
+                        a[3] = m[0];
+                    }
+                }
                 primitives.push(Primitive {
                     positions: f.positions.clone(),
                     normals,
@@ -439,6 +540,14 @@ pub fn document_lit(name: &str, meshes: &[Mesh], source: &dyn AssetReader, direc
         add_rig(&mut doc, rig, &skinned_nodes);
     }
     Ok(doc)
+}
+
+/// An animation library: the rig's joint nodes and its clips, no meshes.
+/// Entities bind its clips by joint name (`AnimationLayer::source`).
+pub fn animation_library(rig: &Rig) -> Document {
+    let mut doc = Document::default();
+    add_rig(&mut doc, rig, &[]);
+    doc
 }
 
 /// Joint nodes in their rest pose, a skin for the skinned mesh nodes and

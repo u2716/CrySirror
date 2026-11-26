@@ -19,24 +19,21 @@ fn main() -> Result<()> {
         let mut seen = BTreeMap::new();
         for m in scene::package_meshes(&source, &directory, 256 << 20)? {
             for g in &m.groups {
-                let row: Vec<String> = g
-                    .material
-                    .samplers
-                    .iter()
-                    .map(|id| {
-                        means
-                            .entry(*id)
-                            .or_insert_with(|| match textures.get(id).map(|d| d.decode(&source, directory.texture_base)) {
-                                Some(Ok(img)) => {
-                                    let n = (img.rgba.len() / 4).max(1) as f64;
-                                    let mean: Vec<u32> = (0..4).map(|c| (img.rgba.iter().skip(c).step_by(4).map(|v| f64::from(*v)).sum::<f64>() / n) as u32).collect();
-                                    format!("{id:08x}{mean:?}")
-                                }
-                                _ => format!("{id:08x}[?]"),
-                            })
-                            .clone()
-                    })
-                    .collect();
+                let mut describe = |id: &u32| -> String {
+                    means
+                        .entry(*id)
+                        .or_insert_with(|| match textures.get(id).map(|d| d.decode(&source, directory.texture_base)) {
+                            Some(Ok(img)) => {
+                                let n = (img.rgba.len() / 4).max(1) as f64;
+                                let mean: Vec<u32> = (0..4).map(|c| (img.rgba.iter().skip(c).step_by(4).map(|v| f64::from(*v)).sum::<f64>() / n) as u32).collect();
+                                format!("{id:08x}{mean:?}")
+                            }
+                            _ => format!("{id:08x}[?]"),
+                        })
+                        .clone()
+                };
+                let row: Vec<String> = g.material.passes.iter().enumerate().map(|(i, pass)| format!("p{i}: {}", pass.iter().map(&mut describe).collect::<Vec<_>>().join(" "))).collect();
+                let row: Vec<String> = row.into_iter().chain(g.material.layers.map(|s| format!("layers {s:?}"))).collect();
                 *seen.entry((g.material.name.clone(), row.join(" "))).or_insert(0) += 1;
             }
         }

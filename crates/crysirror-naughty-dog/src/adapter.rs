@@ -178,6 +178,22 @@ struct Player {
     view_yaw: f32,
     view_pitch: f32,
     controls: bool,
+    /// Native animation state machine and blend-tree controller.
+    anim: Option<crate::player::Controller>,
+    /// Highest height since leaving the ground.
+    air_top: Option<f32>,
+    /// Current follow-camera distance (eases back out after obstruction).
+    view_distance: f32,
+    /// The body the player stands on and its transform then: the player
+    /// rides its motion (the hanging car).
+    platform: Option<(u32, glam::Mat4)>,
+    /// The edge held while hanging or climbing.
+    grip: Option<Grip>,
+    /// A jump between edges in progress: the root it started from, the
+    /// target grip and the seconds elapsed.
+    leap: Option<(glam::Vec3, Grip, f32)>,
+    /// Seconds before an airborne player may grab again (after a drop).
+    regrab: f32,
 }
 
 /// Engine side of the script natives: spawner entities, prints and fades.
@@ -200,9 +216,101 @@ struct Stage {
     camera: Option<u32>,
     /// Left stick from the movement keys.
     stick: [f32; 2],
+    /// Script animations by object (spawner name or `player`).
+    animations: HashMap<u32, ScriptAnimation>,
+    /// Where the player stands, for `player` locators.
+    player_locator: Option<([f32; 3], [f32; 4])>,
+    /// Props without an animation controller hold the last frame of their
+    /// finished script animation: asset, clip and time.
+    held: HashMap<u32, (String, String, f32)>,
+    /// Camera animations by name: clip, start, blend-in seconds and the
+    /// time a disable began blending it out.
+    camera_animations: Vec<CameraAnimation>,
+    /// Current world transforms of spawned objects moved away from their
+    /// spawner (script root motion, or a moved parent spawner).
+    poses: HashMap<u32, glam::Mat4>,
+    /// The body (entity) the player stands on or hangs from.
+    player_support: Option<u32>,
+    /// The eye of the camera last presented (world).
+    camera_eye: Option<[f32; 3]>,
+    /// Trigger regions of the loaded level packages, with their enter
+    /// and exit lambdas' script addresses.
+    regions: Vec<(crate::trigger::Region, Option<u32>, Option<u32>)>,
+    /// The regions the player is in (indices into `regions`).
+    player_regions: HashSet<usize>,
 }
 
+struct CameraAnimation {
+    name: u32,
+    clip: u32,
+    start: f64,
+    blend: f32,
+    stop: Option<f64>,
+}
+
+/// A camera clip's camera channel: frames per second and per frame the
+/// optional field of view (degrees), rotation and translation.
+struct CameraClip {
+    fps: f32,
+    samples: Vec<(Option<f32>, glam::Quat, glam::Vec3)>,
+}
+
+/// The camera channel of camera clips (`camera-train-wreck.pak`): per
+/// frame `[fov°, ?, ?, quat, translation]` (components 7) or
+/// `[quat, translation]` (components 6). No string with this `StringId`
+/// is stored in the EBOOT or the packages.
+const CAMERA_CHANNEL: u32 = 0x306c_3455;
+
+/// A clip a script plays on an object (`animate`). The clip is found and
+/// decoded by the adapter after the script tick; until then it reports
+/// phase 0.
+struct ScriptAnimation {
+    clip: u32,
+    options: crate::ss::Animate,
+    start: f64,
+    /// Seconds, once the clip is loaded.
+    duration: Option<f32>,
+    /// Library asset and clip name, once loaded.
+    source: Option<(String, String)>,
+    /// Clip-space root motion (`align` per frame at `fps`) and the world
+    /// transform of clip space, when the clip has an `align` channel.
+    root: Option<(Vec<(glam::Vec3, glam::Quat)>, f32, glam::Mat4)>,
+    /// The clip could not be found or decoded: the animation ends at once.
+    failed: bool,
+}
+
+/// Default blend time of script animations without a blend option.
+const SCRIPT_BLEND: f32 = 0.2;
+
 impl Stage {
+    /// Whether trigger region `r` holds `object`: the player only in
+    /// `player` regions; a parented region in its parent's live frame and
+    /// never while the parent is not spawned.
+    fn holds(&self, r: &crate::trigger::Region, object: u32) -> bool {
+        let Some((at, _)) = World::locator(self, object) else { return false };
+        let player = sid("player");
+        if object == player && !r.categories.is_empty() && !r.categories.contains(&player) {
+            return false;
+        }
+        self.holds_point(r, at)
+    }
+
+    /// Whether region `r` holds world point `at` (its category unchecked).
+    fn holds_point(&self, r: &crate::trigger::Region, at: [f32; 3]) -> bool {
+        let at = glam::Vec3::from_array(at);
+        let local = match r.parent {
+            Some(parent) => {
+                if self.entities.contains_key(&parent) && !self.visible.contains(&parent) {
+                    return false;
+                }
+                let Some((t, q)) = World::locator(self, parent) else { return false };
+                glam::Quat::from_array(q).normalize().inverse() * (at - glam::Vec3::from_array(t))
+            }
+            None => at,
+        };
+        r.contains_local(local)
+    }
+
     fn set_visible(&mut self, name: u32, visible: bool) -> bool {
         let Some(ids) = self.entities.get(&name) else { return false };
         for id in ids {
@@ -239,6 +347,13 @@ impl World for Stage {
         self.set_visible(name, false)
     }
     fn locator(&self, name: u32) -> Option<([f32; 3], [f32; 4])> {
+        if name == sid("player") {
+            return self.player_locator;
+        }
+        if let Some(m) = self.poses.get(&name) {
+            let (_, r, t) = m.to_scale_rotation_translation();
+            return Some((t.to_array(), r.to_array()));
+        }
         self.spawners.get(&name).map(|s| (s.position, s.rotation))
     }
     fn property(&self, spawner: u32, prop: u32) -> Option<Property> {
@@ -256,12 +371,63 @@ impl World for Stage {
     }
     fn camera(&mut self, name: u32, _seconds: f32) {
         self.camera = Some(name);
+        self.log(format!("camera {name:08x}{}", if self.spawners.contains_key(&name) { "" } else { " (no spawner)" }));
+    }
+    fn camera_disable(&mut self, name: Option<u32>) {
+        self.log(format!("camera release {:?}", name.map(|n| format!("{n:08x}"))));
+        if name.is_none() || name == self.camera {
+            self.camera = None;
+        }
+    }
+    fn set_visible(&mut self, object: u32, visible: bool) -> bool {
+        Stage::set_visible(self, object, visible)
+    }
+    fn in_region(&self, object: u32, region: u32) -> bool {
+        self.regions.iter().any(|(r, _, _)| r.id == region && self.holds(r, object))
+    }
+    fn object_on_object(&self, object: u32, support: u32) -> bool {
+        object == sid("player") && self.player_support.is_some_and(|body| self.entities.get(&support).is_some_and(|ids| ids.contains(&body)))
+    }
+    fn camera_animation(&mut self, name: u32, clip: u32, seconds: f32) {
+        if let Some(c) = self.camera_animations.iter_mut().find(|c| c.name == name) {
+            c.stop = None;
+        } else if self.camera_animations.len() < 10 {
+            self.log(format!("camera animation {name:08x}"));
+            self.camera_animations.push(CameraAnimation { name, clip, start: self.now, blend: seconds.max(0.), stop: None });
+        }
+    }
+    fn camera_animation_disable(&mut self, name: Option<u32>) {
+        let now = self.now;
+        for c in self.camera_animations.iter_mut().filter(|c| name.is_none_or(|n| n == c.name)) {
+            c.stop.get_or_insert(now);
+        }
     }
     fn player_controls(&mut self, enabled: bool) {
         self.controls = Some(enabled);
     }
     fn sticks(&self, pad: u32) -> [f32; 4] {
         if pad == 0 { [self.stick[0], self.stick[1], 0., 0.] } else { [0.; 4] }
+    }
+    fn animate(&mut self, object: u32, clip: u32, options: &crate::ss::Animate) -> bool {
+        if object != sid("player") && !self.entities.contains_key(&object) {
+            return false;
+        }
+        self.held.remove(&object);
+        self.animations.insert(object, ScriptAnimation { clip, options: options.clone(), start: self.now, duration: None, source: None, root: None, failed: false });
+        true
+    }
+    fn animation_phase(&self, object: u32) -> Option<f32> {
+        let a = self.animations.get(&object)?;
+        if a.failed {
+            return None;
+        }
+        match a.duration {
+            None => Some(0.),
+            Some(d) => {
+                let t = (self.now - a.start) as f32;
+                (t < d).then(|| if d > 0. { t / d } else { 1. })
+            }
+        }
     }
 }
 
@@ -270,6 +436,10 @@ struct TaskPlan {
     name: String,
     level: String,
     continue_player: Option<String>,
+    /// Allies' continue spawners (`continue-flynn-steam-vault-1`) and the
+    /// camera's.
+    continue_allies: Vec<String>,
+    continue_camera: Option<String>,
     /// Level names whose packages load (subnode level, caches, world,
     /// then the displayed levels of the world's load regions).
     levels: Vec<String>,
@@ -329,6 +499,8 @@ struct Session {
     catalog: Option<Vec<u8>>,
     /// Developer free camera in task mode (F1), detached from the player.
     free: bool,
+    /// Camera clips by name (`None`: not found in the level's packages).
+    camera_clips: HashMap<u32, Option<CameraClip>>,
     /// The level's sky (`sky-…` package) as an uploaded environment image.
     sky: Option<VfsPath>,
     /// Front-end pages of `menu.bin` and the title logo (`menu.pak`
@@ -339,11 +511,78 @@ struct Session {
     /// player uses), loaded with the first skinned model that has no
     /// skeleton of its own; `Some(None)` when unavailable.
     player_rig: Option<Option<(crate::skeleton::Skeleton, Vec<crate::anim::Clip>)>>,
+    /// `anim-player.bin` states and blend trees.
+    anim_table: Option<crate::anim_state::StateTable>,
+    anim_graph: Option<crate::anim_tree::Graph>,
+    /// The player rig's clips by name `StringId`.
+    player_clips: HashMap<u32, crate::player::ClipInfo>,
+    /// `spawn-character.bin` package lists, and the NPC rigs loaded from
+    /// them by skeleton package.
+    characters: Vec<crate::characters::Character>,
+    npc_rigs: HashMap<String, Option<(crate::skeleton::Skeleton, Vec<crate::anim::Clip>)>>,
+    /// `anim-npc.bin` states and trees, `anim-sets.bin`, the NPCs they
+    /// drive and each NPC rig's clips by name `StringId`.
+    npc_anim: Option<(crate::anim_tree::Graph, crate::anim_state::StateTable)>,
+    anim_sets: crate::anim_sets::AnimSets,
+    npcs: Vec<Npc>,
+    npc_clips: HashMap<String, HashMap<u32, crate::player::ClipInfo>>,
+    /// Each NPC rig's packages (skeleton base, animation packages).
+    npc_packages: HashMap<String, Vec<String>>,
+    /// The rig each spawned entity is skinned to.
+    entity_rigs: HashMap<u32, RigRef>,
+    /// Skeletons of skinned art groups that carry their own.
+    own_rigs: HashMap<String, crate::skeleton::Skeleton>,
+    /// Animation packages read for script animations.
+    anim_packages: HashMap<String, Arc<crate::mesh::Loaded>>,
+    /// Skeletons by `JOINT_HIERARCHY` hash, for clips authored on another
+    /// rig than the entity's (`None`: package without one).
+    skeletons: HashMap<String, Option<crate::skeleton::Skeleton>>,
+    /// Each rig's controller clips as one animation library, uploaded once
+    /// per session (models carry only joints and skins), by `RigRef` key.
+    rig_libraries: HashMap<String, String>,
+    /// Uploaded single-clip libraries by (rig, clip).
+    libraries: HashMap<(String, u32), Option<LibraryClip>>,
 }
 
-/// Player clips decoded from `proto.pak` (the standing pose is a constant
-/// one-frame clip).
-const PLAYER_CLIPS: &[&str] = &["idle"];
+/// A clip uploaded as a single-clip animation library.
+#[derive(Clone, Debug)]
+struct LibraryClip {
+    asset: String,
+    name: String,
+    seconds: f32,
+    fps: f32,
+    align: Vec<(glam::Vec3, glam::Quat)>,
+    ap_reference: Vec<(glam::Vec3, glam::Quat)>,
+}
+
+/// The skeleton an entity is skinned to.
+#[derive(Clone, Debug, PartialEq)]
+enum RigRef {
+    Player,
+    /// An NPC rig key (`flynn-base:[…]`).
+    Npc(String),
+    /// An art group's own `JOINT_HIERARCHY`.
+    Own(String),
+}
+
+/// An NPC entity presented by the `anim-npc` state machine.
+struct Npc {
+    entity: u32,
+    animator: crate::player::Animator,
+    sets: Vec<u32>,
+    rig: String,
+}
+
+/// NPC states presented without AI: the ambient idle (the state the
+/// demeanour and move natives would leave is not modelled).
+const NPC_STATES: &[&str] = &["s_ambient-idle"];
+
+/// Packages holding the player rig's clips: `proto.pak` and the hurt
+/// movement types of `anim-proto-hurt.pak`.
+/// Follow-camera distance behind the player's head, metres.
+const FOLLOW_DISTANCE: f32 = 4.;
+
+const PLAYER_CLIP_PACKAGES: &[&str] = &["proto.pak", "anim-proto-hurt.pak"];
 
 /// The world environment: the level's directional light and ambient term
 /// when known. Native intensities (0.9–19 on the installed levels) are
@@ -519,10 +758,27 @@ impl NaughtyDogVm {
             ui: None,
             catalog: None,
             free: false,
+            camera_clips: HashMap::new(),
             sky: None,
             menu_pages: Vec::new(),
             logo: None,
             player_rig: None,
+            anim_table: None,
+            anim_graph: None,
+            player_clips: HashMap::new(),
+            characters: Vec::new(),
+            npc_rigs: HashMap::new(),
+            npc_anim: None,
+            anim_sets: Default::default(),
+            npcs: Vec::new(),
+            npc_clips: HashMap::new(),
+            npc_packages: HashMap::new(),
+            entity_rigs: HashMap::new(),
+            own_rigs: HashMap::new(),
+            anim_packages: HashMap::new(),
+            skeletons: HashMap::new(),
+            rig_libraries: HashMap::new(),
+            libraries: HashMap::new(),
         };
         if self.config.viewer() {
             let level = self.config.level.as_deref().unwrap_or("menu-temple");
@@ -535,6 +791,28 @@ impl NaughtyDogVm {
             let (_, dc) = registry.open(open("dc1.psarc")?, Some("sony/psarc"), &context)?;
             let modules = ArchiveMount::new(dc, context)?;
             let game = Game::boot(&modules, &mut session.stage)?;
+            session.characters = crate::game::ModuleSource::read(&modules, "spawn-character").and_then(|b| crate::characters::parse(&b)).unwrap_or_default();
+            match crate::game::ModuleSource::read(&modules, "anim-npc").and_then(|b| {
+                let graph = crate::anim_tree::Graph::load("anim-npc", &b)?;
+                Ok((crate::anim_state::parse_module(&graph.dc, graph.module)?, graph))
+            }) {
+                Ok((table, graph)) => session.npc_anim = Some((graph, table)),
+                Err(e) => session.stage.log(format!("anim-npc.bin: {e:#}")),
+            }
+            session.anim_sets = crate::game::ModuleSource::read(&modules, "anim-sets").and_then(|b| crate::anim_sets::AnimSets::parse(&b)).unwrap_or_else(|e| {
+                session.stage.log(format!("anim-sets.bin: {e:#}"));
+                Default::default()
+            });
+            match crate::game::ModuleSource::read(&modules, "anim-player").and_then(|b| {
+                let graph = crate::anim_tree::Graph::new(&b)?;
+                Ok((crate::anim_state::parse_loaded(&graph.dc)?, graph))
+            }) {
+                Ok((table, graph)) => {
+                    session.anim_table = Some(table);
+                    session.anim_graph = Some(graph);
+                }
+                Err(e) => session.stage.log(format!("anim-player.bin: {e:#}")),
+            }
             session.menu_pages = crate::game::ModuleSource::read(&modules, "menu").and_then(|b| crate::menu::pages(&b)).unwrap_or_else(|e| {
                 session.stage.log(format!("menu.bin: {e:#}"));
                 Vec::new()
@@ -566,7 +844,7 @@ impl NaughtyDogVm {
         let s = &n.subnodes[sub];
         // A subnode without a level (most movies) loads nothing.
         if s.level.is_empty() {
-            return Ok(TaskPlan { name, level: String::new(), continue_player: None, levels: Vec::new(), regions: Vec::new(), menu: false });
+            return Ok(TaskPlan { name, level: String::new(), continue_player: None, continue_allies: Vec::new(), continue_camera: None, levels: Vec::new(), regions: Vec::new(), menu: false });
         }
         // The EBOOT's main-menu manager (`sub_98478`) loads `menu-temple`
         // and views it through a fixed camera (`sub_98634`,
@@ -574,7 +852,7 @@ impl NaughtyDogVm {
         // the localized logo board drawn as 2D art. `menu-temple`'s `cache`
         // list preloads the first story level and is not displayed.
         if matches!(s.manager, crate::task::Manager::MainMenu) {
-            return Ok(TaskPlan { name, level: MENU_LEVEL.into(), continue_player: None, levels: vec![MENU_LEVEL.into()], regions: Vec::new(), menu: true });
+            return Ok(TaskPlan { name, level: MENU_LEVEL.into(), continue_player: None, continue_allies: Vec::new(), continue_camera: None, levels: vec![MENU_LEVEL.into()], regions: Vec::new(), menu: true });
         }
         let mut levels = vec![s.level.clone()];
         for c in session.all_levels.get(&s.level).map(|l| l.caches.as_slice()).unwrap_or_default() {
@@ -585,7 +863,7 @@ impl NaughtyDogVm {
         if !n.world.is_empty() && !levels.contains(&n.world) {
             levels.push(n.world.clone());
         }
-        Ok(TaskPlan { name, level: s.level.clone(), continue_player: s.continue_player.clone(), levels, regions: Vec::new(), menu: false })
+        Ok(TaskPlan { name, level: s.level.clone(), continue_player: s.continue_player.clone(), continue_allies: s.continue_allies.clone(), continue_camera: s.continue_camera.clone(), levels, regions: Vec::new(), menu: false })
     }
 
     /// Unload the presented level and queue the packages of the current
@@ -612,10 +890,24 @@ impl NaughtyDogVm {
         }
         session.script_error = None;
         session.movie = None;
-        session.movie_video = false;
+        // A task left during its movie stops the video and its layer.
+        let mut layers = vec![json!({"op": "put", "layer": {"id": FADE_LAYER, "rect": [0, 0, SCREEN[0], SCREEN[1]], "paint": {"kind": "solid", "color": [0, 0, 0, 0]}}})];
+        if std::mem::take(&mut session.movie_video) {
+            world.push(json!({"op": "set_video", "name": "movie", "video": null}));
+            layers.push(json!({"op": "remove", "id": MOVIE_LAYER}));
+        }
         session.ui = None;
         session.stage.spawners.clear();
         session.stage.entities.clear();
+        session.npcs.clear();
+        session.stage.animations.clear();
+        session.stage.held.clear();
+        session.stage.camera = None;
+        session.stage.camera_animations.clear();
+        session.stage.poses.clear();
+        session.stage.regions.clear();
+        session.stage.player_regions.clear();
+        session.entity_rigs.clear();
         session.stage.visible.clear();
         session.stage.ops.clear();
         session.stage.fade = 0.;
@@ -642,7 +934,7 @@ impl NaughtyDogVm {
         } else {
             session.pending = session.levels[session.current].1.iter().cloned().map(Load::Package).collect();
         }
-        host.submit_engine(self.client, 1, &serde_json::to_vec(&json!({"layers": [{"op": "put", "layer": {"id": FADE_LAYER, "rect": [0, 0, SCREEN[0], SCREEN[1]], "paint": {"kind": "solid", "color": [0, 0, 0, 0]}}}], "world": world}))?)?;
+        host.submit_engine(self.client, 1, &serde_json::to_vec(&json!({"layers": layers, "world": world}))?)?;
         Ok(())
     }
 
@@ -712,7 +1004,36 @@ impl NaughtyDogVm {
                 }
             }
             if session.game.is_some() {
-                session.ground.add(&meshes);
+                // Native collision and climb edges where the package has
+                // them; otherwise its render triangles.
+                let native = crate::collision::level_object(&loaded).unwrap_or_else(|e| {
+                    session.stage.log(format!("{package_name}: collision: {e:#}"));
+                    crate::collision::Object::default()
+                });
+                if native.triangles.is_empty() {
+                    session.ground.add(&meshes);
+                } else {
+                    session.ground.add_collision(&native.triangles);
+                }
+                session.ground.add_edges(&native.features.edges);
+                for item in directory.items.iter().filter(|i| i.kind == "REGION_TREE") {
+                    match crate::trigger::regions(&loaded, item.payload_offset as usize) {
+                        Ok(regions) => {
+                            // Their enter/exit lambdas run in the script VM
+                            // with the package mapped.
+                            let base = match session.game.as_mut() {
+                                Some(game) if regions.iter().any(|r| r.enter.is_some() || r.exit.is_some()) => game.rt.dc.map_package(sid(&package_name), &loaded.data, loaded.pointers()).ok(),
+                                _ => None,
+                            };
+                            let at = |o: Option<usize>| base.zip(o).and_then(|(b, o)| u32::try_from(o).ok().map(|o| b + o));
+                            session.stage.regions.extend(regions.into_iter().map(|r| {
+                                let (enter, exit) = (at(r.enter), at(r.exit));
+                                (r, enter, exit)
+                            }));
+                        }
+                        Err(e) => session.stage.log(format!("{package_name}: trigger regions: {e:#}")),
+                    }
+                }
                 if let Some(item) = directory.items.iter().find(|i| i.kind == "REGION_TREE") {
                     let regions = crate::region::load_regions(&loaded, item.payload_offset as usize)?;
                     if !regions.is_empty() {
@@ -791,19 +1112,69 @@ impl NaughtyDogVm {
     /// sky image the environment is black and its light scaled to the
     /// probes' brightness (the procedural daylight sky would otherwise
     /// light night and cave levels).
+    /// The render settings in force: those of the render-settings region
+    /// holding the camera, or without a player the first a level region
+    /// names (`menu-temple-ingame10`: `*menu-temple-render-settings-01*`).
+    /// Regions choosing their record by script lambda (`train-wreck`) are
+    /// not evaluated.
+    fn render_settings_name(session: &Session) -> Option<u32> {
+        let regions = &session.stage.regions;
+        let eye = session.stage.camera_eye?;
+        regions.iter().find(|(r, _, _)| r.render_settings.is_some() && session.stage.holds_point(r, eye)).and_then(|(r, _, _)| r.render_settings)
+    }
+
+    fn render_settings(session: &Session) -> Option<crate::render_settings::RenderSettings> {
+        let dc = &session.game.as_ref()?.rt.dc;
+        let regions = &session.stage.regions;
+        // Render-settings regions are `camera` regions: tested at the
+        // camera (the eye of the last presented camera).
+        let held = regions.iter().filter(|(r, _, _)| r.render_settings.is_some()).find(|(r, _, _)| session.player.is_some() && session.stage.camera_eye.is_some_and(|eye| session.stage.holds_point(r, eye)));
+        // Without a player (the menu) the level's first record applies;
+        // with one, only a region holding it selects a record.
+        let region = held.or_else(|| if session.player.is_none() { regions.iter().find(|(r, _, _)| r.render_settings.is_some()) } else { None })?;
+        let name = region.0.render_settings?;
+        let settings = crate::render_settings::read(dc, name).ok().flatten();
+        settings
+    }
+
     fn level_environment(session: &Session) -> Option<serde_json::Value> {
         if session.probes.is_empty() {
             return None;
         }
+        let settings = Self::render_settings(session);
         let e = session.probes.mean_irradiance();
         let lum = 0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2];
-        let sun = session.light.as_ref().map_or(json!(null), |l| json!({"direction": l.direction, "color": l.color.map(|c| c.clamp(0., 4.)), "intensity": l.intensity.clamp(0.2, 4.0), "shadow_strength": 0.6}));
-        let mut env = json!({"op": "set_environment", "environment": {"show_sky": session.sky.is_some(), "intensity": if session.sky.is_some() { 1. } else { (lum * 4.).clamp(0.02, 1.) }, "ambient": e.map(|v| v.clamp(0., 2.)), "sun": sun,
-            // Hable's filmic curve, published for this game; the camera
-            // adapts to the scene (the native exposure constants are set at
-            // runtime and not recovered).
-            "tonemap": "filmic",
-            "auto_exposure": {"min_log2": -6.0, "max_log2": 2.0, "speed_up": 3.0, "speed_down": 1.0, "compensation": 0.5}}});
+        let scale = settings.map_or(1., |s| s.light_scale.iter().sum::<f32>() / 3.);
+        let sun = session.light.as_ref().map_or(json!(null), |l| json!({"direction": l.direction, "color": l.color.map(|c| c.clamp(0., 4.)), "intensity": (l.intensity * scale).clamp(0.05, 4.0), "shadow_strength": 1.0}));
+        let ambient_scale = settings.map_or(1., |s| s.ambient_scale) * UNBAKED_AMBIENT;
+        let mut env = json!({"op": "set_environment", "environment": {"show_sky": session.sky.is_some(), "intensity": if session.sky.is_some() { 1. } else { (lum * 4.).clamp(0.02, 1.) }, "ambient": e.map(|v| (v * ambient_scale).clamp(0., 16.)), "sun": sun, "tonemap": "filmic"}});
+        match settings {
+            // The area's tonemap: Hable's curve with its constants and
+            // bias; the camera adapts (`tonemap-adaption-time`, light range
+            // ±4 stops) with a constant compensation calibrated against the
+            // original title screen. The record's key (`tonemap-manual-
+            // exposure-value`) and the native exposure modes (`sub_ABB33C`
+            // caller) are not applied.
+            Some(s) => {
+                let t = s.tonemap;
+                env["environment"]["filmic_curve"] = json!({"shoulder": t.shoulder, "linear": t.linear, "angle": t.angle, "toe": t.toe, "toe_numerator": t.toe_numerator, "toe_denominator": t.toe_denominator, "white": t.white, "exposure_bias": t.exposure_bias});
+                env["environment"]["auto_exposure"] = json!({"min_log2": -8.0, "max_log2": 8.0, "speed_up": 3.0, "speed_down": 1.0, "compensation": EXPOSURE_CALIBRATION});
+                env["environment"]["grading"] = json!({"color_filter": s.tint.map(|v| v.clamp(0., 4.))});
+                // The record's fog: opacity `density` reached over
+                // `distance-range` past `distance-start`, thinning over
+                // `height-range` above `height-start` (the native curve is
+                // not recovered; mapped to the shared exponential fog).
+                let f = s.fog;
+                if f.density > 0. && f.distance_range > 0. {
+                    let cap = f.density.clamp(0., 0.99);
+                    let colour = f.colour.map(|c| c.clamp(0., 1.).powf(2.2) * f.multiplier.clamp(0., 1.));
+                    env["environment"]["fog"] = json!({"color": colour, "density": -(1. - cap).ln() / f.distance_range, "height_falloff": if f.height_range > 0. { 1. / f.height_range } else { 0. }, "base_height": f.height_start, "start_distance": f.distance_start.max(0.), "max_opacity": cap, "sun_scattering": 0.0});
+                }
+            }
+            None => {
+                env["environment"]["auto_exposure"] = json!({"min_log2": -6.0, "max_log2": 2.0, "speed_up": 3.0, "speed_down": 1.0, "compensation": 0.5});
+            }
+        }
         if let Some(sky) = &session.sky {
             env["environment"]["hdr"] = json!(sky.relative());
         }
@@ -825,11 +1196,126 @@ impl NaughtyDogVm {
         json!({"op": "set_camera", "camera": {"eye": eye, "target": target, "up": [0.0, 1.0, 0.0], "fov_y_degrees": vertical, "near": 0.1, "far": 20000.0}})
     }
 
+    /// A scripted camera spawner: the eye at the spawner looking along its
+    /// local +z (`cam-railing-center-intro-1` faces the climb start), up
+    /// along its local +y, with its horizontal `fov` (75° without one).
+    /// Blend times and camera types are not modelled.
+    fn spawner_camera(cam: &SpawnerRecord) -> serde_json::Value {
+        let q = glam::Quat::from_array(cam.rotation).normalize();
+        let (forward, up) = (q * glam::Vec3::Z, q * glam::Vec3::Y);
+        let fov = cam.properties.iter().find(|(k, _)| *k == sid("fov")).and_then(|(_, v)| match v {
+            crate::ss::Property::Float(f) => Some(*f),
+            crate::ss::Property::Int(i) => Some(*i as f32),
+            _ => None,
+        });
+        let h = fov.filter(|f| *f > 1. && *f < 170.).unwrap_or(75.);
+        let vertical = (2. * ((h.to_radians() * 0.5).tan() * SCREEN[1] as f32 / SCREEN[0] as f32).atan()).to_degrees();
+        let eye = glam::Vec3::from_array(cam.position);
+        json!({"op": "set_camera", "camera": {"eye": eye.to_array(), "target": (eye + forward).to_array(), "up": up.to_array(), "fov_y_degrees": vertical, "near": 0.1, "far": 20000.0}})
+    }
+
+    /// The camera clip `clip` from the level's `actor` packages
+    /// (`camera-train-wreck.pak` for `train-wreck`).
+    fn camera_clip(session: &mut Session, clip: u32) -> Option<&CameraClip> {
+        if !session.camera_clips.contains_key(&clip) {
+            let mut found = None;
+            let actors: Vec<String> = session.plan.iter().flat_map(|p| &p.levels).filter_map(|l| session.all_levels.get(l)).flat_map(|l| l.actors.iter().filter(|a| a.starts_with("camera-")).cloned()).collect();
+            for actor in actors {
+                let package = format!("{actor}.pak");
+                if !session.actors.exists(&package) {
+                    continue;
+                }
+                if !session.anim_packages.contains_key(&package) {
+                    let Ok(bytes) = session.actors.open(&package).map_err(anyhow::Error::from).and_then(|r| Ok(read_all(r.as_ref(), PACKAGE_LIMIT)?)) else { continue };
+                    let Ok(loaded) = crate::mesh::Loaded::read(&crysirror_core::service::MemoryAssetReader(bytes.into()), PACKAGE_LIMIT) else { continue };
+                    session.anim_packages.insert(package.clone(), Arc::new(loaded));
+                }
+                let loaded = session.anim_packages[&package].clone();
+                let Some((name, at)) = crate::anim::items(&loaded).find(|(n, _)| sid(n) == clip) else { continue };
+                let fps = crate::anim::decode(&loaded, at, name, 1).map_or(30., |c| c.fps);
+                let samples: Vec<_> = crate::anim::raw_samples(&loaded, at, CAMERA_CHANNEL)
+                    .into_iter()
+                    .filter_map(|v| {
+                        let (fov, r) = match v.len() {
+                            10 => (Some(v[0]), &v[3..]),
+                            7 => (None, &v[..]),
+                            _ => return None,
+                        };
+                        Some((fov, glam::Quat::from_xyzw(r[0], r[1], r[2], r[3]).normalize(), glam::Vec3::new(r[4], r[5], r[6])))
+                    })
+                    .collect();
+                session.stage.log(format!("camera clip {name}: {} frames", samples.len()));
+                found = (!samples.is_empty()).then_some(CameraClip { fps, samples });
+                break;
+            }
+            session.camera_clips.insert(clip, found);
+        }
+        session.camera_clips.get(&clip).and_then(Option::as_ref)
+    }
+
+    /// Offset a `set_camera` op by the running camera animations: each
+    /// loops its camera channel relative to its first frame, in camera
+    /// space (+z forward, +y up), weighted by its blend (inferred
+    /// application, SATD-nd-retail-runtime).
+    fn animate_camera(session: &mut Session, op: &mut serde_json::Value) {
+        let now = session.stage.now;
+        session.stage.camera_animations.retain(|c| c.stop.is_none_or(|s| ((now - s) as f32) < c.blend.max(1e-3)));
+        let running: Vec<(u32, f32, f32)> = session
+            .stage
+            .camera_animations
+            .iter()
+            .map(|c| {
+                let t = (now - c.start) as f32;
+                let w_in = if c.blend > 0. { t / c.blend } else { 1. };
+                let w_out = c.stop.map_or(1., |s| if c.blend > 0. { 1. - (now - s) as f32 / c.blend } else { 0. });
+                (c.clip, t, w_in.min(w_out).clamp(0., 1.))
+            })
+            .collect();
+        let v3 = |v: &serde_json::Value| v.as_array().map(|a| glam::Vec3::new(a[0].as_f64().unwrap_or(0.) as f32, a[1].as_f64().unwrap_or(0.) as f32, a[2].as_f64().unwrap_or(0.) as f32));
+        let cam = &op["camera"];
+        let (Some(mut eye), Some(target), Some(mut up)) = (v3(&cam["eye"]), v3(&cam["target"]), v3(&cam["up"])) else { return };
+        let mut forward = (target - eye).normalize_or_zero();
+        let mut fov = cam["fov_y_degrees"].as_f64().unwrap_or(60.) as f32;
+        let mut changed = false;
+        for (clip, t, w) in running {
+            let Some(c) = Self::camera_clip(session, clip) else { continue };
+            let x = (t * c.fps).rem_euclid(c.samples.len() as f32);
+            let (i, f) = (x.floor() as usize % c.samples.len(), x.fract());
+            let (fa, ra, ta) = c.samples[i];
+            let (fb, rb, tb) = c.samples[(i + 1) % c.samples.len()];
+            let (f0, r0, t0) = c.samples[0];
+            let rot = r0.inverse() * ra.slerp(rb, f);
+            let offset = r0.inverse() * (ta.lerp(tb, f) - t0);
+            let basis = glam::Mat3::from_cols(up.cross(forward).normalize_or_zero(), up, forward);
+            let rot = glam::Quat::IDENTITY.slerp(rot, w);
+            eye += basis * (offset * w);
+            forward = basis * (rot * glam::Vec3::Z);
+            up = basis * (rot * glam::Vec3::Y);
+            if let (Some(a), Some(b), Some(base)) = (fa, fb, f0) {
+                let half = |d: f32| (d.to_radians() * 0.5).tan();
+                let zoom = (half(a + (b - a) * f) / half(base)).powf(w);
+                fov = (2. * (half(fov) * zoom).atan()).to_degrees();
+            }
+            changed = true;
+        }
+        if changed {
+            op["camera"]["eye"] = json!(eye.to_array());
+            op["camera"]["target"] = json!((eye + forward).to_array());
+            op["camera"]["up"] = json!(up.to_array());
+            op["camera"]["fov_y_degrees"] = json!(fov);
+        }
+    }
+
     /// Place the player and start the level's state-script processes.
     fn start_task(&self, session: &mut Session, world: &mut Vec<serde_json::Value>) -> Result<()> {
         session.ground.prepare();
-        if let Some(env) = Self::level_environment(session) {
-            world.push(env);
+        // The environment follows the player's render-settings region, so
+        // it is set once the player stands (the menu has none).
+        session.player = None;
+        if session.plan.as_ref().is_some_and(|p| p.menu) {
+            if let Some(env) = Self::level_environment(session) {
+                world.push(env);
+            }
         }
         let plan = session.plan.as_ref().context("task plan")?;
         if plan.menu {
@@ -852,11 +1338,55 @@ impl NaughtyDogVm {
         if let Some(s) = &spawner {
             session.stage.set_visible(sid(&s.name), true);
         }
-        let mut player = Player { entity, position, yaw, fall: 0., view_yaw: yaw + std::f32::consts::PI, view_pitch: -0.25, controls: true };
-        if let Some(h) = session.ground.height(position[0], position[2], position[1] + 1.) {
-            player.position[1] = h;
+        // The task's allies (Flynn in the museum) appear at their continue
+        // spawners.
+        for ally in &plan.continue_allies {
+            if session.stage.spawners.contains_key(&sid(ally)) {
+                session.stage.set_visible(sid(ally), true);
+                session.stage.log(format!("ally {ally}"));
+            }
         }
+        let camera = plan.continue_camera.as_deref().and_then(|n| session.stage.spawners.get(&sid(n))).map(|c| c.position);
+        let anim = session.anim_table.as_ref().filter(|_| entity.is_some()).map(|t| crate::player::Controller::new(t, yaw));
+        // The camera starts behind the player (eye offset `(-sin, cos)` of
+        // the view yaw opposite the facing `(sin, cos)` of the yaw).
+        let mut player = Player { entity, position, yaw, fall: 0., view_yaw: std::f32::consts::PI - yaw, view_pitch: -0.25, controls: true, anim, air_top: None, view_distance: FOLLOW_DISTANCE, platform: None, grip: None, leap: None, regrab: 0. };
+        // The continue camera spawner sets the starting view direction
+        // (eye offset `(-sin y · cos p, -sin p, cos y · cos p)` from the head).
+        if let Some(c) = camera {
+            let d = [c[0] - position[0], c[1] - position[1] - 1.5, c[2] - position[2]];
+            let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            if len > 0.5 {
+                player.view_yaw = (-d[0]).atan2(d[2]);
+                player.view_pitch = (-d[1] / len).asin().clamp(-1.2, 0.6);
+            }
+        }
+        // A spawner on a climb edge (within 0.3 m; `continue-player-climb-1`
+        // on the hanging car's rail) starts hanging from it: the spawner
+        // marks the grab point.
+        let at = glam::Vec3::from_array(position);
+        let edge = session.ground.edges_near(at, 0.3).into_iter().min_by(|a, b| crate::ground::segment_distance(at, a.1.p0, a.1.p1).total_cmp(&crate::ground::segment_distance(at, b.1.p0, b.1.p1)));
+        match (edge, player.anim.as_mut()) {
+            (Some((index, e, body)), Some(c)) => {
+                player.grip = Some(Grip { body, edge: index, s: (at - e.p0).dot((e.p1 - e.p0).normalize_or_zero()).clamp(0., (e.p1 - e.p0).length()), climb: None });
+                c.hang(0.);
+                session.stage.log(format!("player hangs from edge {index} of {body:?}"));
+            }
+            _ => {
+                let below = session.ground.height(position[0], position[2], position[1] + 1.);
+                // A spawn more than 8 m above the next surface keeps its
+                // height.
+                if let Some(h) = below.filter(|h| position[1] - h <= 8.) {
+                    player.position[1] = h;
+                }
+            }
+        }
+        session.stage.player_locator = Some((player.position, glam::Quat::from_rotation_y(player.yaw).to_array()));
+        session.stage.camera_eye = Some([player.position[0], player.position[1] + 1.5, player.position[2]]);
         session.player = Some(player);
+        if let Some(env) = Self::level_environment(session) {
+            world.push(env);
+        }
         session.stage.log(format!("task {} level {}: player at {:?}", plan.name, plan.level, position));
         let (Some(game), Some(modules)) = (session.game.as_mut(), session.modules.as_ref()) else { return Ok(()) };
         match game.start(modules, &mut session.stage, &session.records) {
@@ -864,7 +1394,7 @@ impl NaughtyDogVm {
             Err(e) => session.script_error = Some(format!("{e:#}")),
         }
         world.append(&mut session.stage.ops);
-        world.push(Self::follow(session.player.as_ref().expect("player"), &session.ground));
+        world.push(Self::follow(session.player.as_mut().expect("player"), &session.ground, 0.));
         session.started = true;
         Ok(())
     }
@@ -985,15 +1515,441 @@ impl NaughtyDogVm {
         out
     }
 
-    /// The player skeleton and clips from `actor27.psarc/proto.pak`.
-    fn player_rig(actors: &ArchiveMount) -> Result<Option<(crate::skeleton::Skeleton, Vec<crate::anim::Clip>)>> {
+    /// An NPC skeleton from its `*-base` package and the clips named
+    /// `wanted` (and `idle`) in it and the character's animation packages
+    /// that fit the skeleton; clips the decoder cannot read are skipped.
+    fn npc_rig(actors: &ArchiveMount, base: &str, anims: &[String], wanted: &HashSet<u32>) -> Result<Option<(crate::skeleton::Skeleton, Vec<crate::anim::Clip>)>> {
+        let read = |name: &str| -> Result<crate::mesh::Loaded> {
+            let package = crysirror_core::service::MemoryAssetReader(read_all(actors.open(name)?.as_ref(), PACKAGE_LIMIT)?.into());
+            crate::mesh::Loaded::read(&package, PACKAGE_LIMIT)
+        };
+        let path = format!("{base}.pak");
+        if !actors.exists(&path) {
+            return Ok(None);
+        }
+        let Some(skeleton) = crate::skeleton::of_package(&read(&path)?)? else { return Ok(None) };
+        let mut clips = Vec::new();
+        let packages = std::iter::once(path.clone()).chain(anims.iter().map(|a| format!("{a}.pak")));
+        for package in packages {
+            if !actors.exists(&package) {
+                continue;
+            }
+            let loaded = read(&package)?;
+            for (n, at) in crate::anim::items(&loaded).filter(|(n, _)| *n == "idle" || wanted.contains(&sid(n))) {
+                if clips.iter().any(|c: &crate::anim::Clip| c.name == n) {
+                    continue;
+                }
+                if let Ok(clip) = crate::anim::decode(&loaded, at, n, skeleton.animated) {
+                    if clip.hierarchy == skeleton.hash {
+                        clips.push(clip);
+                    }
+                }
+            }
+        }
+        Ok(Some((skeleton, clips)))
+    }
+
+    /// Load the clips scripts started this frame and blend every running
+    /// script animation over its entities' controller layers (weight ramps
+    /// over the blend-in and blend-out times); an animation with a
+    /// locator places its entities there when it starts. Animations whose
+    /// clip cannot be found end at once (logged).
+    fn script_animations(&self, host: &mut dyn HostServices, session: &mut Session, world: &mut Vec<serde_json::Value>) {
+        let objects: Vec<u32> = session.stage.animations.iter().filter(|(_, a)| a.source.is_none() && !a.failed).map(|(o, _)| *o).collect();
+        for object in objects {
+            let clip = session.stage.animations[&object].clip;
+            let entities = Self::animation_entities(session, object);
+            let rig = entities.iter().find_map(|e| session.entity_rigs.get(e).cloned());
+            let loaded = match rig {
+                Some(rig) => self.animation_library(host, session, &rig, clip),
+                None => Err(anyhow::anyhow!("object has no skinned entity")),
+            };
+            // The entity's transform now: the player's, else its spawner's.
+            let current = if object == sid("player") {
+                session.player.as_ref().map(|p| glam::Mat4::from_rotation_translation(glam::Quat::from_rotation_y(p.yaw), glam::Vec3::from_array(p.position)))
+            } else {
+                session.stage.spawners.get(&object).map(|s| glam::Mat4::from_rotation_translation(glam::Quat::from_array(s.rotation).normalize(), glam::Vec3::from_array(s.position)))
+            };
+            let a = session.stage.animations.get_mut(&object).expect("animation");
+            match loaded {
+                Ok(lib) => {
+                    a.duration = Some(lib.seconds);
+                    a.source = Some((lib.asset.clone(), lib.name.clone()));
+                    a.start = session.stage.now;
+                    // Clip space in the world: the locator stands where the
+                    // clip's `apReference` starts; without one, the root
+                    // starts where the entity stands.
+                    let frame = |(t, r): (glam::Vec3, glam::Quat)| glam::Mat4::from_rotation_translation(r, t);
+                    let base = match (a.options.locator, lib.ap_reference.first(), lib.align.first(), current) {
+                        (Some((pos, rot)), ap, _, _) => Some(glam::Mat4::from_rotation_translation(glam::Quat::from_array(rot).normalize(), glam::Vec3::from_array(pos)) * ap.map_or(glam::Mat4::IDENTITY, |a| frame(*a).inverse())),
+                        (None, _, Some(first), Some(now)) => Some(now * frame(*first).inverse()),
+                        _ => None,
+                    };
+                    if let Some(base) = base {
+                        let align = if lib.align.is_empty() { vec![(glam::Vec3::ZERO, glam::Quat::IDENTITY)] } else { lib.align.clone() };
+                        a.root = Some((align, lib.fps, base));
+                    }
+                    session.stage.log(format!("animate {object:08x} {} {:.2}s", lib.name, lib.seconds));
+                }
+                Err(e) => {
+                    a.failed = true;
+                    session.stage.log(format!("animate {object:08x} clip {clip:08x}: {e:#}"));
+                }
+            }
+        }
+        let now = session.stage.now;
+        let mut finished = Vec::new();
+        let mut held = Vec::new();
+        let mut moves = Vec::new();
+        for (object, a) in &session.stage.animations {
+            let (Some((asset, name)), Some(d)) = (&a.source, a.duration) else {
+                if a.failed {
+                    finished.push(*object);
+                }
+                continue;
+            };
+            let t = (now - a.start) as f32;
+            if t >= d {
+                finished.push(*object);
+                let entities = Self::animation_entities(session, *object);
+                let controlled = entities.iter().any(|e| session.player.as_ref().is_some_and(|p| p.entity == Some(*e)) || session.npcs.iter().any(|n| n.entity == *e));
+                if !controlled {
+                    held.push((*object, (asset.clone(), name.clone(), d)));
+                }
+                continue;
+            }
+            let (bin, bout) = (a.options.blend_in.unwrap_or(SCRIPT_BLEND), a.options.blend_out.unwrap_or(SCRIPT_BLEND));
+            let w_in = if bin > 0. { t / bin } else { 1. };
+            let w_out = if bout > 0. { (d - t) / bout } else { 1. };
+            let w = w_in.min(w_out).clamp(0., 1.);
+            let layer = json!({"clip": name, "source": asset, "time": t, "speed": 0.0, "weight": w.max(1e-3), "target_weight": w.max(1e-3), "looping": false});
+            if let Some((align, fps, base)) = &a.root {
+                let x = (t * fps).clamp(0., (align.len() - 1) as f32);
+                let (i, f) = (x.floor() as usize, x.fract());
+                let (t0, r0) = align[i];
+                let (t1, r1) = align[(i + 1).min(align.len() - 1)];
+                let m = *base * glam::Mat4::from_rotation_translation(r0.slerp(r1, f), t0.lerp(t1, f));
+                let (_, r, pos) = m.to_scale_rotation_translation();
+                moves.push((*object, pos.to_array(), r));
+            }
+            for e in Self::animation_entities(session, *object) {
+                let found = world.iter_mut().rev().find(|op| op["op"] == "set_animation" && op["id"] == e);
+                match found {
+                    Some(op) => {
+                        if let Some(layers) = op["animation"]["layers"].as_array_mut() {
+                            for l in layers.iter_mut() {
+                                for k in ["weight", "target_weight"] {
+                                    if let Some(v) = l[k].as_f64() {
+                                        l[k] = json!(v * f64::from(1. - w));
+                                    }
+                                }
+                            }
+                            layers.push(layer.clone());
+                        }
+                    }
+                    None => world.push(json!({"op": "set_animation", "id": e, "animation": {"layers": [layer.clone()]}})),
+                }
+            }
+        }
+        // Root motion: entities follow the clip's `align` channel; the
+        // player keeps the position for its controller.
+        for (object, pos, r) in moves {
+            let yaw = yaw_of(r.to_array());
+            if object == sid("player") {
+                if let Some(p) = session.player.as_mut() {
+                    p.position = pos;
+                    p.yaw = yaw;
+                    if let Some(c) = p.anim.as_mut() {
+                        c.yaw = yaw;
+                    }
+                }
+            }
+            let (x, y, z) = r.to_euler(glam::EulerRot::XYZ);
+            if object != sid("player") {
+                session.stage.poses.insert(object, glam::Mat4::from_rotation_translation(r, glam::Vec3::from_array(pos)));
+            }
+            let m = glam::Mat4::from_rotation_translation(r, glam::Vec3::from_array(pos)).to_cols_array();
+            for e in Self::animation_entities(session, object) {
+                session.ground.move_body(e, m);
+                world.push(json!({"op": "set_transform", "id": e, "transform": {"translation": pos, "rotation_degrees": [x.to_degrees(), y.to_degrees(), z.to_degrees()], "scale": [1.0, 1.0, 1.0]}}));
+            }
+        }
+        // Spawners placed in a moved object's frame (the rail, seats and
+        // child cameras of `train-wreck-car-b-1`) move with it, unless they
+        // play their own animation.
+        let moved: Vec<u32> = session.stage.poses.keys().copied().filter(|o| session.stage.animations.contains_key(o)).collect();
+        for parent in moved {
+            Self::move_children(session, parent, world, 0);
+        }
+        for o in finished {
+            session.stage.animations.remove(&o);
+        }
+        // A held pose is set once; the entity keeps it until replaced.
+        for (object, (asset, name, t)) in held {
+            for e in Self::animation_entities(session, object) {
+                world.push(json!({"op": "set_animation", "id": e, "animation": {"layers": [{"clip": name, "source": asset, "time": t, "speed": 0.0, "weight": 1.0, "target_weight": 1.0, "looping": false}]}}));
+            }
+            session.stage.held.insert(object, (asset, name, t));
+        }
+    }
+
+    /// The skeleton with JH hash `hash` among the human base rigs and the
+    /// loaded characters' skeleton packages.
+    fn skeleton_for(session: &mut Session, hash: u32) -> Result<Option<crate::skeleton::Skeleton>> {
+        let mut candidates: Vec<String> = vec!["npc-normal-base.pak".into(), "proto.pak".into()];
+        for packages in session.npc_packages.values() {
+            if let Some(base) = packages.first() {
+                if !candidates.contains(base) {
+                    candidates.push(base.clone());
+                }
+            }
+        }
+        for package in candidates {
+            if !session.skeletons.contains_key(&package) {
+                let skeleton = if session.actors.exists(&package) {
+                    let reader = crysirror_core::service::MemoryAssetReader(read_all(session.actors.open(&package)?.as_ref(), PACKAGE_LIMIT)?.into());
+                    crate::skeleton::of_package(&crate::mesh::Loaded::read(&reader, PACKAGE_LIMIT)?)?
+                } else {
+                    None
+                };
+                session.skeletons.insert(package.clone(), skeleton);
+            }
+            if let Some(Some(s)) = session.skeletons.get(&package) {
+                if s.hash == hash {
+                    return Ok(Some(s.clone()));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    /// The entities an animated object stands for: the player's, or its
+    /// spawner's.
+    /// Place a hanging or climbing player from its grip. Hanging: the
+    /// clip's sideways root motion slides the grab point along the edge
+    /// (onto the linked edge past an end) and the root stands at `edge ·
+    /// AP⁻¹`. Climbing: the root follows `edge · AP⁻¹ · align(t)` from the
+    /// edge frame where the climb began, or the clip's `align` motion for
+    /// clips without a reference. A grip whose edge is gone is released.
+    fn follow_grip(p: &mut Player, ground: &Ground, mode: crate::player::Mode, root: Option<&crate::player::Root>) {
+        let Some(mut grip) = p.grip else { return };
+        let Some(mut edge) = ground.edge(grip.body, grip.edge) else {
+            p.grip = None;
+            return;
+        };
+        let ap = |r: Option<&crate::player::Root>| r.and_then(|r| r.ap).map_or(glam::Mat4::from_translation(HANG_REACH), |(t, q)| glam::Mat4::from_rotation_translation(q, t));
+        match mode {
+            crate::player::Mode::Hang => {
+                grip.climb = None;
+                if let Some(r) = root {
+                    let delta = r.align.0 - r.before.0;
+                    if delta.length() < 0.2 {
+                        let frame = edge_frame(&edge, grip.s);
+                        grip.s += frame.transform_vector3(glam::Vec3::new(delta.x, 0., 0.)).dot((edge.p1 - edge.p0).normalize_or_zero());
+                    }
+                }
+                // Past an end: the linked edge, else the end.
+                for _ in 0..4 {
+                    let len = (edge.p1 - edge.p0).length();
+                    let link = if grip.s < 0. { edge.prev } else if grip.s > len { edge.next } else { None };
+                    let Some(next) = link.and_then(|i| ground.edge(grip.body, usize::from(i)).map(|e| (usize::from(i), e))) else {
+                        grip.s = grip.s.clamp(0., len);
+                        break;
+                    };
+                    grip.s = if grip.s < 0. { (next.1.p1 - next.1.p0).length() + grip.s } else { grip.s - len };
+                    (grip.edge, edge) = next;
+                }
+                let m = edge_frame(&edge, grip.s) * ap(root).inverse();
+                let (_, _, t) = m.to_scale_rotation_translation();
+                p.position = t.to_array();
+            }
+            crate::player::Mode::Climb => {
+                let start = *grip.climb.get_or_insert_with(|| edge_frame(&edge, grip.s));
+                match root {
+                    Some(r) if r.ap.is_some() => {
+                        let m = start * ap(Some(r)).inverse() * glam::Mat4::from_rotation_translation(r.align.1, r.align.0);
+                        p.position = m.to_scale_rotation_translation().2.to_array();
+                    }
+                    Some(r) => {
+                        let (_, q, _) = start.to_scale_rotation_translation();
+                        p.position = (glam::Vec3::from_array(p.position) + q * (r.align.0 - r.before.0)).to_array();
+                    }
+                    None => {}
+                }
+            }
+            crate::player::Mode::Ground | crate::player::Mode::Leap => return,
+        }
+        let f = edge_frame(&edge, grip.s).transform_vector3(glam::Vec3::Z);
+        p.yaw = f.x.atan2(f.z);
+        if let Some(c) = p.anim.as_mut() {
+            c.yaw = p.yaw;
+        }
+        p.fall = 0.;
+        p.air_top = None;
+        p.grip = Some(grip);
+    }
+
+    /// The edge a hanging player can jump to: above (`toward` up: 0.4–2.5 m
+    /// higher, within 0.8 m sideways) or to a side (0.5–2.5 m along
+    /// `toward`, within 1 m of the height), facing the same way. Distances
+    /// are not native (SATD-nd-retail-runtime).
+    fn leap_target(ground: &Ground, grip: Grip, toward: glam::Vec3) -> Option<Grip> {
+        let edge = ground.edge(grip.body, grip.edge)?;
+        let frame = edge_frame(&edge, grip.s);
+        let at = frame.transform_point3(glam::Vec3::ZERO);
+        let facing = frame.transform_vector3(glam::Vec3::Z);
+        let up = toward.y > 0.5;
+        let probe = at + toward * 1.4;
+        let closest = |e: &crate::collision::Edge| {
+            let d = (e.p1 - e.p0).normalize_or_zero();
+            let s = (at - e.p0).dot(d).clamp(0., (e.p1 - e.p0).length());
+            (e.p0 + d * s, s)
+        };
+        ground
+            .edges_near(probe, 1.6)
+            .into_iter()
+            .filter(|(i, e, body)| !(*body == grip.body && *i == grip.edge) && glam::Vec3::new(-e.n1.x, 0., -e.n1.z).normalize_or_zero().dot(facing) > 0.7)
+            .filter_map(|(i, e, body)| {
+                let (q, s) = closest(&e);
+                let d = q - at;
+                let flat = glam::Vec3::new(d.x, 0., d.z);
+                let ok = if up { (0.4..=2.5).contains(&d.y) && flat.length() < 0.8 } else { d.y.abs() < 1. && (0.5..=2.5).contains(&flat.dot(toward)) };
+                ok.then_some((d.length(), Grip { body, edge: i, s, climb: None }))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, g)| g)
+    }
+
+    /// Place the spawners parented to `parent` (`SpawnerRecord::parent`)
+    /// in its current frame: `child = parent now · parent spawner⁻¹ · child
+    /// spawner`, recursively; their entities and bodies follow.
+    fn move_children(session: &mut Session, parent: u32, world: &mut Vec<serde_json::Value>, depth: usize) {
+        let (Some(now), Some(spawned)) = (session.stage.poses.get(&parent).copied(), session.stage.spawners.get(&parent)) else { return };
+        if depth > 8 {
+            return;
+        }
+        let frame = |s: &SpawnerRecord| glam::Mat4::from_rotation_translation(glam::Quat::from_array(s.rotation).normalize(), glam::Vec3::from_array(s.position));
+        let delta = now * frame(spawned).inverse();
+        let name = spawned.name.clone();
+        let children: Vec<(u32, glam::Mat4)> = session.stage.spawners.iter().filter(|(c, s)| s.parent.as_deref() == Some(name.as_str()) && !session.stage.animations.contains_key(c)).map(|(c, s)| (*c, delta * frame(s))).collect();
+        for (child, m) in children {
+            session.stage.poses.insert(child, m);
+            let (_, r, t) = m.to_scale_rotation_translation();
+            let (x, y, z) = r.to_euler(glam::EulerRot::XYZ);
+            for e in session.stage.entities.get(&child).cloned().unwrap_or_default() {
+                session.ground.move_body(e, m.to_cols_array());
+                world.push(json!({"op": "set_transform", "id": e, "transform": {"translation": t.to_array(), "rotation_degrees": [x.to_degrees(), y.to_degrees(), z.to_degrees()], "scale": [1.0, 1.0, 1.0]}}));
+            }
+            Self::move_children(session, child, world, depth + 1);
+        }
+    }
+
+    fn animation_entities(session: &Session, object: u32) -> Vec<u32> {
+        if object == sid("player") {
+            return session.player.as_ref().and_then(|p| p.entity).into_iter().collect();
+        }
+        session.stage.entities.get(&object).cloned().unwrap_or_default()
+    }
+
+    /// Upload (once per rig and clip) a library with `clip` decoded for
+    /// `rig`'s skeleton, searched in the rig's packages and then the current
+    /// task's level animation packages. Returns the asset, clip name and
+    /// length.
+    fn animation_library(&self, host: &mut dyn HostServices, session: &mut Session, rig: &RigRef, clip: u32) -> Result<LibraryClip> {
+        let key = (format!("{rig:?}"), clip);
+        if let Some(found) = session.libraries.get(&key) {
+            return found.clone().context("clip not found earlier");
+        }
+        let mut packages: Vec<String> = match rig {
+            RigRef::Player => PLAYER_CLIP_PACKAGES.iter().map(|p| p.to_string()).collect(),
+            RigRef::Npc(k) => session.npc_packages.get(k).cloned().unwrap_or_default(),
+            RigRef::Own(art) => vec![format!("{art}.pak")],
+        };
+        if let Some(plan) = &session.plan {
+            for level in &plan.levels {
+                // `pak22.txt` `actor` lines: the level's animation packages.
+                for actor in session.all_levels.get(level).map(|l| l.actors.as_slice()).unwrap_or_default() {
+                    let p = format!("{actor}.pak");
+                    if !packages.contains(&p) {
+                        packages.push(p);
+                    }
+                }
+            }
+        }
+        let mut result = None;
+        for package in &packages {
+            if !session.actors.exists(package) {
+                continue;
+            }
+            if !session.anim_packages.contains_key(package) {
+                let reader = crysirror_core::service::MemoryAssetReader(read_all(session.actors.open(package)?.as_ref(), PACKAGE_LIMIT)?.into());
+                session.anim_packages.insert(package.clone(), Arc::new(crate::mesh::Loaded::read(&reader, PACKAGE_LIMIT)?));
+            }
+            let loaded = session.anim_packages[package].clone();
+            let Some((name, at)) = crate::anim::items(&loaded).find(|(n, _)| sid(n) == clip) else { continue };
+            let skeleton = match rig {
+                RigRef::Player => session.player_rig.as_ref().and_then(|r| r.as_ref()).map(|(s, _)| s),
+                RigRef::Npc(k) => session.npc_rigs.get(k).and_then(|r| r.as_ref()).map(|(s, _)| s),
+                RigRef::Own(art) => session.own_rigs.get(art),
+            }
+            .context("rig skeleton not loaded")?;
+            let mut skeleton = skeleton.clone();
+            // A clip authored on another rig (the story's player clips name
+            // the `npc-normal-base` hierarchy, the player models the
+            // `proto.pak` rig) plays with that rig's joints; the entity binds
+            // them by joint name.
+            let hierarchy = crate::anim::hierarchy(&loaded, at)?;
+            if hierarchy != skeleton.hash {
+                match Self::skeleton_for(session, hierarchy)? {
+                    Some(other) => skeleton = other,
+                    None => continue,
+                }
+            }
+            let skeleton = &skeleton;
+            let decoded = crate::anim::decode(&loaded, at, name, skeleton.animated)?;
+            let channels = decoded.joints.iter().take(skeleton.names.len()).filter(|j| j.rotation.is_some() || j.translation.is_some() || j.scale.is_some()).count();
+            anyhow::ensure!(channels > 0, "clip {name} animates none of the {} joints (unsupported {:?})", skeleton.names.len(), decoded.unsupported);
+            let seconds = if decoded.frames > 1 { decoded.frames as f32 / decoded.fps.max(1.) } else { 0. };
+            let glb = scene::animation_library(&scene::Rig { skeleton, clips: std::slice::from_ref(&decoded) }).to_glb()?;
+            session.next_model += 1;
+            let asset = host.upload_model(self.client, 0x4e44_0000 + session.next_model, &glb)?;
+            result = Some(LibraryClip { asset: asset.relative().to_string(), name: decoded.name.clone(), seconds, fps: decoded.fps.max(1.), align: decoded.align.clone(), ap_reference: decoded.ap_reference.clone() });
+            break;
+        }
+        session.libraries.insert(key, result.clone());
+        result.with_context(|| format!("clip not in {}", packages.join(", ")))
+    }
+
+    /// The player skeleton from `actor27.psarc/proto.pak` and the clips
+    /// named `wanted` (the controller states' blend-tree clips).
+    fn player_rig(actors: &ArchiveMount, wanted: &HashSet<u32>, mirrored: &HashSet<u32>) -> Result<Option<(crate::skeleton::Skeleton, Vec<crate::anim::Clip>)>> {
         if !actors.exists("proto.pak") {
             return Ok(None);
         }
-        let package = crysirror_core::service::MemoryAssetReader(read_all(actors.open("proto.pak")?.as_ref(), PACKAGE_LIMIT)?.into());
-        let loaded = crate::mesh::Loaded::read(&package, PACKAGE_LIMIT)?;
-        let Some(skeleton) = crate::skeleton::of_package(&loaded)? else { return Ok(None) };
-        let clips = crate::anim::items(&loaded).filter(|(n, _)| PLAYER_CLIPS.contains(n)).map(|(n, at)| crate::anim::decode(&loaded, at, n, skeleton.animated)).collect::<Result<Vec<_>>>()?;
+        let read = |name: &str| -> Result<crate::mesh::Loaded> {
+            let package = crysirror_core::service::MemoryAssetReader(read_all(actors.open(name)?.as_ref(), PACKAGE_LIMIT)?.into());
+            crate::mesh::Loaded::read(&package, PACKAGE_LIMIT)
+        };
+        let Some(skeleton) = crate::skeleton::of_package(&read("proto.pak")?)? else { return Ok(None) };
+        let mut clips = Vec::new();
+        for package in PLAYER_CLIP_PACKAGES {
+            if !actors.exists(package) {
+                continue;
+            }
+            let loaded = read(package)?;
+            for (n, at) in crate::anim::items(&loaded).filter(|(n, _)| wanted.contains(&sid(n))) {
+                if clips.iter().any(|c: &crate::anim::Clip| c.name == n) {
+                    continue;
+                }
+                let clip = crate::anim::decode(&loaded, at, n, skeleton.animated)?;
+                if clip.hierarchy == skeleton.hash {
+                    if mirrored.contains(&sid(n)) {
+                        clips.push(crate::anim::mirror(&clip, &skeleton));
+                    }
+                    clips.push(clip);
+                }
+            }
+        }
         Ok(Some((skeleton, clips)))
     }
 
@@ -1071,21 +2027,47 @@ impl NaughtyDogVm {
                     }
                 }
             }
-            session.stage.log(format!("load region {} scheme {scheme}: {} displayed, {} not displayed", region.name, shown.len(), hidden.len()));
+            session.stage.log(format!("load region {} scheme {scheme}: displayed {shown:?}, not displayed {hidden:?}", region.name));
             plan.regions.push((region.name.clone(), scheme, shown, hidden));
         }
         Ok(())
     }
 
     /// Third-person camera behind and above the player, pulled in front of
-    /// the first surface between the player's head and the camera.
-    fn follow(p: &Player, ground: &Ground) -> serde_json::Value {
+    /// the first surface between the player's head and the camera at once
+    /// and easing back out (2 m/s).
+    fn follow(p: &mut Player, ground: &Ground, seconds: f32) -> serde_json::Value {
         let target = [p.position[0], p.position[1] + 1.5, p.position[2]];
-        let cy = p.view_pitch.cos();
-        let dir = [-p.view_yaw.sin() * cy, -p.view_pitch.sin(), p.view_yaw.cos() * cy];
-        let far = 4.;
-        let want: [f32; 3] = std::array::from_fn(|k| target[k] + dir[k] * far);
-        let d = ground.raycast(target, want).map_or(far, |t| (t * far - 0.25).max(0.3));
+        let far = FOLLOW_DISTANCE;
+        // Blocked closer than 2.5 m (inside rooms or the hanging car), the
+        // camera rises over the player toward the clearest pitch.
+        let free_at = |yaw: f32, pitch: f32| {
+            let cy = pitch.cos();
+            let dir = [-yaw.sin() * cy, -pitch.sin(), yaw.cos() * cy];
+            let want: [f32; 3] = std::array::from_fn(|k| target[k] + dir[k] * far);
+            (dir, ground.raycast(target, want).map_or(far, |t| (t * far - 0.3).max(0.5)))
+        };
+        let (mut dir, mut free) = free_at(p.view_yaw, p.view_pitch);
+        // Then over the shoulders, then rising; the view yaw follows a
+        // sideways choice so the camera does not swing back next frame.
+        if free < 2.5 {
+            let mut best = (0., p.view_pitch);
+            'search: for k in 0..=4 {
+                let pitch = (p.view_pitch - 0.3 * k as f32).max(-1.4);
+                for side in [0., 0.5, -0.5, 1., -1.] {
+                    let (d, f) = free_at(p.view_yaw + side, pitch);
+                    if f > free + 0.25 {
+                        (dir, free, best) = (d, f, (side, pitch));
+                    }
+                    if free >= 2.5 {
+                        break 'search;
+                    }
+                }
+            }
+            p.view_yaw += best.0 * seconds.min(1.) * 2.;
+        }
+        p.view_distance = if free < p.view_distance { free } else { (p.view_distance + 2. * seconds).min(free) };
+        let d = p.view_distance;
         let eye: [f32; 3] = std::array::from_fn(|k| target[k] + dir[k] * d);
         json!({"op": "set_camera", "camera": {"eye": eye, "target": target, "up": [0.0, 1.0, 0.0], "fov_y_degrees": 60.0, "near": 0.1, "far": 20000.0}})
     }
@@ -1139,24 +2121,194 @@ impl NaughtyDogVm {
                 }
             }
             let len = (mv[0] * mv[0] + mv[1] * mv[1]).sqrt();
-            if len > 0. {
-                let speed = if down(b::SHIFT) { 6. } else { 2.5 } * seconds / len;
-                let next = [p.position[0] + mv[0] * speed, p.position[2] + mv[1] * speed];
-                // Step up at most 0.6 m; a missing surface ahead blocks.
-                if let Some(h) = session.ground.height(next[0], next[1], p.position[1] + 0.6) {
-                    if h > p.position[1] - 3. || session.ground.is_empty() {
-                        p.position[0] = next[0];
-                        p.position[2] = next[1];
+            let heading = (len > 0.).then(|| mv[0].atan2(mv[1]));
+            // Ride the platform's motion since the last frame.
+            if let Some((id, before)) = p.platform {
+                if let Some(now) = session.ground.body_transform(id) {
+                    let delta = now * before.inverse();
+                    p.position = delta.transform_point3(glam::Vec3::from_array(p.position)).to_array();
+                    let f = delta.transform_vector3(glam::Vec3::new(p.yaw.sin(), 0., p.yaw.cos()));
+                    let turn = f.x.atan2(f.z) - p.yaw;
+                    if turn.abs() > 1e-6 {
+                        p.yaw += turn;
+                        p.view_yaw -= turn;
+                        if let Some(c) = p.anim.as_mut() {
+                            c.yaw = p.yaw;
+                        }
+                    }
+                    p.platform = Some((id, now));
+                }
+            }
+            let movement = session.game.as_ref().map_or([0; 2], |g| g.rt.inner.movement);
+            let below = session.ground.height(p.position[0], p.position[2], p.position[1] + 0.6);
+            let grounded = p.fall >= 0. && below.is_some_and(|h| h >= p.position[1] - p.fall.max(0.) * seconds - 0.05);
+            let dropped = p.air_top.map_or(0., |top| top - p.position[1]);
+            let ahead = |d: f32| session.ground.height(p.position[0] + p.yaw.sin() * d, p.position[2] + p.yaw.cos() * d, p.position[1] + 0.6);
+            let slope = match (below, ahead(0.5)) {
+                (Some(h0), Some(h1)) if grounded => (h1 - h0) / 0.5,
+                _ => 0.,
+            };
+            // Hanging: sideways input along the edge, forward input over a
+            // standable top (within 0.35 m of the edge height, 0.45 m in),
+            // the drop key (C). Airborne: an edge in reach of the hands.
+            let mode = p.anim.as_ref().zip(session.anim_table.as_ref()).map_or(crate::player::Mode::Ground, |(a, t)| a.mode(t));
+            let facing = glam::Vec3::new(p.yaw.sin(), 0., p.yaw.cos());
+            let right = glam::Vec3::new(-facing.z, 0., facing.x);
+            let stick = if len > 0. { glam::Vec3::new(mv[0], 0., mv[1]) / len } else { glam::Vec3::ZERO };
+            let (mut lateral, mut climb, mut release) = (0., false, false);
+            let mut leap_to = None;
+            p.regrab = (p.regrab - seconds).max(0.);
+            if mode == crate::player::Mode::Hang {
+                if let Some(edge) = p.grip.and_then(|g| session.ground.edge(g.body, g.edge).map(|e| (g, e))).map(|(g, e)| edge_frame(&e, g.s)) {
+                    let probe = edge.transform_point3(glam::Vec3::new(0., 0., 0.45));
+                    let top = session.ground.height(probe.x, probe.z, probe.y + 0.35).filter(|h| (h - probe.y).abs() < 0.35);
+                    lateral = stick.dot(right);
+                    climb = stick.dot(facing) > 0.7 && top.is_some();
+                    // Jump: to an edge above, or to the side the stick
+                    // points.
+                    if input.buttons_pressed & b::SPACE != 0 {
+                        let toward = if lateral.abs() > 0.5 { right * lateral.signum() } else { glam::Vec3::Y };
+                        leap_to = p.grip.and_then(|g| Self::leap_target(&session.ground, g, toward));
                     }
                 }
-                p.yaw = mv[0].atan2(mv[1]);
+                release = input.buttons_pressed & b::KEY_C != 0 || p.grip.is_some_and(|g| session.ground.edge(g.body, g.edge).is_none());
             }
-            match session.ground.height(p.position[0], p.position[2], p.position[1] + 0.6) {
-                Some(h) if h >= p.position[1] - p.fall * seconds - 0.05 => {
+            let reach = glam::Vec3::from_array(p.position) + glam::Quat::from_rotation_y(p.yaw) * HANG_REACH;
+            let candidate = if mode == crate::player::Mode::Ground && p.regrab <= 0. && p.fall > -1. && (p.air_top.is_some() || p.fall > 0.) {
+                session
+                    .ground
+                    .edges_near(reach, 0.45)
+                    .into_iter()
+                    .filter(|(_, e, _)| glam::Vec3::new(-e.n1.x, 0., -e.n1.z).normalize_or_zero().dot(facing) > 0.3)
+                    .min_by(|a, b| crate::ground::segment_distance(reach, a.1.p0, a.1.p1).total_cmp(&crate::ground::segment_distance(reach, b.1.p0, b.1.p1)))
+            } else {
+                None
+            };
+            let mut ground_speed = None;
+            let mut step_mode = mode;
+            let mut step_root = None;
+            if let (Some(anim), Some(table), Some(graph), Some(id)) = (p.anim.as_mut(), session.anim_table.as_ref(), session.anim_graph.as_mut(), p.entity) {
+                let running = down(b::SHIFT);
+                let wanted = movement[usize::from(running)];
+                let wanted = if wanted == 0 { sid(if running { "run" } else { "walk" }) } else { wanted };
+                let frame = crate::player::Frame {
+                    heading,
+                    jump: input.buttons_pressed & b::SPACE != 0 && p.controls,
+                    grounded,
+                    dropped,
+                    slope,
+                    movement: graph.movement_index(wanted).or_else(|| graph.movement_index(sid("run"))).unwrap_or(0),
+                    weapon: graph.weapon_index(sid("no-weapon")).unwrap_or(1),
+                    grab: candidate.is_some(),
+                    lateral,
+                    climb,
+                    drop: release,
+                    leap: leap_to.is_some(),
+                    seconds,
+                };
+                match anim.step(graph, table, &session.player_clips, &frame) {
+                    Ok(step) => {
+                        step_mode = step.mode;
+                        step_root = step.root.clone();
+                        if let Some(state) = &step.state {
+                            session.stage.log(format!("player state {state} at {:?} yaw {:.2}: {}", p.position.map(|v| (v * 100.).round() / 100.), anim.yaw, step.layers.iter().map(|l| format!("{}×{:.2}", l.clip, l.weight)).collect::<Vec<_>>().join(" ")));
+                        }
+                        if let Some(lift) = step.lift {
+                            p.fall = -lift;
+                        }
+                        ground_speed = Some(step.speed);
+                        p.yaw = anim.yaw;
+                        let source = session.rig_libraries.get(&format!("{:?}", RigRef::Player));
+                        let layers: Vec<_> = step.layers.iter().map(|l| json!({"clip": l.clip, "source": source, "time": l.time, "speed": 0.0, "weight": l.weight, "target_weight": l.weight, "looping": true, "additive": l.additive})).collect();
+                        world.push(json!({"op": "set_animation", "id": id, "animation": {"layers": layers}}));
+                    }
+                    Err(e) => session.stage.log(format!("player animation: {e:#}")),
+                }
+            }
+            // A jump between edges eases the root from where it started
+            // to the target edge's hang (over `LEAP_SECONDS`).
+            if step_mode == crate::player::Mode::Leap {
+                if p.leap.is_none() {
+                    p.leap = leap_to.map(|g| (glam::Vec3::from_array(p.position), g, 0.));
+                }
+                if let Some((from, to, t)) = p.leap.as_mut() {
+                    *t += seconds;
+                    if let Some(edge) = session.ground.edge(to.body, to.edge) {
+                        let target = edge_frame(&edge, to.s) * glam::Mat4::from_translation(HANG_REACH).inverse();
+                        let x = (*t / LEAP_SECONDS).clamp(0., 1.);
+                        let ease = x * x * (3. - 2. * x);
+                        p.position = from.lerp(target.to_scale_rotation_translation().2, ease).to_array();
+                    }
+                }
+            } else if let Some((_, to, _)) = p.leap.take() {
+                p.grip = Some(to);
+            }
+            if step_mode == crate::player::Mode::Ground && p.grip.is_some() && mode == crate::player::Mode::Hang {
+                p.regrab = 0.4;
+            }
+            // On an edge the root follows the grip, not the ground.
+            if step_mode != crate::player::Mode::Ground && step_mode != crate::player::Mode::Leap {
+                if p.grip.is_none() {
+                    // A grab (or a hang without a grip): the nearest edge
+                    // in reach.
+                    let found = candidate.or_else(|| session.ground.edges_near(reach, 0.6).into_iter().min_by(|a, b| crate::ground::segment_distance(reach, a.1.p0, a.1.p1).total_cmp(&crate::ground::segment_distance(reach, b.1.p0, b.1.p1))));
+                    p.grip = found.map(|(edge, e, body)| Grip { body, edge, s: (reach - e.p0).dot((e.p1 - e.p0).normalize_or_zero()).clamp(0., (e.p1 - e.p0).length()), climb: None });
+                }
+                Self::follow_grip(p, &session.ground, step_mode, step_root.as_ref());
+            } else if p.grip.take().is_some() {
+                p.air_top = None;
+            }
+            let on_edge = step_mode != crate::player::Mode::Ground && (p.grip.is_some() || p.leap.is_some());
+            let speed = match ground_speed {
+                _ if on_edge => 0.,
+                Some(v) => v,
+                None if len > 0. => {
+                    p.yaw = mv[0].atan2(mv[1]);
+                    if down(b::SHIFT) { 6. } else { 2.5 }
+                }
+                None => 0.,
+            };
+            if speed > 0.01 {
+                let step = speed * seconds;
+                let (dx, dz) = (p.yaw.sin() * step, p.yaw.cos() * step);
+                // Walls stop the player (rays at knee and chest height,
+                // 0.3 m ahead); blocked moves slide along one axis. Step up
+                // at most 0.6 m; a missing surface ahead blocks.
+                for (mx, mz) in [(dx, dz), (dx, 0.), (0., dz)] {
+                    if mx == 0. && mz == 0. {
+                        continue;
+                    }
+                    let next = [p.position[0] + mx, p.position[2] + mz];
+                    let len = (mx * mx + mz * mz).sqrt();
+                    let reach = (len + 0.3) / len;
+                    let wall = [0.4, 1.2].iter().any(|h| {
+                        let from = [p.position[0], p.position[1] + h, p.position[2]];
+                        session.ground.raycast(from, [from[0] + mx * reach, from[1], from[2] + mz * reach]).is_some()
+                    });
+                    let floor = session.ground.height(next[0], next[1], p.position[1] + 0.6);
+                    if !wall && (floor.is_some_and(|h| h > p.position[1] - 3. || !grounded) || session.ground.is_empty()) {
+                        p.position[0] = next[0];
+                        p.position[2] = next[1];
+                        break;
+                    }
+                }
+            }
+            let support = if on_edge { None } else { session.ground.support(p.position[0], p.position[2], p.position[1] + 0.6) };
+            p.platform = None;
+            match support.map(|(h, _)| h) {
+                Some(h) if p.fall >= 0. && h >= p.position[1] - p.fall * seconds - 0.05 => {
                     p.position[1] = h;
                     p.fall = 0.;
+                    p.air_top = None;
+                    p.platform = support.and_then(|(_, body)| body).and_then(|b| session.ground.body_transform(b).map(|m| (b, m)));
                 }
+                // Climbing and hanging are not implemented: standing still
+                // above a drop of more than 8 m (the hanging car at the
+                // start of `train-wreck-climb`) holds the player in place.
+                Some(h) if p.fall == 0. && p.air_top.is_none() && p.position[1] - h > 8. => {}
                 Some(_) => {
+                    let top = p.air_top.get_or_insert(p.position[1]);
+                    *top = top.max(p.position[1]);
                     p.fall = (p.fall + 9.8 * seconds).min(30.);
                     p.position[1] -= p.fall * seconds;
                 }
@@ -1165,7 +2317,85 @@ impl NaughtyDogVm {
             if let Some(id) = p.entity {
                 world.push(json!({"op": "set_transform", "id": id, "transform": {"translation": p.position, "rotation_degrees": [0.0, p.yaw.to_degrees(), 0.0], "scale": [1.0, 1.0, 1.0]}}));
             }
-            world.push(Self::follow(p, &session.ground));
+            // The camera drifts behind a player moving away from it unless
+            // the view keys turn it.
+            if heading.is_some() && !(down(b::LEFT) || down(b::RIGHT)) {
+                let behind = std::f32::consts::PI - p.yaw;
+                let d = (behind - p.view_yaw + std::f32::consts::PI).rem_euclid(2. * std::f32::consts::PI) - std::f32::consts::PI;
+                if d.abs() < 2. {
+                    p.view_yaw += d * (1.5 * seconds).min(1.);
+                }
+            }
+            // A camera the scripts enabled (`cam-…` spawners) replaces the
+            // follow camera.
+            // Cameras parented to a moved object follow its pose.
+            let scripted = session.stage.camera.and_then(|c| {
+                let mut cam = session.stage.spawners.get(&c)?.clone();
+                if let Some(m) = session.stage.poses.get(&c) {
+                    let (_, r, t) = m.to_scale_rotation_translation();
+                    (cam.position, cam.rotation) = (t.to_array(), r.to_array());
+                }
+                Some(cam)
+            });
+            let mut camera = match scripted.as_ref() {
+                Some(cam) => Self::spawner_camera(cam),
+                None => Self::follow(p, &session.ground, seconds),
+            };
+            Self::animate_camera(session, &mut camera);
+            let eye = camera["camera"]["eye"].as_array().map(|a| [0, 1, 2].map(|k| a.get(k).and_then(|v| v.as_f64()).unwrap_or(0.) as f32));
+            // Crossing into another render-settings region changes the
+            // environment.
+            let before = Self::render_settings_name(session);
+            session.stage.camera_eye = eye;
+            if Self::render_settings_name(session) != before {
+                if let Some(env) = Self::level_environment(session) {
+                    world.push(env);
+                }
+            }
+            world.push(camera);
+        }
+        session.stage.player_locator = session.player.as_ref().map(|p| (p.position, glam::Quat::from_rotation_y(p.yaw).to_array()));
+        session.stage.player_support = session.player.as_ref().and_then(|p| p.platform.map(|(b, _)| b).or(p.grip.and_then(|g| g.body)));
+        if let Some((graph, table)) = session.npc_anim.as_mut() {
+            for npc in &mut session.npcs {
+                let Some(clips) = session.npc_clips.get(&npc.rig) else { continue };
+                let before = npc.animator.machine.state;
+                let sets = &session.anim_sets;
+                let chain = &npc.sets;
+                match npc.animator.present(graph, table, clips, &|c| sets.resolve(chain, c), npc_inputs(), before, seconds) {
+                    Ok((layers, _)) => {
+                        let source = session.rig_libraries.get(&format!("{:?}", RigRef::Npc(npc.rig.clone())));
+                        let layers: Vec<_> = layers.iter().map(|l| json!({"clip": l.clip, "source": source, "time": l.time, "speed": 0.0, "weight": l.weight, "target_weight": l.weight, "looping": true, "additive": l.additive})).collect();
+                        world.push(json!({"op": "set_animation", "id": npc.entity, "animation": {"layers": layers}}));
+                    }
+                    Err(e) => session.stage.log(format!("npc animation: {e:#}")),
+                }
+            }
+        }
+        // Region enter/exit scripts for the player (`sub_115828`).
+        if session.player.is_some() {
+            let player = sid("player");
+            let now: HashSet<usize> = (0..session.stage.regions.len()).filter(|i| session.stage.holds(&session.stage.regions[*i].0, player)).collect();
+            let mut runs = Vec::new();
+            for i in now.difference(&session.stage.player_regions) {
+                let (r, enter, _) = &session.stage.regions[*i];
+                runs.push((format!("enter {}", r.name), *enter));
+            }
+            for i in session.stage.player_regions.difference(&now) {
+                let (r, _, exit) = &session.stage.regions[*i];
+                runs.push((format!("exit {}", r.name), *exit));
+            }
+            session.stage.player_regions = now;
+            if let Some(game) = session.game.as_mut() {
+                for (what, lambda) in runs {
+                    session.stage.log(format!("region {what}"));
+                    if let Some(lambda) = lambda {
+                        if let Err(e) = game.rt.run_lambda(&mut session.stage, lambda, &[]) {
+                            session.stage.log(format!("region {what}: {e:#}"));
+                        }
+                    }
+                }
+            }
         }
         if let (Some(game), Some(modules)) = (session.game.as_mut(), session.modules.as_ref()) {
             if session.script_error.is_none() {
@@ -1173,6 +2403,14 @@ impl NaughtyDogVm {
                 if let Err(e) = ticked {
                     session.script_error = Some(format!("{e:#}"));
                 }
+            }
+        }
+        self.script_animations(host, session, &mut world);
+        // Props collide while spawned.
+        for (name, ids) in &session.stage.entities {
+            let on = session.stage.visible.contains(name);
+            for id in ids {
+                session.ground.enable_body(*id, on);
             }
         }
         world.append(&mut session.stage.ops);
@@ -1282,41 +2520,146 @@ impl NaughtyDogVm {
             return Ok(());
         }
         scene::place_art_group(&mut meshes);
-        // Skinned models without their own skeleton are player models bound
-        // to the `proto.pak` rig.
+        // Skinned models without their own skeleton bind to their
+        // character's skeleton package (`spawn-character.bin`): the player
+        // models to the `proto.pak` rig, NPCs to their `*-base` package.
         let skinned = meshes.iter().any(|m| m.skinned);
         let own = crate::skeleton::of_package(&loaded)?;
-        if skinned && own.is_none() && session.player_rig.is_none() {
-            session.player_rig = Some(Self::player_rig(&session.actors).unwrap_or_else(|e| {
+        let binding = if skinned && own.is_none() { crate::characters::rig_of(&session.characters, art) } else { None };
+        if matches!(binding, Some((None, _))) && session.player_rig.is_none() {
+            let mut wanted: HashSet<u32> = [sid("idle")].into();
+            // Clips of states whose mirror lambda holds are also built
+            // mirrored.
+            let mut mirrored: HashSet<u32> = HashSet::new();
+            if let (Some(graph), Some(table)) = (session.anim_graph.as_mut(), session.anim_table.as_ref()) {
+                for state in crate::player::STATES {
+                    if let Some(s) = table.get(sid(state)) {
+                        wanted.extend(graph.clips(s.tree));
+                        if graph.mirrored(s.mirror) {
+                            mirrored.extend(graph.clips(s.tree));
+                        }
+                    }
+                }
+            }
+            session.player_rig = Some(Self::player_rig(&session.actors, &wanted, &mirrored).unwrap_or_else(|e| {
                 session.stage.log(format!("player rig: {e:#}"));
                 None
             }));
+            if let Some(Some((_, clips))) = &session.player_rig {
+                session.player_clips = clip_infos(clips);
+                session.stage.log(format!("player rig: {} of {} blend-tree clips", clips.len(), wanted.len()));
+            }
         }
-        let rig = match (&own, &session.player_rig) {
-            (None, Some(Some((skeleton, clips)))) if skinned => Some(scene::Rig { skeleton, clips }),
+        // An NPC's clips are its anim set's mapping of the NPC states'
+        // tree leaves (`*NAME-anim-set*` by art group, its dash prefixes, then
+        // character: `flynn-heist`, `flynn`).
+        let character = crate::characters::character_of(&session.characters, art).map(|c| c.name.clone());
+        let prefixes: Vec<&str> = art.match_indices('-').map(|(i, _)| &art[..i]).rev().collect();
+        let npc_sets = session.anim_sets.sets_for([art].into_iter().chain(prefixes).chain(character.as_deref()));
+        let npc_key = binding.as_ref().and_then(|b| b.0.as_ref()).map(|base| format!("{base}:{:08x?}", npc_sets));
+        if let (Some((Some(base), anims)), Some(key)) = (&binding, &npc_key) {
+            if !session.npc_rigs.contains_key(key) {
+                let mut wanted = HashSet::new();
+                if let Some((graph, table)) = &session.npc_anim {
+                    for state in NPC_STATES {
+                        if let Some(s) = table.get(sid(state)) {
+                            wanted.extend(graph.clips(s.tree).into_iter().map(|c| session.anim_sets.resolve(&npc_sets, c)));
+                        }
+                    }
+                }
+                let rig = Self::npc_rig(&session.actors, base, anims, &wanted).unwrap_or_else(|e| {
+                    session.stage.log(format!("rig {base}: {e:#}"));
+                    None
+                });
+                if let Some((_, clips)) = &rig {
+                    session.npc_clips.insert(key.clone(), clip_infos(clips));
+                }
+                session.npc_packages.insert(key.clone(), std::iter::once(format!("{base}.pak")).chain(anims.iter().map(|a| format!("{a}.pak"))).collect());
+                session.npc_rigs.insert(key.clone(), rig);
+            }
+        }
+        if let (Some(skeleton), true) = (&own, skinned) {
+            session.own_rigs.insert(art.to_owned(), skeleton.clone());
+        }
+        let rig_ref = match (&binding, &own) {
+            (Some((None, _)), _) => Some(RigRef::Player),
+            (Some((Some(_), _)), _) => npc_key.clone().map(RigRef::Npc),
+            (None, Some(_)) if skinned => Some(RigRef::Own(art.to_owned())),
             _ => None,
         };
+        let rig = match (&binding, &session.player_rig) {
+            (Some((None, _)), Some(Some((skeleton, clips)))) => Some(scene::Rig { skeleton, clips }),
+            (Some((Some(_), _)), _) => npc_key.as_ref().and_then(|k| session.npc_rigs.get(k)).and_then(|r| r.as_ref()).map(|(skeleton, clips)| scene::Rig { skeleton, clips }),
+            // Skinned art groups with their own skeleton (doors, props)
+            // get its joints for script animations.
+            _ => own.as_ref().filter(|_| skinned).map(|skeleton| scene::Rig { skeleton, clips: &[] }),
+        };
         let idle = rig.as_ref().and_then(|r| r.clips.iter().find(|c| c.name == "idle")).map(|c| c.name.clone());
+        // The rig's clips go to a shared library once; the model gets the
+        // joints and skin only.
+        let library = match (&rig, &rig_ref) {
+            (Some(r), Some(rr)) if !r.clips.is_empty() => {
+                let key = format!("{rr:?}");
+                if !session.rig_libraries.contains_key(&key) {
+                    let glb = scene::animation_library(r).to_glb()?;
+                    session.next_model += 1;
+                    let asset = host.upload_model(self.client, 0x4e44_0000 + session.next_model, &glb)?;
+                    session.stage.log(format!("rig library {key}: {} clips, {} KiB", r.clips.len(), glb.len() / 1024));
+                    session.rig_libraries.insert(key.clone(), asset.relative().to_string());
+                }
+                session.rig_libraries.get(&key).cloned()
+            }
+            _ => None,
+        };
+        let rig = rig.map(|r| scene::Rig { skeleton: r.skeleton, clips: &[] });
+        if skinned && own.is_none() {
+            session.stage.log(format!("art {art}: rig {:?}, {} clips, anim set {:?}", binding.as_ref().map(|b| b.0.clone().unwrap_or_else(|| "proto".into())), rig.as_ref().map_or(0, |r| r.clips.len()), npc_sets.iter().map(|s| format!("{s:08x}")).collect::<Vec<_>>()));
+        }
         let glb = scene::document_lit(art, &meshes, package.as_ref(), &directory, MAX_TEXTURE, None, rig.as_ref())?.to_glb()?;
         session.next_model += 1;
         let asset = host.upload_model(self.client, 0x4e44_0000 + session.next_model, &glb)?;
         let triangles: usize = meshes.iter().flat_map(|m| &m.fragments).map(|f| f.triangles.len()).sum();
         let task = session.game.is_some();
+        // Native prop collision in the art-group frame (bind pose of the
+        // collision joints) and its climb edges.
+        let bind = |j: usize| own.as_ref().and_then(|s| s.inverse_bind.get(j)).map(|m| glam::Mat4::from_cols_array(m).inverse());
+        let collision = if task && binding.is_none() {
+            crate::collision::prop_objects(&loaded, &bind).unwrap_or_else(|e| {
+                session.stage.log(format!("art {art}: collision: {e:#}"));
+                Vec::new()
+            })
+        } else {
+            Vec::new()
+        };
+        let collision_triangles: Vec<_> = collision.iter().flat_map(|o| o.triangles.iter().copied()).collect();
+        let collision_edges: Vec<_> = collision.iter().flat_map(|o| o.features.edges.iter().copied()).collect();
         for s in spawners {
             session.next_model += 1;
             let id = 0x100 + session.next_model;
             let q = glam::Quat::from_array(s.rotation).normalize();
             let (x, y, z) = q.to_euler(glam::EulerRot::XYZ);
             let visible = !task || s.flags & NO_AUTO_BIRTH == 0;
-            if task && visible {
+            // Props collide (as movable bodies); characters do not.
+            if task && binding.is_none() {
                 let m = glam::Mat4::from_rotation_translation(q, glam::Vec3::from_array(s.position));
-                session.ground.add_placed(&meshes, Some(m.to_cols_array()));
+                if collision_triangles.is_empty() {
+                    session.ground.add_body(id, &meshes, m.to_cols_array(), visible);
+                } else {
+                    session.ground.add_body_collision(id, &collision_triangles, &collision_edges, m.to_cols_array(), visible);
+                }
             }
             world.push(json!({"op": "spawn", "entity": {"id": id, "name": format!("{art}:{}", s.name), "visible": visible, "transform": {"translation": s.position, "rotation_degrees": [x.to_degrees(), y.to_degrees(), z.to_degrees()], "scale": [1.0, 1.0, 1.0]}, "geometry": {"kind": "scene", "asset": asset.relative()}}}));
-            if let Some(clip) = &idle {
-                world.push(json!({"op": "set_animation", "id": id, "animation": {"layers": [{"clip": clip, "looping": true}]}}));
+            let driven = npc_key.as_ref().filter(|k| session.npc_clips.get(*k).is_some_and(|c| !c.is_empty()) && session.npc_anim.is_some());
+            if let Some(key) = driven {
+                let machine = crate::anim_state::Machine { state: sid(NPC_STATES[0]), time: 0., previous: None, fade: 0. };
+                session.npcs.push(Npc { entity: id, animator: crate::player::Animator::new(machine), sets: npc_sets.clone(), rig: key.clone() });
+            } else if let (Some(clip), Some(source)) = (&idle, &library) {
+                world.push(json!({"op": "set_animation", "id": id, "animation": {"layers": [{"clip": clip, "source": source, "looping": true}]}}));
             }
             session.entities.push((id, asset.clone()));
+            if let Some(r) = &rig_ref {
+                session.entity_rigs.insert(id, r.clone());
+            }
             let name = sid(&s.name);
             session.stage.entities.entry(name).or_default().push(id);
             if visible {
@@ -1442,4 +2785,75 @@ impl crysirror_runtime::runtime::VmFactory for Factory {
         ensure!(spec.program.is_empty(), "the Naughty Dog player executes no data actions");
         Ok(Box::new(NaughtyDogVm::new(client, serde_json::from_value(spec.config.clone())?)?))
     }
+}
+
+/// What the animation controllers need of decoded clips, by name `StringId`.
+fn clip_infos(clips: &[crate::anim::Clip]) -> HashMap<u32, crate::player::ClipInfo> {
+    clips
+        .iter()
+        .map(|c| {
+            // The action-pack reference in clip space, `align(0) ·
+            // apReference(0)`; clips without one store zeros.
+            let ap = match (c.align.first(), c.ap_reference.first()) {
+                (Some(&(at, ar)), Some(&(pt, pr))) if pt.length_squared() > 1e-8 => Some((at + ar * pt, ar * pr)),
+                _ => None,
+            };
+            let info = crate::player::ClipInfo { name: c.name.clone(), duration: if c.frames > 1 { c.frames as f32 / c.fps.max(1.) } else { 0. }, speed: c.root_speed, additive: is_additive(&c.name), fps: c.fps, align: c.align.clone(), ap };
+            (sid(&c.name), info)
+        })
+        .collect()
+}
+
+/// A grip on a climb edge: the edge (a body's or the level's), the grab
+/// point's distance from `p0`, and the edge frame a climb began from.
+#[derive(Clone, Copy, Debug)]
+struct Grip {
+    body: Option<u32>,
+    edge: usize,
+    s: f32,
+    climb: Option<glam::Mat4>,
+}
+
+/// The frame of an edge at `s` metres from `p0`: at the grab point, +z
+/// into the wall (against the wall normal `n1`), +y up.
+fn edge_frame(e: &crate::collision::Edge, s: f32) -> glam::Mat4 {
+    let d = (e.p1 - e.p0).normalize_or_zero();
+    let mut f = glam::Vec3::new(-e.n1.x, 0., -e.n1.z);
+    if f.length_squared() < 1e-6 {
+        f = d.cross(glam::Vec3::Y);
+    }
+    let f = f.normalize_or_zero();
+    glam::Mat4::from_rotation_translation(glam::Quat::from_rotation_y(f.x.atan2(f.z)), e.p0 + d * s)
+}
+
+/// Auto-exposure compensation (stops) under a render-settings record:
+/// the menu temple matches the original title screen at 0.46 and the
+/// prologue's earlier adaptation used 0.5.
+const EXPOSURE_CALIBRATION: f32 = 0.5;
+
+/// Scale of the environment ambient for meshes without baked probes
+/// (instanced meshes, characters), relative to the record's
+/// `ambient-scale` (calibrated with [`EXPOSURE_CALIBRATION`]).
+const UNBAKED_AMBIENT: f32 = 0.25;
+
+/// Seconds a jump between edges takes to move the root (the
+/// `ledge-jump-up-long` begin, mid and end clips last about 1.2 s).
+const LEAP_SECONDS: f32 = 0.9;
+
+/// The root of the default hang (`ledge-grab-idle-hurt`): the edge 1.53 m
+/// above and 0.5 m ahead.
+const HANG_REACH: glam::Vec3 = glam::Vec3::new(-0.046, 1.525, 0.5);
+
+/// Additive clips carry an `add` name segment (`idle-base-big-add`,
+/// `look-add--up-down`, `ef-walk-add-look--up-down`); their channels are
+/// local deltas.
+fn is_additive(name: &str) -> bool {
+    name.split('-').any(|p| p == "add")
+}
+
+/// NPC tree inputs without AI: the look (info +140 left–right, +144
+/// up–down) and aim (+92, +96) sweeps the phase lambdas read sit at their
+/// centre phase.
+fn npc_inputs() -> crate::anim_tree::Inputs {
+    crate::anim_tree::Inputs { info: vec![(92, 0.5), (96, 0.5), (140, 0.5), (144, 0.5)], ..Default::default() }
 }

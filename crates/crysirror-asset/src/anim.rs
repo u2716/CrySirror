@@ -95,12 +95,17 @@ pub struct PoseLayer<C> {
     /// layers take their (normalized, at most 1) weight first and lower
     /// layers share the remainder.
     pub layer: u32,
+    /// The clip holds local deltas applied on top of the blended pose:
+    /// per animated node, rotation `base · slerp(I, delta, w)`, translation
+    /// `base + w · delta`, scale `base · lerp(1, delta, w)`. Additive
+    /// layers take no part in the weight normalisation of the others.
+    pub additive: bool,
 }
 
 /// Blend looping layer-0 clips (see [`local_pose_layered`]).
 pub fn local_pose(model: &PbrModel, layers: &[(&Clip, f32, f32)]) -> Vec<Trs> {
     let layers: Vec<PoseLayer<&Clip>> =
-        layers.iter().map(|&(clip, time, weight)| PoseLayer { clip, time, weight, looping: true, layer: 0 }).collect();
+        layers.iter().map(|&(clip, time, weight)| PoseLayer { clip, time, weight, looping: true, layer: 0, additive: false }).collect();
     local_pose_layered(model, &layers)
 }
 
@@ -109,8 +114,44 @@ pub fn local_pose(model: &PbrModel, layers: &[(&Clip, f32, f32)]) -> Vec<Trs> {
 /// nodes it has channels for; per node, layers are taken from the highest
 /// priority down, each normalized when its weights exceed 1, until the
 /// weight is used up; the result is normalized. Nodes no clip animates keep
-/// their rest transform.
+/// their rest transform. Additive layers then apply their deltas (see
+/// [`PoseLayer::additive`]).
 pub fn local_pose_layered(model: &PbrModel, layers: &[PoseLayer<&Clip>]) -> Vec<Trs> {
+    let (additive, base): (Vec<_>, Vec<_>) = layers.iter().cloned().partition(|l| l.additive);
+    let mut pose = blend_layers(model, &base);
+    for l in additive.iter().filter(|l| l.weight > 1e-6) {
+        let w = l.weight.min(1.);
+        let mut delta: Vec<Trs> = model.nodes.iter().map(|n| n.rest).collect();
+        sample_clip(model, l.clip, clip_time(l), &mut delta);
+        let mut animated = vec![false; pose.len()];
+        for c in &l.clip.channels {
+            if let Some(a) = animated.get_mut(c.node) {
+                *a = true;
+            }
+        }
+        for (node, p) in pose.iter_mut().enumerate().filter(|(n, _)| animated[*n]) {
+            let d = delta[node];
+            p.rotation = (p.rotation * Quat::IDENTITY.slerp(d.rotation, w)).normalize();
+            p.translation += d.translation * w;
+            p.scale *= Vec3::ONE.lerp(d.scale, w);
+        }
+    }
+    pose
+}
+
+fn clip_time<C>(l: &PoseLayer<C>) -> f32
+where
+    C: std::ops::Deref<Target = Clip>,
+{
+    let d = l.clip.duration;
+    if d > 0. {
+        if l.looping { l.time.rem_euclid(d) } else { l.time.clamp(0., d) }
+    } else {
+        0.
+    }
+}
+
+fn blend_layers(model: &PbrModel, layers: &[PoseLayer<&Clip>]) -> Vec<Trs> {
     let rest: Vec<Trs> = model.nodes.iter().map(|n| n.rest).collect();
     if layers.iter().all(|l| l.weight <= 1e-6) {
         return rest;
@@ -120,13 +161,7 @@ pub fn local_pose_layered(model: &PbrModel, layers: &[PoseLayer<&Clip>]) -> Vec<
     for l in layers {
         let mut p = rest.clone();
         let mut mask = vec![false; n];
-        let d = l.clip.duration;
-        let t = if d > 0. {
-            if l.looping { l.time.rem_euclid(d) } else { l.time.clamp(0., d) }
-        } else {
-            0.
-        };
-        sample_clip(model, l.clip, t, &mut p);
+        sample_clip(model, l.clip, clip_time(l), &mut p);
         for c in &l.clip.channels {
             if let Some(m) = mask.get_mut(c.node) {
                 *m = true;
@@ -404,6 +439,24 @@ mod tests {
     }
 
     #[test]
+    fn additive_layers_add_deltas_without_normalising() {
+        let m = two_bone();
+        let bend = &m.animations[0];
+        let layer = |time: f32, weight: f32, additive: bool| PoseLayer { clip: bend, time, weight, looping: false, layer: 0, additive };
+        // Base at 45 degrees plus half of a 90-degree delta: 90 degrees.
+        let local = local_pose_layered(&m, &[layer(0.5, 1., false), layer(1., 0.5, true)]);
+        let expected = Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
+        assert!(local[0].rotation.abs_diff_eq(expected, 1e-4), "{:?}", local[0].rotation);
+        // The additive layer leaves the base weights alone and nodes its
+        // clip does not animate keep their pose.
+        let base = local_pose_layered(&m, &[layer(0.5, 1., false)]);
+        assert_eq!(local[1], base[1]);
+        // Additive only: applied to the rest pose.
+        let only = local_pose_layered(&m, &[layer(1., 1., true)]);
+        assert!(only[0].rotation.abs_diff_eq(expected, 1e-4));
+    }
+
+    #[test]
     fn retargeted_clips_follow_and_overrides_bind_by_name() {
         let library = two_bone();
         // A part: different node order, an extra node, the same bone names.
@@ -490,7 +543,7 @@ pub fn local_poses_parallel(
                     cancel.check()?;
                     let bound: Vec<PoseLayer<&Clip>> = layers
                         .iter()
-                        .map(|l| PoseLayer { clip: l.clip.as_ref(), time: l.time, weight: l.weight, looping: l.looping, layer: l.layer })
+                        .map(|l| PoseLayer { clip: l.clip.as_ref(), time: l.time, weight: l.weight, looping: l.looping, layer: l.layer, additive: l.additive })
                         .collect();
                     Ok(local_pose_layered(&model, &bound))
                 })

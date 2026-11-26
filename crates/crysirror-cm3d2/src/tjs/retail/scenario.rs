@@ -121,6 +121,10 @@ impl Candidates {
         let mut update = |b| if and { ok &= b } else { ok |= b };
         let mut first = true;
         for token in expr.split(sep) {
+            if col == 4 {
+                update((token == "昼") == (s.player.flag("時間帯") != 3));
+                continue;
+            }
             if col == 12 {
                 let t = s.retail.table("facility_material.nei")?;
                 let mid = (1..t.rows)
@@ -143,7 +147,7 @@ impl Candidates {
                 let owns = if let Some(fid) = fid {
                     let has = facility::built(s, &t, fid);
                     has && level.is_none_or(|v| {
-                        s.retail.facility_levels.get(&fid).copied().unwrap_or(1) >= v
+                        s.retail.facility_exp.get(&fid).map_or(1, |xp| xp.level) >= v
                     })
                 } else {
                     false
@@ -288,6 +292,173 @@ impl Candidates {
     }
 }
 
+fn evaluate(
+    s: &mut TjsState,
+    c: &Catalog,
+    r: usize,
+    important: bool,
+) -> Result<Option<Candidates>> {
+    let id = c.table.int(0, r);
+    let mut candidates = Candidates {
+        maids: BTreeSet::new(),
+        fixed: s.retail.events.fixed.contains(&id),
+        touched: false,
+    };
+    let mut had_maids = false;
+    let mut playable = !important && !(3..=13).any(|col| c.table.exists(col, r));
+    for col in (3..=13).filter(|&col| (!important || col != 4) && c.table.exists(col, r)) {
+        let before = candidates.maids.clone();
+        playable = candidates.column(s, c, id, col, &c.table.string(col, r))?;
+        if !playable {
+            break;
+        }
+        if had_maids && candidates.touched {
+            candidates.maids.retain(|i| before.contains(i));
+        }
+        if candidates.touched && candidates.maids.is_empty() {
+            playable = false;
+            break;
+        }
+        had_maids |= !candidates.maids.is_empty();
+    }
+    if candidates.fixed {
+        s.retail.events.fixed.insert(id);
+    }
+    let enough = if candidates.fixed {
+        !candidates.maids.is_empty()
+    } else {
+        c.table.int(17, r) <= candidates.maids.len() as i32
+            || !(3..=13).any(|col| c.table.exists(col, r))
+    };
+    Ok((playable && enough).then_some(candidates))
+}
+
+#[derive(Debug)]
+pub(crate) struct Selection {
+    pub id: i32,
+    pub title: String,
+    pub contents: String,
+    pub icon: String,
+    pub conditions: Vec<String>,
+    pub maids: Vec<usize>,
+    pub fixed: bool,
+    script: String,
+    label: String,
+}
+pub(crate) fn selections(s: &mut TjsState) -> Result<Vec<Selection>> {
+    let c = Catalog::load(&mut s.retail)?;
+    let mut result = Vec::new();
+    for r in (1..c.table.rows).filter(|&r| c.table.exists(0, r)) {
+        let id = c.table.int(0, r);
+        if !c.ids.contains(&id) || (!c.table.exists(19, r) && s.retail.events.played.contains(&id))
+        {
+            continue;
+        }
+        let Some(candidates) = evaluate(s, &c, r, false)? else {
+            continue;
+        };
+        let label = c.table.string(16, r);
+        let mut maids: Vec<_> = s
+            .stock
+            .iter()
+            .copied()
+            .filter(|i| candidates.maids.contains(i))
+            .collect();
+        if !candidates.fixed {
+            s.sort_maid_standard(&mut maids);
+        }
+        result.push(Selection {
+            id,
+            title: c.table.string(1, r),
+            contents: c.table.string(2, r),
+            icon: c.table.string(14, r),
+            conditions: c
+                .table
+                .string(21, r)
+                .split(['\n', '&'])
+                .take(12)
+                .map(str::to_owned)
+                .collect(),
+            maids,
+            fixed: candidates.fixed,
+            script: c.table.string(15, r),
+            label: if !label.is_empty() && !label.contains('*') {
+                format!("*{label}")
+            } else {
+                label
+            },
+        });
+    }
+    Ok(result)
+}
+impl Selection {
+    pub(crate) fn play(&self, vm: &mut crate::tjs::Tjs, choice: Option<usize>) -> Result<()> {
+        let s = &mut vm.runtime.host_mut().state;
+        let selected = if self.fixed {
+            self.maids.clone()
+        } else {
+            choice.into_iter().collect()
+        };
+        ensure!(
+            selected
+                .iter()
+                .all(|i| self.maids.contains(i) && s.maids.contains_key(i)),
+            "invalid scenario character"
+        );
+        ensure!(
+            !self.script.is_empty() && !self.label.is_empty(),
+            "missing scenario script or label"
+        );
+        let mut file = self.script.clone();
+        if let Some(&id) = selected.first()
+            && file.contains('?')
+        {
+            let m = &s.maids[&id];
+            let marker = ["?4", "?3", "?2", "?1", "?0", "?"]
+                .into_iter()
+                .find(|p| file.contains(p))
+                .unwrap();
+            ensure!(
+                matches!(marker, "?" | "?0"),
+                "scenario placeholder {marker} needs another character"
+            );
+            let replacement = if let Some(name) = s
+                .retail
+                .characters
+                .get(&m.guid_id)
+                .and_then(|x| x.sub_name.clone())
+            {
+                let t = s.retail.table("maid_status_submaid_list.nei")?;
+                t.string(2, stock::named(&t, 1, &name)?)
+            } else {
+                let t = s.retail.table("maid_status_personal_list.nei")?;
+                t.string(3, row_id(&t, m.personal)?)
+            };
+            file = file.replace(marker, &replacement);
+        }
+        for (slot, &id) in selected.iter().enumerate() {
+            if !self.fixed {
+                facility::activate(s, slot, id, false);
+            }
+            s.retail
+                .event_end
+                .entry(s.maids[&id].guid_id.clone())
+                .or_default()
+                .insert(self.id, true);
+        }
+        s.retail.events.played.insert(self.id);
+        vm.eval(&format!(
+            "tf['scenario_file_name']={}",
+            serde_json::to_string(&file)?
+        ))?;
+        vm.eval(&format!(
+            "tf['label_name']={}",
+            serde_json::to_string(&self.label)?
+        ))?;
+        Ok(())
+    }
+}
+
 pub(super) fn added(s: &mut TjsState, _: &[Variant]) -> Result<Variant> {
     let c = Catalog::load(&mut s.retail)?;
     let mut now = BTreeSet::new();
@@ -297,37 +468,10 @@ pub(super) fn added(s: &mut TjsState, _: &[Variant]) -> Result<Variant> {
         if !c.ids.contains(&id) || !c.table.exists(19, r) && s.retail.events.played.contains(&id) {
             continue;
         }
-        let mut candidates = Candidates {
-            maids: BTreeSet::new(),
-            fixed: s.retail.events.fixed.contains(&id),
-            touched: false,
-        };
-        let mut had_maids = false;
-        let mut playable = false;
-        for col in (3..=13).filter(|&col| col != 4 && c.table.exists(col, r)) {
-            let before = candidates.maids.clone();
-            playable = candidates.column(s, &c, id, col, &c.table.string(col, r))?;
-            if !playable {
-                break;
-            }
-            if had_maids && candidates.touched {
-                candidates.maids.retain(|i| before.contains(i));
-            }
-            if candidates.touched && candidates.maids.is_empty() {
-                playable = false;
-                break;
-            }
-            had_maids |= !candidates.maids.is_empty();
-        }
-        if candidates.fixed {
-            s.retail.events.fixed.insert(id);
-        }
-        let enough = if candidates.fixed {
-            !candidates.maids.is_empty()
-        } else {
-            c.table.int(17, r) <= candidates.maids.len() as i32
-        };
-        if playable && enough && now.insert(id) && !s.retail.events.previous.contains(&id) {
+        if evaluate(s, &c, r, true)?.is_some()
+            && now.insert(id)
+            && !s.retail.events.previous.contains(&id)
+        {
             added.push(id);
         }
     }
